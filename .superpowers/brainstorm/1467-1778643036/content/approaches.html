@@ -1,0 +1,40 @@
+<h2>3 种集成架构方案</h2>
+<p class="subtitle">选择最符合你团队技术路线和维护成本的方案</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>RAGFlow 直连网关模式 <span style="font-size:0.75rem;background:#22c55e20;color:#22c55e;padding:2px 8px;border-radius:4px;margin-left:6px;">推荐</span></h3>
+      <p>后端新增 <code>skill</code> 模块直接调用 RAGFlow REST API；Gene 技能包新增 <code>rag_query</code> 能力类型；Portal 新增"技能库"页面。RAGFlow 凭证由管理员在 Admin 后台统一配置。</p>
+      <div class="pros-cons" style="margin-top:0.8rem;">
+        <div class="pros"><h4>优点</h4><ul><li>改动范围最小，复用现有 Gene/Channel 体系</li><li>RAGFlow 升级不影响核心代码</li><li>员工通过现有 Portal 无缝使用</li></ul></div>
+        <div class="cons"><h4>缺点</h4><ul><li>RAGFlow 不可用时技能降级需要手动处理</li><li>跨服务调试链路略长</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>LLM Proxy 统一代理模式</h3>
+      <p>将 RAGFlow 作为一种"知识增强 Provider"注册到现有 <code>nodeskclaw-llm-proxy</code>；Agent 发送请求时 Proxy 自动注入 RAG 上下文，对 Gene 透明。</p>
+      <div class="pros-cons" style="margin-top:0.8rem;">
+        <div class="pros"><h4>优点</h4><ul><li>现有 Gene 无需改造，RAG 能力对 Agent 透明</li><li>复用 Proxy 的 token 统计和配额体系</li></ul></div>
+        <div class="cons"><h4>缺点</h4><ul><li>RAG 注入时机和策略难以精细控制</li><li>Proxy 变成单点，职责过重</li><li>员工无法主动选择使用哪个知识库</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>知识库 Gene 插件模式</h3>
+      <p>将每个 RAGFlow 知识库封装为独立 Gene（<code>ragflow-kb-{name}</code>），通过 GeneHub 分发；Agent 按需 install Gene 后即可调用对应知识库。</p>
+      <div class="pros-cons" style="margin-top:0.8rem;">
+        <div class="pros"><h4>优点</h4><ul><li>知识库即技能，与 Gene 生态完美融合</li><li>细粒度权限：不同 Agent 绑定不同知识库</li></ul></div>
+        <div class="cons"><h4>缺点</h4><ul><li>Gene 数量随知识库增长爆炸式增长</li><li>知识库更新需重新打包 Gene，运维成本高</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
