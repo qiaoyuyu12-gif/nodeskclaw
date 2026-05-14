@@ -62,3 +62,6 @@ from app.models.workspace_objective import WorkspaceObjective  # noqa: F401
 from app.models.workspace_schedule import WorkspaceSchedule  # noqa: F401
 from app.models.workspace_task import WorkspaceTask  # noqa: F401
 from app.models.workspace_template import WorkspaceTemplate  # noqa: F401
+from app.models.knowledge_base import KnowledgeBase  # noqa: F401
+from app.models.skill_definition import SkillDefinition  # noqa: F401
+from app.models.agent_skill_binding import AgentSkillBinding  # noqa: F401
