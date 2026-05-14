@@ -57,7 +57,7 @@ async def get_knowledge_base(kb_id: str, org_id: str, db: AsyncSession) -> Knowl
     return kb
 
 
-async def get_decrypted_api_key(kb: KnowledgeBase) -> str:
+def get_decrypted_api_key(kb: KnowledgeBase) -> str:
     return decrypt_sensitive(kb.api_key_encrypted)
 
 
@@ -68,9 +68,10 @@ async def update_knowledge_base(
     db: AsyncSession,
 ) -> KnowledgeBase:
     kb = await get_knowledge_base(kb_id, org_id, db)
+    remaining = {k: v for k, v in updates.items() if k != "api_key"}
     if "api_key" in updates:
-        kb.api_key_encrypted = encrypt_sensitive(updates.pop("api_key"))
-    for key, value in updates.items():
+        kb.api_key_encrypted = encrypt_sensitive(updates["api_key"])
+    for key, value in remaining.items():
         setattr(kb, key, value)
     await db.commit()
     await db.refresh(kb)

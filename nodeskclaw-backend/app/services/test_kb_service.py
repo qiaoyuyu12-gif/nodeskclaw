@@ -52,6 +52,25 @@ async def test_get_decrypted_api_key_decrypts():
     with patch("app.services.kb_service.decrypt_sensitive", return_value="plain-key"):
         from app.services.kb_service import get_decrypted_api_key
 
-        result = await get_decrypted_api_key(kb)
+        result = get_decrypted_api_key(kb)
 
     assert result == "plain-key"
+
+
+@pytest.mark.asyncio
+async def test_update_knowledge_base_re_encrypts_api_key():
+    existing_kb = MagicMock()
+    existing_kb.api_key_encrypted = "old-encrypted"
+    db = AsyncMock()
+
+    with (
+        patch("app.services.kb_service.get_knowledge_base", return_value=existing_kb),
+        patch("app.services.kb_service.encrypt_sensitive", return_value="new-encrypted") as mock_enc,
+    ):
+        from app.services.kb_service import update_knowledge_base
+
+        await update_knowledge_base("kb-1", "org-1", {"api_key": "new-plain", "name": "renamed"}, db)
+
+    mock_enc.assert_called_once_with("new-plain")
+    assert existing_kb.api_key_encrypted == "new-encrypted"
+    assert existing_kb.name == "renamed"

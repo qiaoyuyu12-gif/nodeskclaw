@@ -4,7 +4,9 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BadRequestError, NotFoundError
+from sqlalchemy.exc import IntegrityError
+
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.agent_skill_binding import AgentSkillBinding
 from app.models.skill_definition import SkillDefinition
 from app.services import kb_service, ragflow_adapter
@@ -96,7 +98,11 @@ async def bind_skill(
         created_by=created_by,
     )
     db.add(binding)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise ConflictError("skill already bound to this instance")
     await db.refresh(binding)
     return binding
 
@@ -140,7 +146,7 @@ async def query_skill(
         if skill.type != "rag_query" or not skill.kb_id:
             raise BadRequestError("skill is not a rag_query type with a knowledge base")
         kb = await kb_service.get_knowledge_base(skill.kb_id, org_id, db)
-        api_key = await kb_service.get_decrypted_api_key(kb)
+        api_key = kb_service.get_decrypted_api_key(kb)
         top_k = skill.config.get("top_k", 5) if skill.config else 5
         chunks = await ragflow_adapter.retrieve(
             kb.ragflow_endpoint, api_key, kb.ragflow_kb_id, question, top_k

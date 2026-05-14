@@ -73,6 +73,6 @@ async def sync_kb(
 ):
     user, org = auth
     kb = await kb_service.get_knowledge_base(kb_id=kb_id, org_id=org.id, db=db)
-    api_key = await kb_service.get_decrypted_api_key(kb)
+    api_key = kb_service.get_decrypted_api_key(kb)
     reachable = await ragflow_adapter.verify_connection(kb.ragflow_endpoint, api_key)
     return ApiResponse(data={"reachable": reachable, "kb_id": kb_id})

@@ -28,6 +28,13 @@ class KnowledgeBaseUpdate(PydanticBase):
     api_key: str | None = None
     source_type: str | None = None
 
+    @field_validator("source_type")
+    @classmethod
+    def validate_source_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("doc", "system", "mixed"):
+            raise ValueError("source_type must be doc, system, or mixed")
+        return v
+
 
 class KnowledgeBaseResponse(PydanticBase):
     id: str

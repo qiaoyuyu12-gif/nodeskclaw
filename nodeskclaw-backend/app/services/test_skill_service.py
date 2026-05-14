@@ -30,7 +30,34 @@ async def test_create_skill_succeeds_for_gene_without_kb_id():
 
 
 @pytest.mark.asyncio
-async def test_query_skill_returns_chunks_from_ragflow():
+async def test_bind_skill_raises_conflict_on_duplicate():
+    from sqlalchemy.exc import IntegrityError
+    from app.core.exceptions import ConflictError
+    from app.services.skill_service import bind_skill
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.commit = AsyncMock(side_effect=IntegrityError("duplicate", None, None))
+    db.rollback = AsyncMock()
+
+    with pytest.raises(ConflictError):
+        await bind_skill("skill-1", "instance-1", "user-1", db)
+
+    db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unbind_skill_raises_not_found_when_missing():
+    from app.core.exceptions import NotFoundError
+    from app.services.skill_service import unbind_skill
+
+    db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=mock_result)
+
+    with pytest.raises(NotFoundError):
+        await unbind_skill("skill-1", "instance-1", db)
     mock_skill = MagicMock()
     mock_skill.type = "rag_query"
     mock_skill.kb_id = "kb-1"
