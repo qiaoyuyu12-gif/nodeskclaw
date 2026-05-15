@@ -1,7 +1,7 @@
 """add_skill_management
 
 Revision ID: 3a7b8c9d0e1f
-Revises: f2a8c1d4e5b6
+Revises: b9f5520c1ffb
 Create Date: 2026-05-14
 
 """
@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import JSON
 
 
 revision: str = "3a7b8c9d0e1f"
-down_revision: Union[str, Sequence[str], None] = "f2a8c1d4e5b6"
+down_revision: Union[str, Sequence[str], None] = "b9f5520c1ffb"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
