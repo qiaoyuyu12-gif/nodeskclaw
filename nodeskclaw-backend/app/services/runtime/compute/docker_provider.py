@@ -428,6 +428,55 @@ class DockerComputeProvider:
         handle.extra["replicas"] = replicas
         return handle
 
+    async def update_env_vars_and_restart(
+        self, handle: ComputeHandle, env_updates: dict,
+    ) -> None:
+        """Patch env vars in the compose file and recreate the container.
+
+        Reads the existing docker-compose.yml, merges *env_updates* into
+        every service's environment block, writes the file back, then runs
+        ``docker compose up -d``.  Docker Compose automatically recreates
+        containers whose configuration has changed, so the updated env vars
+        take effect without a separate restart step.
+        """
+        slug = handle.extra.get("slug", handle.instance_id)
+        compose_path = _resolve_compose_path(slug, handle.extra.get("compose_path", ""))
+
+        if not compose_path or not os.path.exists(compose_path):
+            logger.warning("compose 文件不存在，降级为 docker restart: %s", slug)
+            await self.restart_instance(handle)
+            return
+
+        try:
+            import yaml as _yaml
+            with open(compose_path, encoding="utf-8") as f:
+                compose = _yaml.safe_load(f)
+        except Exception as exc:
+            raise RuntimeError(f"无法读取 docker-compose.yml: {compose_path}: {exc}") from exc
+
+        for svc in (compose.get("services") or {}).values():
+            env = svc.get("environment")
+            if isinstance(env, dict):
+                env.update({k: str(v) for k, v in env_updates.items()})
+
+        try:
+            import yaml as _yaml
+            with open(compose_path, "w", encoding="utf-8") as f:
+                _yaml.dump(compose, f, default_flow_style=False, allow_unicode=True)
+        except Exception as exc:
+            raise RuntimeError(f"无法写入 docker-compose.yml: {compose_path}: {exc}") from exc
+
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "compose", "-f", compose_path, "up", "-d",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"docker compose up 失败: {_extract_docker_error(stderr.decode())}"
+            )
+
     async def health_check(self, handle: ComputeHandle) -> dict:
         try:
             status = await self.get_status(handle)

@@ -1000,6 +1000,41 @@ async def regenerate_gateway_token(instance_id: str, db: AsyncSession, org_id: s
     if not cluster:
         raise NotFoundError("集群不存在")
 
+    if cluster.compute_provider == "docker":
+        new_token = secrets.token_hex(24)
+        while new_token == old_env_vars.get("GATEWAY_TOKEN"):
+            new_token = secrets.token_hex(24)
+        new_env_vars = _normalize_gateway_env_vars(old_env_vars, new_token)
+
+        try:
+            instance.env_vars = json.dumps(new_env_vars)
+            instance.proxy_token = new_token
+            await db.commit()
+        except Exception as exc:
+            logger.exception("更新 Docker 实例访问令牌失败: instance=%s", instance_id)
+            await db.rollback()
+            raise ConflictError("重设访问令牌失败，请稍后重试") from exc
+
+        try:
+            provider = _get_docker_provider()
+            handle = _build_docker_handle(instance)
+            token_env = {
+                k: new_env_vars[k]
+                for k in ("GATEWAY_TOKEN", "OPENCLAW_GATEWAY_TOKEN", "NODESKCLAW_TOKEN")
+                if k in new_env_vars
+            }
+            await provider.update_env_vars_and_restart(handle, token_env)
+        except Exception as exc:
+            logger.warning(
+                "Docker 访问令牌更新后重启失败: instance=%s error=%s", instance_id, exc
+            )
+            instance.env_vars = old_env_vars_json
+            instance.proxy_token = old_proxy_token
+            await db.commit()
+            raise ConflictError("重设访问令牌后触发重启失败，已回滚旧令牌") from exc
+
+        return new_token
+
     if not cluster.is_k8s:
         raise BadRequestError("Docker 集群不支持此操作", message_key="errors.cluster.unsupported_operation")
     from app.services.runtime.registries.compute_registry import require_k8s_client
