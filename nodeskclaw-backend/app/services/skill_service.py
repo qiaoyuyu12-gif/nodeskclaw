@@ -10,6 +10,7 @@ from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.agent_skill_binding import AgentSkillBinding
 from app.models.skill_definition import SkillDefinition
 from app.services import kb_service, ragflow_adapter
+from app.services import skill_package_service
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,8 @@ async def create_skill(
     kb_id: str | None,
     config: dict,
     db: AsyncSession,
+    description: str | None = None,
+    package_path: str | None = None,
 ) -> SkillDefinition:
     if skill_type == "rag_query" and not kb_id:
         raise BadRequestError("kb_id is required for rag_query skills")
@@ -30,11 +33,39 @@ async def create_skill(
         type=skill_type,
         kb_id=kb_id,
         config=config,
+        description=description,
+        package_path=package_path,
     )
     db.add(skill)
     await db.commit()
     await db.refresh(skill)
     return skill
+
+
+async def create_skill_from_package(
+    org_id: str,
+    zip_data: bytes,
+    storage_root: str,
+    db: AsyncSession,
+) -> SkillDefinition:
+    """Parse a ZIP skill package and create the skill record."""
+    meta = skill_package_service.parse_skill_package(zip_data)
+    package_path = skill_package_service.save_package(
+        org_id=org_id,
+        skill_name=meta["name"],
+        data=zip_data,
+        storage_root=storage_root,
+    )
+    return await create_skill(
+        org_id=org_id,
+        name=meta["name"],
+        skill_type=meta["type"],
+        kb_id=meta.get("kb_id"),
+        config=meta.get("config", {}),
+        description=meta.get("description"),
+        package_path=package_path,
+        db=db,
+    )
 
 
 async def list_skills(

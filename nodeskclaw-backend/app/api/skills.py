@@ -1,7 +1,8 @@
 # app/api/skills.py
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.deps import get_db, require_org_admin
 from app.core.security import get_current_user
 from app.schemas.common import ApiResponse
@@ -42,6 +43,23 @@ async def query_skill(
         skill_id=skill_id, org_id=user.current_org_id, question=body.question, db=db
     )
     return ApiResponse(data=QueryResponse(**result))
+
+
+@router.post("/upload", response_model=ApiResponse[SkillResponse])
+async def upload_skill_package(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    auth=Depends(require_org_admin),
+):
+    user, org = auth
+    data = await file.read()
+    skill = await skill_service.create_skill_from_package(
+        org_id=org.id,
+        zip_data=data,
+        storage_root=settings.LOCAL_STORAGE_DIR or "/app/data",
+        db=db,
+    )
+    return ApiResponse(data=SkillResponse.model_validate(skill))
 
 
 @router.post("", response_model=ApiResponse[SkillResponse])

@@ -127,6 +127,42 @@ const ceRoutes: RouteRecordRaw[] = [
     component: () => import('@/views/TemplateDetail.vue'),
   },
   {
+    path: '/skills',
+    name: 'SkillList',
+    component: () => import('@/views/skills/SkillListView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/admin/knowledge-bases',
+    name: 'AdminKnowledgeBaseList',
+    component: () => import('@/views/skills/admin/KnowledgeBaseListView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/admin/knowledge-bases/new',
+    name: 'AdminKnowledgeBaseNew',
+    component: () => import('@/views/skills/admin/KnowledgeBaseFormView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/admin/knowledge-bases/:id/edit',
+    name: 'AdminKnowledgeBaseEdit',
+    component: () => import('@/views/skills/admin/KnowledgeBaseFormView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/admin/skills',
+    name: 'AdminSkillDefinitionList',
+    component: () => import('@/views/skills/admin/SkillDefinitionListView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/admin/skills/bind',
+    name: 'AdminSkillBinding',
+    component: () => import('@/views/skills/admin/SkillBindingView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/create',
     redirect: '/workspace/create',
   },

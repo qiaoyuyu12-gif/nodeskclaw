@@ -78,6 +78,8 @@ class SkillResponse(PydanticBase):
     kb_id: str | None
     config: dict[str, Any]
     enabled: bool
+    description: str | None
+    package_path: str | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

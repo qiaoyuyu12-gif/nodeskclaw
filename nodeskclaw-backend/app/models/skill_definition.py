@@ -1,6 +1,6 @@
 """SkillDefinition model for agent skills."""
 
-from sqlalchemy import Boolean, ForeignKey, Index, JSON, String, text
+from sqlalchemy import Boolean, ForeignKey, Index, JSON, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import BaseModel
@@ -32,3 +32,5 @@ class SkillDefinition(BaseModel):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    package_path: Mapped[str | None] = mapped_column(String(512), nullable=True)

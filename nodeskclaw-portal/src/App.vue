@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { getCurrentLocale, setCurrentLocale } from '@/i18n'
-import { Settings, LogOut, Boxes, Server, FlaskConical, User, Loader2, BarChart3 } from 'lucide-vue-next'
+import { Settings, LogOut, Boxes, Server, FlaskConical, User, Loader2, BarChart3, Brain, BookOpen } from 'lucide-vue-next'
 import { useFeature } from '@/composables/useFeature'
 import LocaleSelect from '@/components/shared/LocaleSelect.vue'
 import ToastContainer from '@/components/shared/ToastContainer.vue'
@@ -114,6 +114,16 @@ function onLocaleChange(value: string) {
               <span class="lg:hidden">{{ t('nav.geneMarket') }}</span>
             </button>
             <button
+              :class="[
+                'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
+                route.path.startsWith('/skills') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
+              ]"
+              @click="router.push('/skills')"
+            >
+              <Brain class="w-4 h-4 inline mr-1.5" />
+              技能库
+            </button>
+            <button
               v-if="isPerformanceEnabled"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
@@ -125,6 +135,28 @@ function onLocaleChange(value: string) {
               <span class="hidden lg:inline">{{ t('agentPerformance.navTitle') }}</span>
               <span class="lg:hidden">{{ t('nav.agentPerformance') }}</span>
             </button>
+            <template v-if="authStore.user?.portal_org_role === 'admin'">
+            <button
+              :class="[
+                'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
+                route.path.startsWith('/admin/knowledge-bases') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
+              ]"
+              @click="router.push('/admin/knowledge-bases')"
+            >
+              <BookOpen class="w-4 h-4 inline mr-1.5" />
+              知识库
+            </button>
+            <button
+              :class="[
+                'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
+                route.path.startsWith('/admin/skills') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
+              ]"
+              @click="router.push('/admin/skills')"
+            >
+              <Brain class="w-4 h-4 inline mr-1.5" />
+              技能管理
+            </button>
+            </template>
             <button
               v-if="authStore.user?.portal_org_role === 'admin'"
               :class="[
