@@ -260,7 +260,7 @@ def _docker_cli_hint() -> str:
     if sys.platform == "win32":
         return "Docker CLI 未安装，请安装 Docker Desktop"
     if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_DATA_DIR"):
-        return "Docker CLI 未安装，请在 Dockerfile 中安装 docker-ce-cli"
+        return "Docker CLI 未安装，请在 Dockerfile 中安装 docker.io 和 docker-compose-v2"
     return "Docker CLI 未安装，请先安装 Docker"
 
 

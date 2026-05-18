@@ -15,7 +15,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
     fi && \
     pip install --no-cache-dir uv && \
     apt-get update && \
-    apt-get install -y --no-install-recommends docker.io docker-compose && \
+    apt-get install -y --no-install-recommends docker.io docker-compose-v2 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY nodeskclaw-backend/pyproject.toml nodeskclaw-backend/uv.lock ./
