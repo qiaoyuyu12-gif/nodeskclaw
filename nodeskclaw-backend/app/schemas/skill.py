@@ -58,8 +58,9 @@ class SkillCreate(PydanticBase):
     @field_validator("type")
     @classmethod
     def validate_type(cls, v: str) -> str:
-        if v not in ("rag_query", "gene", "composite"):
-            raise ValueError("type must be rag_query, gene, or composite")
+        # tool 类型用于 Python 脚本工具，其余为原有类型
+        if v not in ("rag_query", "gene", "composite", "tool"):
+            raise ValueError("type must be rag_query, gene, composite, or tool")
         return v
 
 
@@ -80,6 +81,8 @@ class SkillResponse(PydanticBase):
     enabled: bool
     description: str | None
     package_path: str | None
+    # manifest：文件夹上传后内联序列化的 JSON，agent 命中时读取
+    manifest: dict[str, Any] | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

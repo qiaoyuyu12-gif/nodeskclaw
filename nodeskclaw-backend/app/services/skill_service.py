@@ -24,7 +24,13 @@ async def create_skill(
     db: AsyncSession,
     description: str | None = None,
     package_path: str | None = None,
+    manifest: dict | None = None,
 ) -> SkillDefinition:
+    """创建技能记录。
+
+    manifest 仅在文件夹上传时传入，包含内联化的脚本/资源，
+    供 agent 直接读取使用。
+    """
     if skill_type == "rag_query" and not kb_id:
         raise BadRequestError("kb_id is required for rag_query skills")
     skill = SkillDefinition(
@@ -35,6 +41,7 @@ async def create_skill(
         config=config,
         description=description,
         package_path=package_path,
+        manifest=manifest,
     )
     db.add(skill)
     await db.commit()
@@ -48,8 +55,9 @@ async def create_skill_from_package(
     storage_root: str,
     db: AsyncSession,
 ) -> SkillDefinition:
-    """Parse a ZIP skill package and create the skill record."""
+    """解析 ZIP 格式技能包并创建技能记录（原有 ZIP 上传方式）。"""
     meta = skill_package_service.parse_skill_package(zip_data)
+    # 将 ZIP 文件解压保存到磁盘，返回存储路径
     package_path = skill_package_service.save_package(
         org_id=org_id,
         skill_name=meta["name"],
@@ -64,6 +72,32 @@ async def create_skill_from_package(
         config=meta.get("config", {}),
         description=meta.get("description"),
         package_path=package_path,
+        db=db,
+    )
+
+
+async def create_skill_from_files(
+    org_id: str,
+    files: dict[str, bytes],
+    db: AsyncSession,
+) -> SkillDefinition:
+    """解析文件夹上传的多个文件并创建技能记录。
+
+    所有文件（Python 脚本、assets、references）被内联序列化为
+    manifest JSON，存入数据库，agent 可通过 API 直接读取命中。
+
+    参数 files：{文件相对路径: 文件字节内容}，来自 multipart 请求。
+    """
+    # 解析文件集合：读取 skill.md + 构建 manifest
+    meta = skill_package_service.parse_skill_folder(files)
+    return await create_skill(
+        org_id=org_id,
+        name=meta["name"],
+        skill_type=meta["type"],
+        kb_id=meta.get("kb_id"),
+        config=meta.get("config", {}),
+        description=meta.get("description"),
+        manifest=meta.get("manifest"),   # 内联化的脚本/资源 JSON
         db=db,
     )
 
