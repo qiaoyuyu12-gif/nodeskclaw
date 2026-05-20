@@ -202,8 +202,8 @@ function isEntryScript(path: string, skills: Skill[]): boolean {
         <p class="text-sm text-gray-700 text-center font-medium">上传 Skill 文件夹</p>
         <p class="text-xs text-gray-500 text-center max-w-md">
           文件夹内须包含 <code class="bg-white px-1 rounded">skill.md</code>（声明 name/type），
-          以及 Python 脚本、<code class="bg-white px-1 rounded">assets/</code>、
-          <code class="bg-white px-1 rounded">reference/</code> 等目录。
+          其余文件（Python 脚本、<code class="bg-white px-1 rounded">assets/</code>、
+          <code class="bg-white px-1 rounded">reference/</code> 等）按需保留。
           上传后所有内容内联为 JSON 供 agent 命中。
         </p>
         <!-- webkitdirectory 输入：选择整个文件夹 -->

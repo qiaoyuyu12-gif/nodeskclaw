@@ -126,24 +126,17 @@ def parse_skill_folder(files: dict[str, bytes]) -> dict:
             # 其余文件归入 assets
             assets[rel_path] = _safe_decode(content, rel_path)
 
-    # 4. type=tool 时校验必有入口脚本
+    # 4. type=tool 时自动从 config.entry 读取入口，未指定则从已有脚本中选取
     config = meta.get("config", {})
-    if meta["type"] == "tool":
-        entry = config.get("entry", "main.py")
-        if entry not in scripts:
-            if scripts:
-                # 自动选取第一个脚本作为入口
-                entry = next(iter(scripts))
-                logger.info("tool 类型未在 config.entry 中指定入口，自动选取 %s", entry)
-            else:
-                raise BadRequestError("type 为 tool 时文件夹内必须包含至少一个 .py 脚本")
+    if meta["type"] == "tool" and scripts:
+        entry = config.get("entry", next(iter(scripts)))
         config = {**config, "entry": entry}
         meta["config"] = config
 
     # 5. 构建 manifest：将所有文件内联序列化供 agent 使用
     manifest: dict = {}
-    if meta["type"] == "tool":
-        manifest["entry"] = config.get("entry", "")
+    if meta["type"] == "tool" and scripts:
+        manifest["entry"] = config.get("entry", next(iter(scripts)))
     if scripts:
         manifest["scripts"] = scripts
     if assets:
