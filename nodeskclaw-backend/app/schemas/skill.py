@@ -58,9 +58,8 @@ class SkillCreate(PydanticBase):
     @field_validator("type")
     @classmethod
     def validate_type(cls, v: str) -> str:
-        # tool 类型用于 Python 脚本工具，其余为原有类型
-        if v not in ("rag_query", "gene", "composite", "tool"):
-            raise ValueError("type must be rag_query, gene, composite, or tool")
+        if v not in ("rag_query", "gene", "composite", "tool", "prompt"):
+            raise ValueError("type must be rag_query, gene, composite, tool, or prompt")
         return v
 
 

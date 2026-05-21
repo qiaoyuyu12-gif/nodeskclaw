@@ -34,7 +34,8 @@ const typeLabel: Record<string, string> = {
   rag_query: '知识库问答',
   gene: 'Gene 技能',
   composite: '复合技能',
-  tool: 'Python 工具',   // 文件夹上传的新类型
+  tool: 'Python 工具',
+  prompt: '提示词技能',
 }
 
 // ── 通用操作 ─────────────────────────────────────────────────

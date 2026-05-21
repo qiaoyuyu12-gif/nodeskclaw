@@ -39,7 +39,7 @@ export interface Skill {
   id: string
   org_id: string
   name: string
-  type: 'rag_query' | 'gene' | 'composite' | 'tool'
+  type: 'rag_query' | 'gene' | 'composite' | 'tool' | 'prompt'
   kb_id: string | null
   config: Record<string, unknown>
   enabled: boolean
@@ -52,7 +52,7 @@ export interface Skill {
 
 export interface SkillCreate {
   name: string
-  type: 'rag_query' | 'gene' | 'composite' | 'tool'
+  type: 'rag_query' | 'gene' | 'composite' | 'tool' | 'prompt'
   kb_id?: string
   config?: Record<string, unknown>
 }
