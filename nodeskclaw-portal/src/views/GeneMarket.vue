@@ -64,22 +64,9 @@ const selectedLocalFiles = ref<string[]>([])
 const localFolderInputRef = ref<HTMLInputElement>()
 
 async function handleLocalFile(file: File) {
-  if (!file.name.endsWith('.zip')) {
-    localError.value = '请上传 .zip 格式的技能包'
-    return
-  }
-  localUploading.value = true
-  localError.value = null
-  localSuccess.value = null
-  try {
-    const res = await api.post('/genes/upload-folder', toFormData([file]))
-    localSuccess.value = `本地基因「${res.data.data?.name}」上传成功`
-    await loadData()
-  } catch (e: unknown) {
-    localError.value = e instanceof Error ? e.message : '上传失败'
-  } finally {
-    localUploading.value = false
-  }
+  // 仅支持文件夹上传，.zip 由 handleLocalFolder 处理
+  localError.value = '请使用文件夹上传功能'
+  return
 }
 
 async function handleLocalFolder() {
@@ -112,13 +99,6 @@ function onLocalFolderInput(e: Event) {
   )
 }
 
-function toFormData(files: File[]): FormData {
-  const form = new FormData()
-  for (const file of files) {
-    form.append('files', file, file.name)
-  }
-  return form
-}
 
 const categories = ['开发', '数据', '运维', '网络', '创意', '沟通', '安全', '效率']
 
