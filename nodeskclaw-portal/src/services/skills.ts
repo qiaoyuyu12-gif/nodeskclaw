@@ -108,6 +108,11 @@ export const skillApi = {
    * 每个文件使用 webkitRelativePath 作为 filename（保留目录结构），
    * 后端自动剥离顶层文件夹名并序列化为 manifest JSON。
    */
+  /**
+   * 文件夹上传：将 webkitdirectory 选中的所有文件发送到 /upload-folder。
+   * 每个文件使用 webkitRelativePath 作为 filename（保留目录结构），
+   * 后端自动剥离顶层文件夹名并序列化为 manifest JSON。
+   */
   uploadFolder: (files: FileList) => {
     const form = new FormData()
     for (const file of Array.from(files)) {
@@ -115,7 +120,8 @@ export const skillApi = {
       const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
       form.append('files', file, relPath)
     }
-    return api.post<{ data: Skill }>('/skills/upload-folder', form).then((r) => r.data.data)
+    // 现在统一走 /genes/upload-folder 端点
+    return api.post<{ data: Skill }>('/genes/upload-folder', form).then((r) => r.data.data)
   },
 
   update: (id: string, body: SkillUpdate) =>
