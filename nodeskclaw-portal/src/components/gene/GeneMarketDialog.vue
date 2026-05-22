@@ -502,18 +502,6 @@ onUnmounted(() => {
                   <CustomSelect v-model="sortBy" :options="sortSelectOptions" />
                 </div>
 
-                <!-- Tags -->
-                <div v-if="viewMode === 'genes' && tagStats.length" class="flex flex-wrap gap-1.5 mb-4">
-                  <button
-                    v-for="ts in tagStats"
-                    :key="ts.tag"
-                    :class="['px-2.5 py-1 rounded-lg text-xs font-medium transition-colors', selectedTag === ts.tag ? 'bg-primary/10 text-primary' : 'bg-muted/50 text-muted-foreground hover:text-foreground hover:bg-muted']"
-                    @click="selectedTag = selectedTag === ts.tag ? null : ts.tag"
-                  >
-                    {{ localizeGeneMeta(ts.tag) }}
-                  </button>
-                </div>
-
                 <!-- Loading -->
                 <div v-if="dialogLoading" class="flex justify-center py-16">
                   <Loader2 class="w-8 h-8 animate-spin text-muted-foreground" />
