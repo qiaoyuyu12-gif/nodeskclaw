@@ -1102,6 +1102,7 @@ const enUS = {
     tabGenes: "Skill Genes",
     tabGenomes: "Skill Genomes",
     tabEvolution: "Evolution Trends",
+    tabLocal: "Local Upload",
     visAll: "All",
     visPublic: "Public Market",
     visOrg: "My Organization",

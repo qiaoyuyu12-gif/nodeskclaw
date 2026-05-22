@@ -1102,6 +1102,7 @@ const zhCN = {
     tabGenes: "技能基因",
     tabGenomes: "技能基因组",
     tabEvolution: "进化趋势",
+    tabLocal: "本地上传",
     visAll: "全部",
     visPublic: "公共市场",
     visOrg: "我的组织",

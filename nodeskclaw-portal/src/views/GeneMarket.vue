@@ -28,6 +28,10 @@ import {
   X,
   Globe,
   HardDrive,
+  Upload,
+  FolderOpen,
+  AlertTriangle,
+  Code2,
 } from 'lucide-vue-next'
 import { useGeneStore } from '@/stores/gene'
 import type { GeneItem, GenomeItem, TemplateInfo } from '@/stores/gene'
@@ -39,7 +43,7 @@ const store = useGeneStore()
 const toast = useToast()
 const { t, locale } = useI18n()
 
-const viewMode = ref<'genes' | 'genomes' | 'templates' | 'evolution'>('genes')
+const viewMode = ref<'genes' | 'genomes' | 'templates' | 'evolution' | 'local'>('genes')
 const keyword = ref('')
 const selectedTag = ref<string | null>(null)
 const selectedCategory = ref<string | null>(null)
@@ -47,6 +51,78 @@ const selectedVisibility = ref<string | null>(null)
 const sortBy = ref('popularity')
 const page = ref(1)
 const pageSize = ref(12)
+
+// ── 本地上传 Tab 状态 ──────────────────────────────
+const showLocalUpload = ref(false)
+const localUploading = ref(false)
+const localError = ref<string | null>(null)
+const localSuccess = ref<string | null>(null)
+const localDragOver = ref(false)
+const localFileInputRef = ref<HTMLInputElement>()
+const selectedLocalFiles = ref<string[]>([])
+const localFolderInputRef = ref<HTMLInputElement>()
+
+async function handleLocalFile(file: File) {
+  if (!file.name.endsWith('.zip')) {
+    localError.value = '请上传 .zip 格式的技能包'
+    return
+  }
+  localUploading.value = true
+  localError.value = null
+  localSuccess.value = null
+  try {
+    const res = await api.post('/genes/upload-folder', toFormData([file]))
+    localSuccess.value = `本地基因「${res.data.data?.name}」上传成功`
+    await loadData()
+  } catch (e: unknown) {
+    localError.value = e instanceof Error ? e.message : '上传失败'
+  } finally {
+    localUploading.value = false
+  }
+}
+
+async function handleLocalFolder() {
+  const input = localFolderInputRef.value
+  if (!input?.files || input.files.length === 0) {
+    localError.value = '请先选择文件夹'
+    return
+  }
+  localUploading.value = true
+  localError.value = null
+  localSuccess.value = null
+  try {
+    const form = new FormData()
+    for (const file of Array.from(input.files)) {
+      const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+      form.append('files', file, relPath)
+    }
+    const res = await api.post('/genes/upload-folder', form)
+    localSuccess.value = `本地基因「${res.data.data?.name}」上传成功`
+    showLocalUpload.value = false
+    selectedLocalFiles.value = []
+    await loadData()
+  } catch (e: unknown) {
+    localError.value = e instanceof Error ? e.message : '上传失败'
+  } finally {
+    localUploading.value = false
+  }
+}
+
+function onLocalFolderInput(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (!input.files || input.files.length === 0) return
+  selectedLocalFiles.value = Array.from(input.files).map(
+    f => (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
+  )
+}
+
+function toFormData(files: File[]): FormData {
+  const form = new FormData()
+  for (const file of files) {
+    form.append('files', file, file.name)
+  }
+  return form
+}
 
 const categories = ['开发', '数据', '运维', '网络', '创意', '沟通', '安全', '效率']
 
@@ -339,6 +415,17 @@ function hasNativeTools(gene: GeneItem): boolean {
             @click="viewMode = 'evolution'"
           >
             {{ t('geneMarket.tabEvolution') }}
+          </button>
+          <button
+            :class="[
+              'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+              viewMode === 'local'
+                ? 'bg-primary/10 text-primary'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+            ]"
+            @click="viewMode = 'local'"
+          >
+            {{ t('geneMarket.tabLocal') }}
           </button>
         </div>
       </div>
@@ -714,6 +801,98 @@ function hasNativeTools(gene: GeneItem): boolean {
             </template>
           </div>
         </section>
+
+        <!-- ═══ 本地上传 Tab ═══ -->
+        <div v-if="viewMode === 'local'" class="space-y-6">
+          <!-- 本地上传区域 -->
+          <div class="rounded-xl border-2 border-dashed border-blue-300 bg-blue-50 p-8">
+            <div class="flex flex-col items-center gap-4">
+              <FolderOpen class="w-10 h-10 text-blue-400" />
+              <p class="text-sm text-gray-700 text-center font-medium">上传本地 SKILL 文件夹</p>
+              <p class="text-xs text-gray-500 text-center max-w-md">
+                选择包含 <code class="bg-white px-1 rounded">SKILL.md</code> 的文件夹，系统自动解析并创建本地基因。
+                同时支持上传 ZIP 包。
+              </p>
+
+              <!-- 文件夹选择 -->
+              <input
+                ref="localFolderInputRef"
+                type="file"
+                class="hidden"
+                webkitdirectory
+                multiple
+                @change="onLocalFolderInput"
+              />
+              <button
+                class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-4 py-2 text-sm text-blue-700 hover:bg-blue-50"
+                @click="localFolderInputRef?.click()"
+              >
+                <FolderOpen class="w-4 h-4" />
+                选择文件夹
+              </button>
+            </div>
+
+            <!-- 已选文件预览 + 确认上传 -->
+            <div v-if="selectedLocalFiles.length > 0" class="mt-4">
+              <p class="text-xs font-medium text-gray-600 mb-2">
+                已选 {{ selectedLocalFiles.length }} 个文件：
+              </p>
+              <ul class="max-h-40 overflow-y-auto rounded-lg bg-white border border-gray-200 divide-y divide-gray-100">
+                <li
+                  v-for="path in selectedLocalFiles"
+                  :key="path"
+                  class="flex items-center gap-2 px-3 py-1.5 text-xs"
+                >
+                  <Code2 v-if="path.endsWith('.py')" class="w-3 h-3 text-blue-500 shrink-0" />
+                  <FolderOpen v-else-if="path.includes('/')" class="w-3 h-3 text-gray-400 shrink-0" />
+                  <span class="text-gray-600">{{ path }}</span>
+                </li>
+              </ul>
+              <div class="mt-3 flex justify-end">
+                <button
+                  :disabled="localUploading"
+                  class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                  @click="handleLocalFolder"
+                >
+                  <span v-if="localUploading" class="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                  <Upload v-else class="w-4 h-4" />
+                  {{ localUploading ? '上传中...' : '确认上传' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- ZIP 上传（备用） -->
+            <div class="mt-4 flex flex-col items-center gap-2">
+              <p class="text-xs text-gray-400">或上传 ZIP 包</p>
+              <input
+                ref="localFileInputRef"
+                type="file"
+                accept=".zip"
+                class="hidden"
+                @change="(e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) handleLocalFile(f) }"
+              />
+              <button
+                class="inline-flex items-center gap-1.5 text-xs text-gray-500 underline underline-offset-2 hover:text-gray-700"
+                @click="localFileInputRef?.click()"
+              >
+                点击选择 .zip 文件
+              </button>
+            </div>
+
+            <div v-if="localUploading" class="mt-4 flex items-center gap-2 text-sm text-blue-600 justify-center">
+              <span class="animate-spin inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full" />
+              解析上传中...
+            </div>
+            <div v-if="localError" class="mt-4 flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-3">
+              <AlertTriangle class="w-4 h-4 text-red-500 shrink-0" />
+              <p class="text-sm text-red-700">{{ localError }}</p>
+            </div>
+            <div v-if="localSuccess" class="mt-4 flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
+              <Check class="w-4 h-4 text-green-500 shrink-0" />
+              <p class="text-sm text-green-700">{{ localSuccess }}</p>
+            </div>
+          </div>
+        </div>
 
         <div
           v-if="totalPages > 1"
