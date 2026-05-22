@@ -55,7 +55,6 @@ from app.api.portal.instance_files import router as portal_instance_files_router
 from app.api.portal.clusters import router as portal_cluster_router, write_router as portal_cluster_write_router
 from app.api.portal.events import router as portal_events_router
 from app.api.knowledge_bases import router as kb_router
-from app.api.skills import router as skill_router
 
 # ── Portal 公共 API（/api/v1）──────────────────────────────
 # Portal 使用 portal/ 下的独立路由，内置实例级权限检查。
@@ -150,7 +149,6 @@ api_router.include_router(invite_public_router, prefix="/invite", tags=["邀请�
 api_router.include_router(security_ws_router, tags=["安全评估"])
 api_router.include_router(tunnel_router, tags=["Agent Tunnel"])
 api_router.include_router(kb_router, prefix="/knowledge-bases", tags=["知识库管理"])
-api_router.include_router(skill_router, prefix="/skills", tags=["技能管理"])
 
 # ── 管理平台 Admin API（/api/v1/admin）─────────────────────
 # Admin 使用原有路由模块，通过 dependencies 注入角色检查。
