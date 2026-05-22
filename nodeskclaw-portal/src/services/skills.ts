@@ -84,59 +84,18 @@ export const kbApi = {
 }
 
 export const skillApi = {
-  listAdmin: (type?: string) =>
-    api
-      .get<{ data: Skill[] }>('/skills', { params: type ? { skill_type: type } : {} })
-      .then((r) => r.data.data),
-
-  listMy: () => api.get<{ data: Skill[] }>('/skills/my').then((r) => r.data.data),
-
-  create: (body: SkillCreate) =>
-    api.post<{ data: Skill }>('/skills', body).then((r) => r.data.data),
-
-  /** ZIP 压缩包上传（原有方式） */
-  upload: (file: File) => {
-    const form = new FormData()
-    form.append('file', file)
-    return api.post<{ data: Skill }>('/skills/upload', form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    }).then((r) => r.data.data)
-  },
-
   /**
-   * 文件夹上传：将 webkitdirectory 选中的所有文件发送到 /upload-folder。
-   * 每个文件使用 webkitRelativePath 作为 filename（保留目录结构），
-   * 后端自动剥离顶层文件夹名并序列化为 manifest JSON。
-   */
-  /**
-   * 文件夹上传：将 webkitdirectory 选中的所有文件发送到 /upload-folder。
+   * 文件夹上传：统一走 /genes/upload-folder 端点。
+   * 前端使用 webkitdirectory 选择文件夹后上传，
    * 每个文件使用 webkitRelativePath 作为 filename（保留目录结构），
    * 后端自动剥离顶层文件夹名并序列化为 manifest JSON。
    */
   uploadFolder: (files: FileList) => {
     const form = new FormData()
     for (const file of Array.from(files)) {
-      // webkitRelativePath 示例：my-skill/main.py，后端会剥离 my-skill/ 前缀
       const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
       form.append('files', file, relPath)
     }
-    // 现在统一走 /genes/upload-folder 端点
     return api.post<{ data: Skill }>('/genes/upload-folder', form).then((r) => r.data.data)
   },
-
-  update: (id: string, body: SkillUpdate) =>
-    api.patch<{ data: Skill }>(`/skills/${id}`, body).then((r) => r.data.data),
-
-  remove: (id: string) => api.delete(`/skills/${id}`),
-
-  bind: (skillId: string, instanceId: string) =>
-    api.post(`/skills/${skillId}/bind`, { instance_id: instanceId }),
-
-  unbind: (skillId: string, instanceId: string) =>
-    api.delete(`/skills/${skillId}/bind/${instanceId}`),
-
-  query: (skillId: string, question: string) =>
-    api
-      .post<{ data: QueryResult }>(`/skills/${skillId}/query`, { question })
-      .then((r) => r.data.data),
 }

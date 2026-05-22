@@ -41,7 +41,7 @@ skill.md 支持两种格式：
     ├── assets/              # 资源文件（可选，内联进 manifest）
     └── reference/           # 参考资料（可选，内联进 manifest）
 
-manifest JSON 结构（存储在 skill_definitions.manifest 列）：
+manifest JSON 结构（存储在 genes.manifest 列）：
 
     {
       "entry":      "main.py",                  // 入口脚本文件名
