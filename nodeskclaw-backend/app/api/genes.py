@@ -3,7 +3,9 @@
 import logging
 import re
 
-from fastapi import APIRouter, Depends, Query
+from typing import List
+
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,6 +109,80 @@ async def featured_genes(
 ):
     genes = await gene_service.get_featured_genes(db, limit=limit)
     return ApiResponse(data=genes)
+
+
+@router.post("/genes/upload-folder", response_model=ApiResponse[dict])
+async def upload_gene_folder(
+    files: List[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """通过文件夹（多文件 multipart）上传本地 Gene。
+
+    将 SKILL.md + Python 脚本 + assets + references 解析后
+    直接创建 Gene 记录（source=manual, is_published=True），
+    manifest 存储所有内联文件内容供 agent 使用。
+
+    前端使用 <input webkitdirectory> 选择文件夹后上传。
+    """
+    from app.services import skill_package_service
+
+    if not current_user.current_org_id:
+        raise BadRequestError("用户未加入组织")
+
+    # 收集文件（与 skills.py upload-folder 相同的前缀剥离逻辑）
+    raw_entries: list[tuple[str, UploadFile]] = []
+    for upload_file in files:
+        raw = (upload_file.filename or "").replace("\\", "/").strip("/")
+        if raw:
+            raw_entries.append((raw, upload_file))
+
+    if not raw_entries:
+        raise BadRequestError("未收到任何文件")
+
+    all_first = {p.split("/", 1)[0] for p, _ in raw_entries if "/" in p}
+    has_uniform_prefix = (
+        len(all_first) == 1 and all("/" in p for p, _ in raw_entries)
+    )
+    strip_prefix = (all_first.pop() + "/") if has_uniform_prefix else ""
+
+    files_dict: dict[str, bytes] = {}
+    for raw, upload_file in raw_entries:
+        rel_path = raw[len(strip_prefix):] if strip_prefix and raw.startswith(strip_prefix) else raw
+        files_dict[rel_path] = await upload_file.read()
+
+    meta = skill_package_service.parse_skill_folder(files_dict)
+    manifest = meta.get("manifest", {})
+
+    # 构建 SKILL.md 内容用于 gene 展示（将 manifest 包装为 skill.content）
+    skill_content = skill_package_service._find_skill_md_in_files(files_dict)
+    skill_raw = skill_content.decode("utf-8") if skill_content else ""
+
+    gene_req = GeneCreateRequest(
+        name=meta["name"],
+        slug=meta["name"].lower().replace(" ", "-")[:64],
+        description=meta.get("description", ""),
+        short_description=meta.get("description", "")[:256] if meta.get("description") else None,
+        source="manual",
+        is_published=True,
+        visibility="org_private",
+        manifest={
+            "skill": {
+                "name": meta["name"],
+                "content": skill_raw,
+            },
+            **{k: v for k, v in manifest.items() if k != "scripts"},
+            "scripts": manifest.get("scripts", {}),
+        },
+    )
+
+    gene_data = await gene_service.create_gene(
+        db, gene_req,
+        user_id=current_user.id,
+        org_id=current_user.current_org_id,
+        visibility=gene_req.visibility,
+    )
+    return ApiResponse(data=gene_data)
 
 
 @router.get("/genes/{gene_slug}")

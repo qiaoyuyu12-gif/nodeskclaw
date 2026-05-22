@@ -84,6 +84,7 @@ class GeneCreateRequest(BaseModel):
     synergies: list[str] = []
     is_featured: bool = False
     is_published: bool = True
+    visibility: str = "public"
 
 
 # ── Genome ───────────────────────────────────────
