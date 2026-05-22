@@ -37,6 +37,7 @@ import { useGeneStore } from '@/stores/gene'
 import type { GeneItem, GenomeItem, TemplateInfo } from '@/stores/gene'
 import { useToast } from '@/composables/useToast'
 import CustomSelect from '@/components/shared/CustomSelect.vue'
+import { skillApi } from '@/services/skills'
 
 const router = useRouter()
 const store = useGeneStore()
@@ -91,13 +92,8 @@ async function handleLocalFolder() {
   localError.value = null
   localSuccess.value = null
   try {
-    const form = new FormData()
-    for (const file of Array.from(input.files)) {
-      const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
-      form.append('files', file, relPath)
-    }
-    const res = await api.post('/genes/upload-folder', form)
-    localSuccess.value = `本地基因「${res.data.data?.name}」上传成功`
+    await skillApi.uploadFolder(input.files)
+    localSuccess.value = `本地基因上传成功`
     showLocalUpload.value = false
     selectedLocalFiles.value = []
     await loadData()
