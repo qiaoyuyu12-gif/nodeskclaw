@@ -212,6 +212,11 @@ router.beforeEach(async (to, _from, next) => {
         return next('/')
       }
     }
+
+    // 超管路由守卫
+    if (to.meta.requireSuperAdmin && !authStore.user?.is_super_admin) {
+      return next('/')
+    }
   }
 
   next()

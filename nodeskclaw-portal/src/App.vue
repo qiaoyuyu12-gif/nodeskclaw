@@ -114,16 +114,6 @@ function onLocaleChange(value: string) {
               <span class="lg:hidden">{{ t('nav.geneMarket') }}</span>
             </button>
             <button
-              :class="[
-                'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
-                route.path.startsWith('/skills') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
-              ]"
-              @click="router.push('/skills')"
-            >
-              <Brain class="w-4 h-4 inline mr-1.5" />
-              技能库
-            </button>
-            <button
               v-if="isPerformanceEnabled"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
@@ -146,17 +136,19 @@ function onLocaleChange(value: string) {
               <BookOpen class="w-4 h-4 inline mr-1.5" />
               知识库
             </button>
+            </template>
             <button
+              v-if="authStore.user?.is_super_admin"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
-                route.path.startsWith('/admin/skills') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
+                route.path.startsWith('/admin/') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
               ]"
-              @click="router.push('/admin/skills')"
+              @click="router.push('/admin/orgs')"
             >
-              <Brain class="w-4 h-4 inline mr-1.5" />
-              技能管理
+              <Settings class="w-4 h-4 inline mr-1.5" />
+              <span class="hidden lg:inline">超管后台</span>
+              <span class="lg:hidden">超管</span>
             </button>
-            </template>
             <button
               v-if="authStore.user?.portal_org_role === 'admin'"
               :class="[

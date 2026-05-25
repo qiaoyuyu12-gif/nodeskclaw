@@ -32,6 +32,7 @@ import {
   FolderOpen,
   AlertTriangle,
   Code2,
+  type Component,
 } from 'lucide-vue-next'
 import { useGeneStore } from '@/stores/gene'
 import type { GeneItem, GenomeItem, TemplateInfo } from '@/stores/gene'
@@ -64,7 +65,6 @@ const selectedLocalFiles = ref<string[]>([])
 const localFolderInputRef = ref<HTMLInputElement>()
 
 async function handleLocalFile(file: File) {
-  // 仅支持文件夹上传，.zip 由 handleLocalFolder 处理
   localError.value = '请使用文件夹上传功能'
   return
 }
@@ -98,7 +98,6 @@ function onLocalFolderInput(e: Event) {
     f => (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name
   )
 }
-
 
 const categories = ['开发', '数据', '运维', '网络', '创意', '沟通', '安全', '效率']
 
@@ -298,26 +297,9 @@ async function onMount() {
 
 onMounted(onMount)
 
-let keywordTimer: ReturnType<typeof setTimeout> | null = null
-
-watch(keyword, () => {
-  if (keywordTimer) clearTimeout(keywordTimer)
-  keywordTimer = setTimeout(() => {
-    page.value = 1
-    loadData()
-  }, 300)
-})
-
-watch([viewMode, selectedTag, selectedCategory, selectedVisibility, sortBy], () => {
+watch([keyword], () => {
   page.value = 1
-  if (viewMode.value === 'evolution') {
-    loadEvolution()
-  } else if (viewMode.value === 'templates') {
-    loadData()
-  } else {
-    loadFeatured()
-    loadData()
-  }
+  loadData()
 })
 
 watch(page, loadData)
@@ -338,77 +320,73 @@ function hasNativeTools(gene: GeneItem): boolean {
   const tags = gene.tags ?? []
   return tags.some((t) => ['mcp', 'tools'].includes(String(t).toLowerCase()))
 }
-
 </script>
 
 <template>
-  <div class="flex flex-col h-[calc(100vh-3.5rem)] bg-background text-foreground">
-    <div class="shrink-0 border-b border-border">
-      <div class="max-w-6xl mx-auto px-6 pt-8 pb-4">
-        <h1 class="text-2xl font-bold mb-4">{{ t('geneMarket.title') }}</h1>
+  <div class="min-h-screen bg-background text-foreground">
+    <div class="max-w-6xl mx-auto px-6 pt-6 pb-8">
 
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            :class="[
-              'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-              viewMode === 'genes'
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-            ]"
-            @click="viewMode = 'genes'"
-          >
-            {{ t('geneMarket.tabGenes') }}
-          </button>
-          <button
-            :class="[
-              'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-              viewMode === 'genomes'
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-            ]"
-            @click="viewMode = 'genomes'"
-          >
-            {{ t('geneMarket.tabGenomes') }}
-          </button>
-          <button
-            :class="[
-              'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-              viewMode === 'templates'
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-            ]"
-            @click="viewMode = 'templates'"
-          >
-            {{ t('geneMarket.tabTemplates') }}
-          </button>
-          <button
-            :class="[
-              'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-              viewMode === 'evolution'
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-            ]"
-            @click="viewMode = 'evolution'"
-          >
-            {{ t('geneMarket.tabEvolution') }}
-          </button>
-          <button
-            :class="[
-              'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-              viewMode === 'local'
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-            ]"
-            @click="viewMode = 'local'"
-          >
-            {{ t('geneMarket.tabLocal') }}
-          </button>
-        </div>
+      <!-- 页面标题 -->
+      <h1 class="text-2xl font-bold mb-6">{{ t('geneMarket.title') }}</h1>
+
+      <!-- 顶部 Tab 切换 -->
+      <div class="flex gap-2 mb-6">
+        <button
+          :class="[
+            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+            viewMode === 'genes'
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+          ]"
+          @click="viewMode = 'genes'"
+        >
+          {{ t('geneMarket.tabGenes') }}
+        </button>
+        <button
+          :class="[
+            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+            viewMode === 'genomes'
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+          ]"
+          @click="viewMode = 'genomes'"
+        >
+          {{ t('geneMarket.tabGenomes') }}
+        </button>
+        <button
+          :class="[
+            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+            viewMode === 'templates'
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+          ]"
+          @click="viewMode = 'templates'"
+        >
+          {{ t('geneMarket.tabTemplates') }}
+        </button>
+        <button
+          :class="[
+            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+            viewMode === 'evolution'
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+          ]"
+          @click="viewMode = 'evolution'"
+        >
+          {{ t('geneMarket.tabEvolution') }}
+        </button>
+        <button
+          :class="[
+            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+            viewMode === 'local'
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
+          ]"
+          @click="viewMode = 'local'"
+        >
+          {{ t('geneMarket.tabLocal') }}
+        </button>
       </div>
-    </div>
-
-    <div class="flex-1 min-h-0 overflow-y-auto">
-      <div class="max-w-6xl mx-auto px-6 pt-6 pb-8">
 
       <!-- 进化趋势 Tab -->
       <template v-if="viewMode === 'evolution'">
@@ -566,186 +544,187 @@ function hasNativeTools(gene: GeneItem): boolean {
         </template>
       </template>
 
-      <!-- 基因/基因组 Tab -->
+      <!-- 基因/基因组/模板 Tab -->
       <template v-else>
 
-      <!-- Visibility filter -->
-      <div v-if="viewMode === 'genes' || viewMode === 'templates'" class="flex gap-2 mb-4">
-        <button
-          v-for="vis in [
-            { value: null, key: 'geneMarket.visAll' },
-            { value: 'public', key: 'geneMarket.visPublic' },
-            { value: 'org_private', key: 'geneMarket.visOrg' },
-          ]"
-          :key="String(vis.value)"
-          :class="[
-            'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
-            selectedVisibility === vis.value
-              ? 'bg-primary/10 text-primary'
-              : 'bg-muted/50 text-muted-foreground hover:text-foreground hover:bg-muted',
-          ]"
-          @click="selectedVisibility = vis.value"
-        >
-          {{ t(vis.key) }}
-        </button>
-      </div>
-
-      <div class="flex flex-wrap gap-3 mb-6">
-        <div class="relative flex-1 min-w-[200px]">
-          <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <input
-            v-model="keyword"
-            type="text"
-            :placeholder="t('geneMarket.searchPlaceholder')"
-            class="w-full pl-10 pr-4 py-2 rounded-lg border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-          />
-        </div>
-
-        <div v-if="viewMode === 'genes'" class="flex flex-wrap gap-2">
+        <!-- Visibility filter -->
+        <div v-if="viewMode === 'genes' || viewMode === 'templates'" class="flex gap-2 mb-4">
           <button
-            v-for="t in store.tagStats"
-            :key="t.tag"
+            v-for="vis in [
+              { value: null, key: 'geneMarket.visAll' },
+              { value: 'public', key: 'geneMarket.visPublic' },
+              { value: 'org_private', key: 'geneMarket.visOrg' },
+            ]"
+            :key="String(vis.value)"
             :class="[
               'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
-              selectedTag === t.tag
+              selectedVisibility === vis.value
                 ? 'bg-primary/10 text-primary'
                 : 'bg-muted/50 text-muted-foreground hover:text-foreground hover:bg-muted',
             ]"
-            @click="selectedTag = selectedTag === t.tag ? null : t.tag"
+            @click="selectedVisibility = vis.value"
           >
-            {{ localizeGeneMeta(t.tag) }}
+            {{ t(vis.key) }}
           </button>
         </div>
 
-        <CustomSelect
-          v-if="viewMode === 'genes'"
-          v-model="selectedCategory"
-          :options="categorySelectOptions"
-        />
+        <!-- 搜索和筛选栏 -->
+        <div class="flex flex-wrap gap-3 mb-6">
+          <div class="relative flex-1 min-w-[200px]">
+            <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input
+              v-model="keyword"
+              type="text"
+              :placeholder="t('geneMarket.searchPlaceholder')"
+              class="w-full pl-10 pr-4 py-2 rounded-lg border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+          </div>
 
-        <CustomSelect v-model="sortBy" :options="sortSelectOptions" />
-      </div>
+          <div v-if="viewMode === 'genes'" class="flex flex-wrap gap-2">
+            <button
+              v-for="t in store.tagStats"
+              :key="t.tag"
+              :class="[
+                'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                selectedTag === t.tag
+                  ? 'bg-primary/10 text-primary'
+                  : 'bg-muted/50 text-muted-foreground hover:text-foreground hover:bg-muted',
+              ]"
+              @click="selectedTag = selectedTag === t.tag ? null : t.tag"
+            >
+              {{ localizeGeneMeta(t.tag) }}
+            </button>
+          </div>
 
-      <div v-if="store.loading" class="flex justify-center py-20">
-        <Loader2 class="w-8 h-8 animate-spin text-muted-foreground" />
-      </div>
+          <CustomSelect
+            v-if="viewMode === 'genes'"
+            v-model="selectedCategory"
+            :options="categorySelectOptions"
+          />
 
-      <template v-else>
-        <section>
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            <template v-if="viewMode === 'genes'">
+          <CustomSelect v-model="sortBy" :options="sortSelectOptions" />
+        </div>
+
+        <div v-if="store.loading" class="flex justify-center py-20">
+          <Loader2 class="w-8 h-8 animate-spin text-muted-foreground" />
+        </div>
+
+        <template v-else>
+          <section>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              <template v-if="viewMode === 'genes'">
               <div
                 v-for="gene in store.genes"
                 :key="gene.id"
                 class="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition cursor-pointer"
                 @click="goToGene(gene.slug)"
               >
-              <div class="flex items-start gap-3 mb-2">
-                <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                  <component :is="resolveIcon(gene.icon)" class="w-5 h-5 text-primary" />
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="font-medium truncate">{{ gene.name }}</span>
-                    <span class="shrink-0 text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                      v{{ gene.version }}
-                    </span>
-                    <span
-                      v-if="gene.source_registry && gene.source_registry !== 'local'"
-                      class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded-full bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400"
-                    >
-                      <Globe class="w-3 h-3" />
-                      {{ gene.source_registry_name || gene.source_registry }}
-                    </span>
-                    <span
-                      v-else-if="gene.source_registry === 'local'"
-                      class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded-full bg-gray-50 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
-                    >
-                      <HardDrive class="w-3 h-3" />
-                      {{ t('gene.registryLocal') }}
-                    </span>
-                    <span
-                      v-if="hasNativeTools(gene)"
-                      class="shrink-0 bg-cyan-500/10 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded"
-                    >
-                      {{ t('geneMarket.hasNativeTools') }}
-                    </span>
+                <div class="flex items-start gap-3 mb-2">
+                  <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                    <component :is="resolveIcon(gene.icon)" class="w-5 h-5 text-primary" />
                   </div>
-                  <p class="text-xs text-muted-foreground line-clamp-2 mt-1">
-                    {{ gene.short_description ?? gene.description ?? '' }}
-                  </p>
-                </div>
-              </div>
-              <div class="flex flex-wrap gap-1 mt-2">
-                <span
-                  v-for="tag in gene.tags.slice(0, 3)"
-                  :key="tag"
-                  class="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary"
-                >
-                  {{ localizeGeneMeta(tag) }}
-                </span>
-              </div>
-              <div class="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
-                <span class="flex items-center gap-0.5">
-                  <Star class="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                  {{ (gene.avg_rating ?? 0).toFixed(1) }}
-                </span>
-                <div class="flex-1 min-w-0">
-                  <div class="h-1.5 rounded-full bg-muted overflow-hidden">
-                    <div
-                      class="h-full rounded-full bg-primary/60"
-                      :style="{ width: `${Math.min(100, (gene.effectiveness_score ?? 0) * 100)}%` }"
-                    />
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <span class="font-medium truncate">{{ gene.name }}</span>
+                      <span class="shrink-0 text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                        v{{ gene.version }}
+                      </span>
+                      <span
+                        v-if="gene.source_registry && gene.source_registry !== 'local'"
+                        class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded-full bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400"
+                      >
+                        <Globe class="w-3 h-3" />
+                        {{ gene.source_registry_name || gene.source_registry }}
+                      </span>
+                      <span
+                        v-else-if="gene.source_registry === 'local'"
+                        class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded-full bg-gray-50 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
+                      >
+                        <HardDrive class="w-3 h-3" />
+                        {{ t('gene.registryLocal') }}
+                      </span>
+                      <span
+                        v-if="hasNativeTools(gene)"
+                        class="shrink-0 bg-cyan-500/10 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded"
+                      >
+                        {{ t('geneMarket.hasNativeTools') }}
+                      </span>
+                    </div>
+                    <p class="text-xs text-muted-foreground line-clamp-2 mt-1">
+                      {{ gene.short_description ?? gene.description ?? '' }}
+                    </p>
                   </div>
                 </div>
-                <span class="shrink-0">{{ t('geneMarket.learnCount', { count: gene.install_count ?? 0 }) }}</span>
+                <div class="flex flex-wrap gap-1 mt-2">
+                  <span
+                    v-for="tag in gene.tags.slice(0, 3)"
+                    :key="tag"
+                    class="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary"
+                  >
+                    {{ localizeGeneMeta(tag) }}
+                  </span>
+                </div>
+                <div class="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
+                  <span class="flex items-center gap-0.5">
+                    <Star class="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                    {{ (gene.avg_rating ?? 0).toFixed(1) }}
+                  </span>
+                  <div class="flex-1 min-w-0">
+                    <div class="h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div
+                        class="h-full rounded-full bg-primary/60"
+                        :style="{ width: `${Math.min(100, (gene.effectiveness_score ?? 0) * 100)}%` }"
+                      />
+                    </div>
+                  </div>
+                  <span class="shrink-0">{{ t('geneMarket.learnCount', { count: gene.install_count ?? 0 }) }}</span>
+                </div>
               </div>
-              </div>
-            </template>
-            <template v-else-if="viewMode === 'genomes'">
+              </template>
+              <template v-else-if="viewMode === 'genomes'">
               <div
                 v-for="genome in store.genomes"
                 :key="genome.id"
                 class="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition cursor-pointer"
                 @click="goToGenome(genome.id)"
               >
-              <div class="flex items-start gap-3 mb-2">
-                <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                  <component :is="resolveIcon(genome.icon)" class="w-5 h-5 text-primary" />
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="font-medium truncate">{{ genome.name }}</span>
-                    <span
-                      v-if="genome.native_tool_count"
-                      class="shrink-0 inline-flex items-center gap-1 bg-cyan-500/10 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded"
-                    >
-                      <Wrench class="w-3 h-3" />
-                      {{ t('genome.nativeToolCount', { count: genome.native_tool_count }) }}
-                    </span>
-                    <span
-                      v-if="genome.mcp_server_count"
-                      class="shrink-0 inline-flex items-center gap-1 bg-violet-500/10 text-violet-400 text-[10px] px-1.5 py-0.5 rounded"
-                    >
-                      <Server class="w-3 h-3" />
-                      {{ t('genome.mcpServerCount', { count: genome.mcp_server_count }) }}
-                    </span>
+                <div class="flex items-start gap-3 mb-2">
+                  <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                    <component :is="resolveIcon(genome.icon)" class="w-5 h-5 text-primary" />
                   </div>
-                  <p class="text-xs text-muted-foreground line-clamp-2 mt-1">
-                    {{ genome.short_description ?? genome.description ?? '' }}
-                  </p>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <span class="font-medium truncate">{{ genome.name }}</span>
+                      <span
+                        v-if="genome.native_tool_count"
+                        class="shrink-0 inline-flex items-center gap-1 bg-cyan-500/10 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded"
+                      >
+                        <Wrench class="w-3 h-3" />
+                        {{ t('genome.nativeToolCount', { count: genome.native_tool_count }) }}
+                      </span>
+                      <span
+                        v-if="genome.mcp_server_count"
+                        class="shrink-0 inline-flex items-center gap-1 bg-violet-500/10 text-violet-400 text-[10px] px-1.5 py-0.5 rounded"
+                      >
+                        <Server class="w-3 h-3" />
+                        {{ t('genome.mcpServerCount', { count: genome.mcp_server_count }) }}
+                      </span>
+                    </div>
+                    <p class="text-xs text-muted-foreground line-clamp-2 mt-1">
+                      {{ genome.short_description ?? genome.description ?? '' }}
+                    </p>
+                  </div>
+                </div>
+                <div class="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
+                  <span class="flex items-center gap-0.5">
+                    <Star class="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                    {{ (genome.avg_rating ?? 0).toFixed(1) }}
+                  </span>
+                  <span class="shrink-0">{{ t('geneMarket.learnCount', { count: genome.install_count ?? 0 }) }}</span>
                 </div>
               </div>
-              <div class="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
-                <span class="flex items-center gap-0.5">
-                  <Star class="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                  {{ (genome.avg_rating ?? 0).toFixed(1) }}
-                </span>
-                <span class="shrink-0">{{ t('geneMarket.learnCount', { count: genome.install_count ?? 0 }) }}</span>
-              </div>
-            </div>
-            </template>
-            <template v-else-if="viewMode === 'templates'">
+              </template>
+              <template v-else-if="viewMode === 'templates'">
               <div
                 v-for="tpl in store.templates"
                 :key="tpl.id"
@@ -774,137 +753,132 @@ function hasNativeTools(gene: GeneItem): boolean {
                   </span>
                 </div>
               </div>
-            </template>
-          </div>
-        </section>
-
-        <!-- ═══ 本地上传 Tab ═══ -->
-        <div v-if="viewMode === 'local'" class="space-y-6">
-          <!-- 本地上传区域 -->
-          <div class="rounded-xl border-2 border-dashed border-blue-300 bg-blue-50 p-8">
-            <div class="flex flex-col items-center gap-4">
-              <FolderOpen class="w-10 h-10 text-blue-400" />
-              <p class="text-sm text-gray-700 text-center font-medium">上传本地 SKILL 文件夹</p>
-              <p class="text-xs text-gray-500 text-center max-w-md">
-                选择包含 <code class="bg-white px-1 rounded">SKILL.md</code> 的文件夹，系统自动解析并创建本地基因。
-                同时支持上传 ZIP 包。
-              </p>
-
-              <!-- 文件夹选择 -->
-              <input
-                ref="localFolderInputRef"
-                type="file"
-                class="hidden"
-                webkitdirectory
-                multiple
-                @change="onLocalFolderInput"
-              />
-              <button
-                class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-4 py-2 text-sm text-blue-700 hover:bg-blue-50"
-                @click="localFolderInputRef?.click()"
-              >
-                <FolderOpen class="w-4 h-4" />
-                选择文件夹
-              </button>
+              </template>
             </div>
+          </section>
 
-            <!-- 已选文件预览 + 确认上传 -->
-            <div v-if="selectedLocalFiles.length > 0" class="mt-4">
-              <p class="text-xs font-medium text-gray-600 mb-2">
-                已选 {{ selectedLocalFiles.length }} 个文件：
-              </p>
-              <ul class="max-h-40 overflow-y-auto rounded-lg bg-white border border-gray-200 divide-y divide-gray-100">
-                <li
-                  v-for="path in selectedLocalFiles"
-                  :key="path"
-                  class="flex items-center gap-2 px-3 py-1.5 text-xs"
-                >
-                  <Code2 v-if="path.endsWith('.py')" class="w-3 h-3 text-blue-500 shrink-0" />
-                  <FolderOpen v-else-if="path.includes('/')" class="w-3 h-3 text-gray-400 shrink-0" />
-                  <span class="text-gray-600">{{ path }}</span>
-                </li>
-              </ul>
-              <div class="mt-3 flex justify-end">
+          <!-- ═══ 本地上传 Tab ═══ -->
+          <div v-if="viewMode === 'local'" class="space-y-6">
+            <div class="rounded-xl border-2 border-dashed border-blue-300 bg-blue-50 p-8">
+              <div class="flex flex-col items-center gap-4">
+                <FolderOpen class="w-10 h-10 text-blue-400" />
+                <p class="text-sm text-gray-700 text-center font-medium">上传本地 SKILL 文件夹</p>
+                <p class="text-xs text-gray-500 text-center max-w-md">
+                  选择包含 <code class="bg-white px-1 rounded">SKILL.md</code> 的文件夹，系统自动解析并创建本地基因。
+                  同时支持上传 ZIP 包。
+                </p>
+
+                <input
+                  ref="localFolderInputRef"
+                  type="file"
+                  class="hidden"
+                  webkitdirectory
+                  multiple
+                  @change="onLocalFolderInput"
+                />
                 <button
-                  :disabled="localUploading"
-                  class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-                  @click="handleLocalFolder"
+                  class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-4 py-2 text-sm text-blue-700 hover:bg-blue-50"
+                  @click="localFolderInputRef?.click()"
                 >
-                  <span v-if="localUploading" class="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
-                  <Upload v-else class="w-4 h-4" />
-                  {{ localUploading ? '上传中...' : '确认上传' }}
+                  <FolderOpen class="w-4 h-4" />
+                  选择文件夹
                 </button>
               </div>
-            </div>
 
-            <!-- ZIP 上传（备用） -->
-            <div class="mt-4 flex flex-col items-center gap-2">
-              <p class="text-xs text-gray-400">或上传 ZIP 包</p>
-              <input
-                ref="localFileInputRef"
-                type="file"
-                accept=".zip"
-                class="hidden"
-                @change="(e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) handleLocalFile(f) }"
-              />
-              <button
-                class="inline-flex items-center gap-1.5 text-xs text-gray-500 underline underline-offset-2 hover:text-gray-700"
-                @click="localFileInputRef?.click()"
-              >
-                点击选择 .zip 文件
-              </button>
-            </div>
+              <div v-if="selectedLocalFiles.length > 0" class="mt-4">
+                <p class="text-xs font-medium text-gray-600 mb-2">
+                  已选 {{ selectedLocalFiles.length }} 个文件：
+                </p>
+                <ul class="max-h-40 overflow-y-auto rounded-lg bg-white border border-gray-200 divide-y divide-gray-100">
+                  <li
+                    v-for="path in selectedLocalFiles"
+                    :key="path"
+                    class="flex items-center gap-2 px-3 py-1.5 text-xs"
+                  >
+                    <Code2 v-if="path.endsWith('.py')" class="w-3 h-3 text-blue-500 shrink-0" />
+                    <FolderOpen v-else-if="path.includes('/')" class="w-3 h-3 text-gray-400 shrink-0" />
+                    <span class="text-gray-600">{{ path }}</span>
+                  </li>
+                </ul>
+                <div class="mt-3 flex justify-end">
+                  <button
+                    :disabled="localUploading"
+                    class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    @click="handleLocalFolder"
+                  >
+                    <span v-if="localUploading" class="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                    <Upload v-else class="w-4 h-4" />
+                    {{ localUploading ? '上传中...' : '确认上传' }}
+                  </button>
+                </div>
+              </div>
 
-            <div v-if="localUploading" class="mt-4 flex items-center gap-2 text-sm text-blue-600 justify-center">
-              <span class="animate-spin inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full" />
-              解析上传中...
-            </div>
-            <div v-if="localError" class="mt-4 flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-3">
-              <AlertTriangle class="w-4 h-4 text-red-500 shrink-0" />
-              <p class="text-sm text-red-700">{{ localError }}</p>
-            </div>
-            <div v-if="localSuccess" class="mt-4 flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
-              <Check class="w-4 h-4 text-green-500 shrink-0" />
-              <p class="text-sm text-green-700">{{ localSuccess }}</p>
+              <div class="mt-4 flex flex-col items-center gap-2">
+                <p class="text-xs text-gray-400">或上传 ZIP 包</p>
+                <input
+                  ref="localFileInputRef"
+                  type="file"
+                  accept=".zip"
+                  class="hidden"
+                  @change="(e: Event) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) handleLocalFile(f) }"
+                />
+                <button
+                  class="inline-flex items-center gap-1.5 text-xs text-gray-500 underline underline-offset-2 hover:text-gray-700"
+                  @click="localFileInputRef?.click()"
+                >
+                  点击选择 .zip 文件
+                </button>
+              </div>
+
+              <div v-if="localUploading" class="mt-4 flex items-center gap-2 text-sm text-blue-600 justify-center">
+                <span class="animate-spin inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full" />
+                解析上传中...
+              </div>
+              <div v-if="localError" class="mt-4 flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-3">
+                <AlertTriangle class="w-4 h-4 text-red-500 shrink-0" />
+                <p class="text-sm text-red-700">{{ localError }}</p>
+              </div>
+              <div v-if="localSuccess" class="mt-4 flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3">
+                <Check class="w-4 h-4 text-green-500" />
+                <p class="text-sm text-green-700">{{ localSuccess }}</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div
-          v-if="totalPages > 1"
-          class="flex items-center justify-center gap-2 mt-8"
-        >
-          <button
-            :disabled="!canPrev"
-            :class="[
-              'px-3 py-1.5 rounded-lg text-sm transition-colors',
-              canPrev
-                ? 'text-foreground hover:bg-muted'
-                : 'text-muted-foreground cursor-not-allowed',
-            ]"
-            @click="page = Math.max(1, page - 1)"
+          <div
+            v-if="totalPages > 1"
+            class="flex items-center justify-center gap-2 mt-8"
           >
-            {{ t('geneMarket.prevPage') }}
-          </button>
-          <span class="text-sm text-muted-foreground">
-            {{ page }} / {{ totalPages }}
-          </span>
-          <button
-            :disabled="!canNext"
-            :class="[
-              'px-3 py-1.5 rounded-lg text-sm transition-colors',
-              canNext
-                ? 'text-foreground hover:bg-muted'
-                : 'text-muted-foreground cursor-not-allowed',
-            ]"
-            @click="page = Math.min(totalPages, page + 1)"
-          >
-            {{ t('geneMarket.nextPage') }}
-          </button>
-        </div>
+            <button
+              :disabled="!canPrev"
+              :class="[
+                'px-3 py-1.5 rounded-lg text-sm transition-colors',
+                canPrev
+                  ? 'text-foreground hover:bg-muted'
+                  : 'text-muted-foreground cursor-not-allowed',
+              ]"
+              @click="page = Math.max(1, page - 1)"
+            >
+              {{ t('geneMarket.prevPage') }}
+            </button>
+            <span class="text-sm text-muted-foreground">
+              {{ page }} / {{ totalPages }}
+            </span>
+            <button
+              :disabled="!canNext"
+              :class="[
+                'px-3 py-1.5 rounded-lg text-sm transition-colors',
+                canNext
+                  ? 'text-foreground hover:bg-muted'
+                  : 'text-muted-foreground cursor-not-allowed',
+              ]"
+              @click="page = Math.min(totalPages, page + 1)"
+            >
+              {{ t('geneMarket.nextPage') }}
+            </button>
+          </div>
+        </template>
       </template>
-      </template>
-      </div>
     </div>
   </div>
 </template>
