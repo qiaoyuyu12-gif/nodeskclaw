@@ -392,6 +392,14 @@ watch(activeTab, () => { error.value = '' })
             </p>
           </Transition>
 
+          <!-- 注册入口 -->
+          <p class="text-center text-sm text-muted-foreground">
+            {{ t('auth.noAccount') }}
+            <router-link to="/register" class="text-primary font-medium hover:underline ml-1">
+              {{ t('auth.register') }}
+            </router-link>
+          </p>
+
         <!-- Waitlist 入口 (EE-only) -->
         <a
           v-if="isEE"

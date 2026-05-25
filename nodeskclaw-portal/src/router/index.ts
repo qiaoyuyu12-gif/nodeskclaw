@@ -10,6 +10,12 @@ const ceRoutes: RouteRecordRaw[] = [
     meta: { requiresAuth: false },
   },
   {
+    path: '/register',
+    name: 'Register',
+    component: () => import('@/views/Register.vue'),
+    meta: { requiresAuth: false },
+  },
+  {
     path: '/force-change-password',
     name: 'ForceChangePassword',
     component: () => import('@/views/ForceChangePassword.vue'),

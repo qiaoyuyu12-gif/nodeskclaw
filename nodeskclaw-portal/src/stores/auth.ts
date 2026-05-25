@@ -126,11 +126,20 @@ export const useAuthStore = defineStore('auth', () => {
     return data
   }
 
+  async function register(name: string, email: string, password: string, phone?: string) {
+    const res = await api.post('/auth/register', { name, email, password, phone })
+    const data = res.data.data
+    setTokens(data.access_token, data.refresh_token)
+    user.value = data.user
+    return data
+  }
+
   return {
     token, refreshToken, user, systemInfo, isLoggedIn,
     setTokens, clearAuth,
     emailLogin, sendSmsCode, smsLogin,
     accountLogin, sendVerificationCode, verificationCodeLogin,
+    register,
     fetchSystemInfo, fetchUser, logout,
   }
 })
