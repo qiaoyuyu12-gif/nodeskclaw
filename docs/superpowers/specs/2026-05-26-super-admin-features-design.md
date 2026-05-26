@@ -219,7 +219,8 @@ DELETE /admin/orgs/:id/features/:feature_id
 ### 5.4 审计（audit.py）
 
 ```
-GET    /admin/audit?actor=&action=&from=&to=&page=&size=
+GET    /admin/audit?actor=&action=&from=&to=&page=&size=    # action 取自 AdminAction enum value
+GET    /admin/audit/actions                                  # 返回所有 AdminAction value，供前端筛选下拉
 ```
 
 ### 5.5 密码重置实现要点
@@ -370,9 +371,66 @@ CE 模式仅保留组织 CRUD，新方法在 CE 入口不渲染。
 | 登录失败 | auth | attempted_email / ip / user_agent / reason | `app/api/auth.py` 登录失败路径 |
 | 登出 | auth | actor_id / ip | `app/api/auth.py` 登出路径 |
 
-登录失败的 actor_id 为 null，但 `attempted_email` 必填，便于排查爆破。**禁止把密码/Token 写入审计**。
+登录失败时 `actor_id` 写占位符 `"anonymous"`、`actor_type` 写 `"anonymous"`（`operation_audit_log.actor_id` 当前为 NOT NULL，不修改 schema 以最小侵入），`details.attempted_email` 必填便于排查爆破。**禁止把密码/Token 写入审计**。
 
 非本期：业务操作全量审计、敏感数据访问审计、API key 使用审计 → 留 `advanced_audit` feature 单独立项。
+
+### 7.1.1 AdminAction Enum（强约束）
+
+所有审计动作必须走 enum，**禁止任何裸字符串调用 `audit_service.with_audit("...")`**。`mypy` / 代码评审强制此规则。
+
+位置：`nodeskclaw-backend/app/models/admin_action.py`
+
+```python
+from enum import Enum
+
+class AdminAction(str, Enum):
+    # 组织
+    ORG_CREATE          = "org.create"
+    ORG_UPDATE          = "org.update"
+    ORG_DELETE          = "org.delete"
+    # 组织成员
+    ORG_MEMBER_ADD      = "org_member.add"
+    ORG_MEMBER_UPDATE   = "org_member.update"
+    ORG_MEMBER_REMOVE   = "org_member.remove"
+    # 用户
+    USER_UPDATE         = "user.update"
+    USER_RESET_PASSWORD = "user.reset_password"
+    USER_DELETE         = "user.delete"
+    # Feature override
+    FEATURE_OVERRIDE_SET   = "feature_override.set"
+    FEATURE_OVERRIDE_CLEAR = "feature_override.clear"
+    # 安全（最低审计）
+    AUTH_LOGIN_SUCCESS  = "auth.login_success"
+    AUTH_LOGIN_FAILED   = "auth.login_failed"
+    AUTH_LOGOUT         = "auth.logout"
+```
+
+值采用 `domain.verb` 格式，方便前端按前缀分组筛选、i18n 按值映射。
+
+**约束**：
+- 写入：`audit_service.with_audit(action: AdminAction, ...)` 签名只收 enum，类型检查兜底
+- 数据库：`operation_audit_log.action` 列仍为 String(255)（兼容历史 + 业务全量审计将来扩展），但本期写入路径只允许 `AdminAction.value`
+- 查询：`/admin/audit?action=` 接受 enum value 字符串，后端再解析回 enum；非法 value → 400
+- 前端 `actionOptions` 数组直接从后端 `GET /admin/audit/actions` 拉取（返回 enum value 列表），避免前端硬编码
+
+**i18n 映射**（前端 `admin.audit.actions[<value>]`）：
+
+```jsonc
+{
+  "admin.audit.actions.org.create": "创建组织",
+  "admin.audit.actions.user.reset_password": "重置用户密码",
+  "admin.audit.actions.auth.login_failed": "登录失败",
+  // ...每个 enum value 一条
+}
+```
+
+新增 enum 值时必须同步：
+1. `AdminAction` enum
+2. zh-CN + en i18n
+3. 审计单测
+
+CI / 代码评审检查项：审计相关 PR diff 中必须同时改这三处，否则打回。
 
 ### 7.2 临时密码安全
 
