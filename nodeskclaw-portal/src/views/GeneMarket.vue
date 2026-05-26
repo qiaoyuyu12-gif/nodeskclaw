@@ -310,7 +310,7 @@ async function onMount() {
 
 onMounted(onMount)
 
-watch([keyword], () => {
+watch([keyword, selectedVisibility, selectedCategory, sortBy, viewMode], () => {
   page.value = 1
   loadData()
 })
