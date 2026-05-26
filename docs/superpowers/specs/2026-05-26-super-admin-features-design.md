@@ -123,17 +123,43 @@ class OrganizationFeatureOverride(BaseModel):
 ### 4.2 复用已有字段
 
 - `users.is_super_admin`、`users.is_active`、`users.password_hash`、`users.must_change_password`
+- `BaseModel.deleted_at`（已存在的软删字段）
 - `operation_audit_log`：直接复用，无需新字段
 
-### 4.3 Alembic 迁移
+### 4.2.1 新增字段 `users.deleted_by`
+
+仅在 `users` 表新增 `deleted_by: String(36) | None`，记录是哪个超管执行的软删。其他表本期不引入该字段（无超管删除场景）。
+
+### 4.3 软删级联策略（重要）
+
+超管删除用户时：
+
+**软删（设置 deleted_at + users.deleted_by）：**
+- `users` 行本身
+- 该用户的所有 `OrgMembership`（移除组织关系）
+- 该用户的所有 `AdminMembership`（移除平台管理身份）
+- `user_llm_key`、`user_llm_config`（属用户私有配置）
+
+**保留不动（数据完整性 / 审计可追溯性）：**
+- `operation_audit_log`（所有审计记录，含他人对该用户的操作）
+- `conversation` / `workspace_message` / `workspace_task` / `workspace_deploy`（业务历史）
+- `event_log` / `deploy_record` / `llm_usage_log` / `decision_record`（运行历史）
+- `instance_member`（实例成员历史）
+- 任何外键指向该 user_id 的业务数据
+
+读取时业务层不联表过滤 `user.deleted_at IS NULL`；前端展示时若用户已删除，显示 "已注销用户"。该用户名/邮箱本身仍保留在 users 行中以便回溯。
+
+**禁止物理删除**：本期不提供任何 hard delete 入口。
+
+### 4.4 Alembic 迁移
 
 ```bash
-uv run alembic revision --autogenerate -m "add organization_feature_overrides"
+uv run alembic revision --autogenerate -m "add organization_feature_overrides and users.deleted_by"
 ```
 
-仅新增表，不修改现有字段，零回退风险。
+新增 1 张表 + `users.deleted_by` 单列。不修改其他字段，零数据回退风险。
 
-### 4.4 FeatureGate 改造
+### 4.5 FeatureGate 改造
 
 ```python
 async def is_enabled(feature_id: str, org_id: str | None = None) -> bool:
@@ -177,7 +203,7 @@ GET    /admin/users?q=&page=&size=
 GET    /admin/users/:id
 PUT    /admin/users/:id                     body: {is_active?, is_super_admin?}
 POST   /admin/users/:id/reset-password      response: {temp_password}
-DELETE /admin/users/:id                     # 软删 user + 级联软删其所有 OrgMembership
+DELETE /admin/users/:id                     # 软删 user + OrgMembership + AdminMembership + 私有配置；保留业务历史与审计
 ```
 
 ### 5.3 Feature 控制（features.py）
@@ -223,7 +249,7 @@ GET    /admin/audit?actor=&action=&from=&to=&page=&size=
 | `org_admin_service.remove_member` | 非组织最后 admin | member.remove | 软删 |
 | `user_admin_service.update_user` | 自我保护 + 最后超管 | update | — |
 | `user_admin_service.reset_password` | — | password_reset（不含明文） | 返回 temp_password |
-| `user_admin_service.delete_user` | 自我保护 + 最后超管 | delete | 级联软删 OrgMembership |
+| `user_admin_service.delete_user` | 自我保护 + 最后超管 | delete | 按 §4.3 软删白名单级联，业务/审计数据保留 |
 | `feature_admin_service.set_override` | feature_id 在 yaml | override.set | — |
 | `feature_admin_service.clear_override` | — | override.clear | — |
 | `feature_admin_service.resolve` | — | — | FeatureGate 调用入口 |
