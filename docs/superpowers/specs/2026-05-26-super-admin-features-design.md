@@ -62,12 +62,34 @@ nodeskclaw-portal/src/views/admin/
 ### 3.3 后端目录
 
 ```
-ee/backend/api/admin/
-├── organizations.py        # 已有 — 追加成员端点
-├── users.py                # 新增
-├── features.py             # 新增
-└── audit.py                # 新增
+ee/backend/api/admin/              # 路由层 — 仅做参数解析、调用 service、组装响应
+├── organizations.py               # 已有 — 追加成员端点
+├── users.py                       # 新增
+├── features.py                    # 新增
+└── audit.py                       # 新增
+
+ee/backend/services/admin/         # 业务层 — 守卫、审计、级联、合并逻辑
+├── __init__.py
+├── org_admin_service.py           # 组织 CRUD + 成员管理 + 配额校验
+├── user_admin_service.py          # 用户启停、超管位、密码重置、自我保护
+├── feature_admin_service.py       # FeatureGate 合并、override CRUD
+└── audit_service.py               # 统一审计写入 + 查询，封装 with audit_context
 ```
+
+endpoint 仅负责：
+
+```python
+@router.put("/users/{user_id}")
+async def update_user(
+    user_id: str,
+    body: AdminUserUpdate,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_super_admin_dep),
+):
+    return await user_admin_service.update_user(db, admin, user_id, body)
+```
+
+所有规则（不能停用自己、不能撤销自己 super_admin、不能删除最后一个超管、级联软删 OrgMembership、override 合并、审计落库）全部在 service 层，endpoint 不做 if/else。
 
 ### 3.4 鉴权链
 
@@ -182,12 +204,30 @@ GET    /admin/audit?actor=&action=&from=&to=&page=&size=
 
 ### 5.6 自我保护守卫
 
-API 层和数据库约束双重保证：
+**全部位于 `user_admin_service` / `org_admin_service` 中**，endpoint 不重复实现。校验失败统一抛 `HTTPException(409)`，前端按 `error_code` 显示本地化提示。
 
 - 不能停用自己（is_active=False）
 - 不能撤销自己 is_super_admin
 - 不能删除自己
-- 不能让系统失去"最后一个超管"
+- 不能让系统失去"最后一个超管"（service 层查询计数 + 数据库 partial unique index 兜底）
+
+### 5.7 Service 层关键契约
+
+| Service 方法 | 守卫 | 审计 | 备注 |
+|---|---|---|---|
+| `org_admin_service.create_org` | slug 唯一 | create | — |
+| `org_admin_service.update_org` | — | update（diff） | — |
+| `org_admin_service.delete_org` | 无运行中实例 | delete | 软删 |
+| `org_admin_service.add_member` | user 存在；非重复 | member.add | 复用 OrgMembership |
+| `org_admin_service.remove_member` | 非组织最后 admin | member.remove | 软删 |
+| `user_admin_service.update_user` | 自我保护 + 最后超管 | update | — |
+| `user_admin_service.reset_password` | — | password_reset（不含明文） | 返回 temp_password |
+| `user_admin_service.delete_user` | 自我保护 + 最后超管 | delete | 级联软删 OrgMembership |
+| `feature_admin_service.set_override` | feature_id 在 yaml | override.set | — |
+| `feature_admin_service.clear_override` | — | override.clear | — |
+| `feature_admin_service.resolve` | — | — | FeatureGate 调用入口 |
+
+`audit_service.with_audit(action, resource, **fields)` 作为 async context manager，包裹 service 方法体；失败抛异常时写"失败"审计。
 
 ## 6. 前端页面
 
@@ -256,6 +296,8 @@ CE 模式仅保留组织 CRUD，新方法在 CE 入口不渲染。
 
 ### 7.1 审计动作清单
 
+写入入口统一在 `audit_service.with_audit(...)`；service 方法不直接调 `db.add(OperationAuditLog)`。
+
 | 动作 | resource_type | before/after |
 |---|---|---|
 | 创建组织 | org | null / 快照 |
@@ -280,8 +322,8 @@ CE 模式仅保留组织 CRUD，新方法在 CE 入口不渲染。
 
 ### 8.1 后端
 
-- 每个新 endpoint 一个 pytest 用例（位于 `ee/backend/api/admin/test_*.py`）
-- 覆盖：正向路径 / 非超管 403 / 自删自护 / 边界（空列表/不存在 ID）
+- **Service 层测试为主**（`ee/backend/services/admin/test_*.py`）：直接调 service 方法，覆盖所有守卫分支、级联、合并、审计写入
+- **Endpoint 层测试**：仅做 happy path + 鉴权 403（不重复测业务规则）
 - FeatureGate 单测：覆盖三态优先级
 
 ### 8.2 前端
