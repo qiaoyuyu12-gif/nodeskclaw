@@ -347,6 +347,8 @@ CE 模式仅保留组织 CRUD，新方法在 CE 入口不渲染。
 
 写入入口统一在 `audit_service.with_audit(...)`；service 方法不直接调 `db.add(OperationAuditLog)`。
 
+**A. 超管动作（在新 admin endpoint 中触发）**
+
 | 动作 | resource_type | before/after |
 |---|---|---|
 | 创建组织 | org | null / 快照 |
@@ -360,12 +362,37 @@ CE 模式仅保留组织 CRUD，新方法在 CE 入口不渲染。
 
 `with audit_context(action="...", ...):` 装饰每个 endpoint；异常时写"失败"审计。
 
+**B. 最低安全审计（本期补，所有用户路径触发）**
+
+| 动作 | resource_type | 字段 | 触发点 |
+|---|---|---|---|
+| 登录成功 | auth | actor_id / ip / user_agent | `app/api/auth.py` 登录成功路径 |
+| 登录失败 | auth | attempted_email / ip / user_agent / reason | `app/api/auth.py` 登录失败路径 |
+| 登出 | auth | actor_id / ip | `app/api/auth.py` 登出路径 |
+
+登录失败的 actor_id 为 null，但 `attempted_email` 必填，便于排查爆破。**禁止把密码/Token 写入审计**。
+
+非本期：业务操作全量审计、敏感数据访问审计、API key 使用审计 → 留 `advanced_audit` feature 单独立项。
+
 ### 7.2 临时密码安全
 
 - HTTPS 一次性返回
 - 服务端不日志明文、不审计明文
 - 前端 `navigator.clipboard` 复制，弹窗关闭即丢
 - 登录后 `must_change_password=True` 触发 `ForceChangePassword.vue`
+
+### 7.3 审计保留期与清理 Job
+
+- **保留期：90 天**（physical delete）
+- 实现：新增 `AuditRetentionRunner`，沿用现有 `ScheduleRunner` 异步轮询模式
+  - 位置：`nodeskclaw-backend/app/services/audit_retention_runner.py`
+  - 频率：每天 03:00 本地时间（低峰）跑一次
+  - 行为：`DELETE FROM operation_audit_log WHERE created_at < NOW() - INTERVAL '90 days'`
+  - **物理删除**（审计本身已是只追加，超期数据无价值，节省存储）
+  - 单次 batch 上限 10 万行，超出分批，避免锁表
+- 启动钩子：在 `main.py` 现有 `lifespan` 中追加 `AuditRetentionRunner.start()` / `stop()`
+- 监控：每次清理后写一条 INFO log `[audit_retention] deleted N rows older than 90d`
+- 配置项：在 `.env.example` 增加 `AUDIT_RETENTION_DAYS=90`（默认 90）和 `AUDIT_RETENTION_ENABLED=true`
 
 ## 8. 测试策略
 
@@ -413,3 +440,4 @@ CE 模式仅保留组织 CRUD，新方法在 CE 入口不渲染。
 - 多角色 RBAC（仅留字段，本期不启用）
 - 邮件通知超管动作（依赖 SMTP 可用性，本期不做）
 - 批量操作（批量启用/禁用用户）
+- 业务操作全量审计 + 导出 + 不可篡改归档 → `advanced_audit` feature
