@@ -501,3 +501,102 @@ async def admin_reset_password(user_id: str, db: AsyncSession) -> str:
     await db.commit()
     logger.info("管理员重置密码: user_id=%s", user_id)
     return plain
+
+
+async def register_user(
+    name: str,
+    email: str,
+    phone: str | None,
+    password: str,
+    db: AsyncSession,
+) -> LoginResponse:
+    """公共注册：创建用户并分配到默认组织。"""
+    # 检查邮箱唯一性
+    existing = (await db.execute(
+        select(User).where(User.email == email, User.deleted_at.is_(None))
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": 40030,
+                "message_key": "errors.auth.email_already_registered",
+                "message": "该邮箱已被注册",
+            },
+        )
+
+    # 检查手机号唯一性（如提供）
+    if phone:
+        existing_phone = (await db.execute(
+            select(User).where(User.phone == phone, User.deleted_at.is_(None))
+        )).scalar_one_or_none()
+        if existing_phone:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": 40031,
+                    "message_key": "errors.auth.phone_already_registered",
+                    "message": "该手机号已被注册",
+                },
+            )
+
+    # 获取默认组织
+    from app.models.organization import Organization
+    from app.models.org_membership import OrgMembership, OrgRole
+
+    default_org = (await db.execute(
+        select(Organization).where(Organization.slug == "default", Organization.deleted_at.is_(None))
+    )).scalar_one_or_none()
+
+    # 创建用户（不设置 password_hash，在 auth_service 层处理）
+    user = User(
+        name=name,
+        email=email,
+        phone=phone or None,
+        password_hash=_hash_password(password),
+        current_org_id=default_org.id if default_org else None,
+    )
+    db.add(user)
+    await db.flush()
+
+    # 加入默认组织
+    if default_org:
+        db.add(OrgMembership(
+            user_id=user.id,
+            org_id=default_org.id,
+            role=OrgRole.member,
+        ))
+
+    await db.commit()
+    await db.refresh(user)
+
+    # 生成 Token
+    access_token = create_access_token(user.id)
+    refresh_token = create_refresh_token(user.id)
+
+    logger.info("新用户注册: id=%s email=%s", user.id, email)
+
+    # 构建 UserInfo（排除 oauth_connections 避免 async 问题）
+    return LoginResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user=UserInfo(
+            id=user.id,
+            name=user.name,
+            email=user.email,
+            phone=user.phone,
+            username=user.username,
+            avatar_url=user.avatar_url,
+            role=user.role,
+            is_active=user.is_active,
+            is_super_admin=user.is_super_admin,
+            has_password=True,
+            must_change_password=False,
+            current_org_id=user.current_org_id,
+            org_role=None,
+            portal_org_role=None,
+            last_login_at=None,
+            oauth_connections=[],
+        ),
+        needs_org_setup=False,
+    )

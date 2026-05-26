@@ -3,11 +3,13 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAdminApi } from '@/services/adminApi'
 import { useToast } from '@/composables/useToast'
+import { useFeature } from '@/composables/useFeature'
 import { resolveApiErrorMessage } from '@/i18n/error'
 import { Building2, Plus, Pencil, Trash2, Loader2, Search, X, Check } from 'lucide-vue-next'
 
 const { t } = useI18n()
 const toast = useToast()
+const { isEnabled: platformAdminEnabled } = useFeature('platform_admin')
 const { fetchOrgs, createOrg, updateOrg, deleteOrg } = useAdminApi()
 
 const loading = ref(true)

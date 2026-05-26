@@ -23,6 +23,7 @@ const userMenuRef = ref<HTMLElement>()
 const locale = ref(getCurrentLocale())
 const appVersion = __APP_VERSION__
 const { isEnabled: isPerformanceEnabled } = useFeature('performance_analytics')
+const { isEnabled: isPlatformAdminEnabled } = useFeature('platform_admin')
 
 useDeployNotification()
 
@@ -125,7 +126,7 @@ function onLocaleChange(value: string) {
               <span class="hidden lg:inline">{{ t('agentPerformance.navTitle') }}</span>
               <span class="lg:hidden">{{ t('nav.agentPerformance') }}</span>
             </button>
-            <template v-if="authStore.user?.portal_org_role === 'admin'">
+            <template v-if="authStore.isLoggedIn">
             <button
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
@@ -150,7 +151,7 @@ function onLocaleChange(value: string) {
               <span class="lg:hidden">超管</span>
             </button>
             <button
-              v-if="authStore.user?.portal_org_role === 'admin'"
+              v-if="authStore.isLoggedIn"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
                 route.path.startsWith('/org-settings') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',

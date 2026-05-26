@@ -116,6 +116,7 @@ async def upload_gene_folder(
     files: List[UploadFile] = File(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    overwrite: bool = Query(False, description="是否覆盖已存在的同名基因"),
 ):
     """通过文件夹（多文件 multipart）上传本地 Gene。
 
@@ -166,6 +167,7 @@ async def upload_gene_folder(
         source="manual",
         is_published=True,
         visibility="org_private",
+        overwrite=overwrite,
         manifest={
             "skill": {
                 "name": meta["name"],

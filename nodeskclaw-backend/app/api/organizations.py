@@ -40,8 +40,7 @@ router = APIRouter()
 
 # ── 组织 CRUD（超管） ────────────────────────────────────
 
-@router.get("", response_model=ApiResponse[list[OrgInfo]],
-            dependencies=[Depends(require_feature("platform_admin"))])
+@router.get("", response_model=ApiResponse[list[OrgInfo]])
 async def list_organizations(
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_super_admin_dep),
@@ -51,8 +50,7 @@ async def list_organizations(
     return ApiResponse(data=data)
 
 
-@router.post("", response_model=ApiResponse[OrgInfo],
-             dependencies=[Depends(require_feature("platform_admin"))])
+@router.post("", response_model=ApiResponse[OrgInfo])
 async def create_organization(
     body: OrgCreate,
     db: AsyncSession = Depends(get_db),
@@ -164,8 +162,7 @@ async def switch_organization(
     return ApiResponse(data=data)
 
 
-@router.get("/{org_id}", response_model=ApiResponse[OrgInfo],
-            dependencies=[Depends(require_feature("platform_admin"))])
+@router.get("/{org_id}", response_model=ApiResponse[OrgInfo])
 async def get_organization(
     org_id: str,
     db: AsyncSession = Depends(get_db),
@@ -176,8 +173,7 @@ async def get_organization(
     return ApiResponse(data=OrgInfo.model_validate(org))
 
 
-@router.put("/{org_id}", response_model=ApiResponse[OrgInfo],
-            dependencies=[Depends(require_feature("platform_admin"))])
+@router.put("/{org_id}", response_model=ApiResponse[OrgInfo])
 async def update_organization(
     org_id: str,
     body: OrgUpdate,
@@ -190,8 +186,7 @@ async def update_organization(
     return ApiResponse(data=data)
 
 
-@router.delete("/{org_id}", response_model=ApiResponse,
-               dependencies=[Depends(require_feature("platform_admin"))])
+@router.delete("/{org_id}", response_model=ApiResponse)
 async def delete_organization(
     org_id: str,
     db: AsyncSession = Depends(get_db),

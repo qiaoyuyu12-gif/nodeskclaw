@@ -17,6 +17,8 @@ from app.schemas.auth import (
     EmailLoginRequest,
     LoginResponse,
     RefreshTokenRequest,
+    RegisterRequest,
+    RegisterResponse,
     SmsLoginRequest,
     SmsSendRequest,
     TokenResponse,
@@ -37,6 +39,16 @@ async def email_login(body: EmailLoginRequest, db: AsyncSession = Depends(get_db
     """邮箱密码登录。"""
     result = await auth_service.login_with_email(body.email, body.password, db)
     await hooks.emit("operation_audit", action="auth.login", target_type="user", target_id=result.user.id, actor_id=result.user.id, org_id=result.user.current_org_id, details={"method": "email"})
+    return ApiResponse(data=result)
+
+
+# ── 公共注册 ─────────────────────────────────────────────
+
+@router.post("/register", response_model=ApiResponse[RegisterResponse])
+async def public_register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    """公共注册（无需邀请）。"""
+    result = await auth_service.register_user(body.name, body.email, body.phone, body.password, db)
+    await hooks.emit("operation_audit", action="auth.registered", target_type="user", target_id=result.user.id, actor_id=result.user.id, org_id=result.user.current_org_id, details={"method": "email"})
     return ApiResponse(data=result)
 
 

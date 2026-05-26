@@ -583,7 +583,12 @@ async def create_gene(
 ) -> dict:
     existing = await get_gene_by_slug(db, req.slug)
     if existing:
-        raise ConflictError(f"基因 slug '{req.slug}' 已存在")
+        if req.overwrite:
+            # 覆盖模式：软删除旧基因，创建新基因
+            existing.soft_delete()
+            await db.commit()
+        else:
+            raise ConflictError(f"基因 slug '{req.slug}' 已存在")
 
     _validate_skill_metadata(req.manifest, req.short_description, req.description)
 

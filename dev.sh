@@ -128,6 +128,17 @@ if [ "$MODE" = "ee" ] && [ ! -d "$EE_DIR" ]; then
   exit 1
 fi
 
+# ── EE Admin 前端检测 ────────────────────────────────────
+# 若 ee/nodeskclaw-frontend/ 缺失（Admin 已合并到 portal 的场景），
+# 则跳过独立 Admin 服务的依赖安装与启动；否则保持原有 4518 端口行为。
+RUN_ADMIN=false
+if [ "$MODE" = "ee" ] && [ -d "$ADMIN_DIR" ]; then
+  RUN_ADMIN=true
+fi
+if [ "$MODE" = "ee" ] && [ "$RUN_ADMIN" = false ]; then
+  log "${YELLOW}未检测到 ee/nodeskclaw-frontend/，Admin 后台将由 portal 承载（4517）${RESET}"
+fi
+
 if [ "$IS_MSYS" = true ]; then
   log "${YELLOW}检测到 MSYS/Git Bash 环境（Windows）${RESET}"
   log "${YELLOW}  - 如遇端口检测跳过，属正常行为（lsof 不可用）${RESET}"
@@ -204,7 +215,7 @@ if [ "$FRESH" = true ]; then
   rm -rf "$BACKEND_DIR/.venv"
   rm -rf "$LLM_PROXY_DIR/.venv"
   rm -rf "$PORTAL_DIR/node_modules"
-  [ "$MODE" = "ee" ] && rm -rf "$ADMIN_DIR/node_modules"
+  [ "$RUN_ADMIN" = true ] && rm -rf "$ADMIN_DIR/node_modules"
 fi
 
 if [ ! -d "$BACKEND_DIR/.venv" ]; then
@@ -228,7 +239,7 @@ else
   log "Portal 依赖已就绪，跳过安装"
 fi
 
-if [ "$MODE" = "ee" ]; then
+if [ "$RUN_ADMIN" = true ]; then
   if [ ! -d "$ADMIN_DIR/node_modules" ]; then
     log "安装 Admin 前端依赖 (npm install)..."
     (cd "$ADMIN_DIR" && npm install)
@@ -292,7 +303,7 @@ sleep 1
   2>&1 | prefix_output "$GREEN" "portal " &
 PIDS+=($!)
 
-if [ "$MODE" = "ee" ]; then
+if [ "$RUN_ADMIN" = true ]; then
   (cd "$ADMIN_DIR" && npm run dev) \
     2>&1 | prefix_output "$YELLOW" "admin  " &
   PIDS+=($!)
@@ -309,7 +320,7 @@ echo "${BOLD}========================================${RESET}"
 echo "  ${BLUE}Backend${RESET}  http://localhost:4510"
 echo "  ${CYAN}LLM Prx${RESET}  http://localhost:4511"
 echo "  ${GREEN}Portal${RESET}   http://localhost:4517"
-if [ "$MODE" = "ee" ]; then
+if [ "$RUN_ADMIN" = true ]; then
   echo "  ${YELLOW}Admin${RESET}    http://localhost:4518"
 fi
 echo "${BOLD}========================================${RESET}"

@@ -93,3 +93,20 @@ class LoginResponse(BaseModel):
     user: UserInfo
     needs_org_setup: bool = False
     provider: str | None = None
+
+
+class RegisterRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    email: EmailStr
+    phone: str | None = None
+    password: str = Field(min_length=6, max_length=200)
+
+
+class RegisterResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int = 86400
+    user: UserInfo
+    needs_org_setup: bool = False
+    provider: str | None = None

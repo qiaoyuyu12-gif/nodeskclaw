@@ -90,12 +90,13 @@ export const skillApi = {
    * 每个文件使用 webkitRelativePath 作为 filename（保留目录结构），
    * 后端自动剥离顶层文件夹名并序列化为 manifest JSON。
    */
-  uploadFolder: (files: FileList) => {
+  uploadFolder: (files: FileList, overwrite = false) => {
     const form = new FormData()
     for (const file of Array.from(files)) {
       const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
       form.append('files', file, relPath)
     }
-    return api.post<{ data: Skill }>('/genes/upload-folder', form).then((r) => r.data.data)
+    const url = overwrite ? `/genes/upload-folder?overwrite=true` : '/genes/upload-folder'
+    return api.post<{ data: Skill }>(url, form).then((r) => r.data.data)
   },
 }

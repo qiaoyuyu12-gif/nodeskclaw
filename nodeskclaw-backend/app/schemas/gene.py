@@ -85,6 +85,7 @@ class GeneCreateRequest(BaseModel):
     is_featured: bool = False
     is_published: bool = True
     visibility: str = "public"
+    overwrite: bool = Field(False, description="是否覆盖已存在的同名基因")
 
 
 # ── Genome ───────────────────────────────────────
