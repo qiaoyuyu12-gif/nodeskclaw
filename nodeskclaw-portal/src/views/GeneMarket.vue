@@ -45,11 +45,10 @@ const store = useGeneStore()
 const toast = useToast()
 const { t, locale } = useI18n()
 
-const viewMode = ref<'genes' | 'genomes' | 'templates' | 'evolution' | 'local'>('genes')
+const viewMode = ref<'genes' | 'templates' | 'local'>('genes')
 const keyword = ref('')
-const selectedTag = ref<string | null>(null)
 const selectedCategory = ref<string | null>(null)
-const selectedVisibility = ref<string | null>(null)
+const selectedVisibility = ref<string | null>('org_private')
 const sortBy = ref('popularity')
 const page = ref(1)
 const pageSize = ref(12)
@@ -84,8 +83,33 @@ async function handleLocalFolder() {
     showLocalUpload.value = false
     selectedLocalFiles.value = []
     await loadData()
-  } catch (e: unknown) {
-    localError.value = e instanceof Error ? e.message : '上传失败'
+  } catch (e: any) {
+    // 409 冲突：同名基因已存在，提示用户确认覆盖
+    if (e?.response?.status === 409) {
+      const msg = e?.response?.data?.message || ''
+      if (msg.includes('已存在') || msg.includes('already exists')) {
+        const folderName = input.files[0]?.webkitRelativePath?.split('/')[0] || '该文件夹'
+        const ok = confirm(`${folderName} 基因已存在，是否覆盖原基因？`)
+        if (ok) {
+          // 重新上传，携带覆盖参数
+          try {
+            await skillApi.uploadFolder(input.files, true)
+            localSuccess.value = `基因已覆盖`
+            showLocalUpload.value = false
+            selectedLocalFiles.value = []
+            await loadData()
+          } catch (e2: any) {
+            localError.value = e2?.response?.data?.message || '覆盖失败'
+          }
+        } else {
+          localError.value = '已取消上传'
+        }
+      } else {
+        localError.value = msg || '上传失败'
+      }
+    } else {
+      localError.value = e instanceof Error ? e.message : '上传失败'
+    }
   } finally {
     localUploading.value = false
   }
@@ -233,7 +257,6 @@ function formatDate(s?: string): string {
 
 const featuredItems = computed(() => {
   if (viewMode.value === 'genes') return store.featuredGenes
-  if (viewMode.value === 'genomes') return store.featuredGenomes
   return []
 })
 
@@ -241,7 +264,6 @@ const hasFeatured = computed(() => featuredItems.value.length > 0 && selectedVis
 
 const totalCount = computed(() => {
   if (viewMode.value === 'genes') return store.totalGenes
-  if (viewMode.value === 'genomes') return store.totalGenomes
   if (viewMode.value === 'templates') return store.totalTemplates
   return 0
 })
@@ -254,16 +276,9 @@ async function loadData() {
   if (viewMode.value === 'genes') {
     await store.fetchGenes({
       keyword: keyword.value || undefined,
-      tag: selectedTag.value || undefined,
       category: selectedCategory.value || undefined,
       visibility: selectedVisibility.value || undefined,
       sort: sortBy.value,
-      page: page.value,
-      page_size: pageSize.value,
-    })
-  } else if (viewMode.value === 'genomes') {
-    await store.fetchGenomes({
-      keyword: keyword.value || undefined,
       page: page.value,
       page_size: pageSize.value,
     })
@@ -280,8 +295,6 @@ async function loadData() {
 async function loadFeatured() {
   if (viewMode.value === 'genes') {
     await store.fetchFeaturedGenes()
-  } else if (viewMode.value === 'genomes') {
-    await store.fetchFeaturedGenomes()
   }
 }
 
@@ -345,17 +358,6 @@ function hasNativeTools(gene: GeneItem): boolean {
         <button
           :class="[
             'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-            viewMode === 'genomes'
-              ? 'bg-primary/10 text-primary'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-          ]"
-          @click="viewMode = 'genomes'"
-        >
-          {{ t('geneMarket.tabGenomes') }}
-        </button>
-        <button
-          :class="[
-            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
             viewMode === 'templates'
               ? 'bg-primary/10 text-primary'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted',
@@ -363,17 +365,6 @@ function hasNativeTools(gene: GeneItem): boolean {
           @click="viewMode = 'templates'"
         >
           {{ t('geneMarket.tabTemplates') }}
-        </button>
-        <button
-          :class="[
-            'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-            viewMode === 'evolution'
-              ? 'bg-primary/10 text-primary'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted',
-          ]"
-          @click="viewMode = 'evolution'"
-        >
-          {{ t('geneMarket.tabEvolution') }}
         </button>
         <button
           :class="[
@@ -388,172 +379,15 @@ function hasNativeTools(gene: GeneItem): boolean {
         </button>
       </div>
 
-      <!-- 进化趋势 Tab -->
-      <template v-if="viewMode === 'evolution'">
-        <div v-if="evoLoading" class="flex items-center justify-center py-24">
-          <Loader2 class="w-8 h-8 animate-spin text-muted-foreground" />
-        </div>
-        <template v-else>
-          <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-            <div class="rounded-xl border border-border bg-card p-4">
-              <div class="flex items-center gap-2 text-muted-foreground mb-1">
-                <Dna class="w-4 h-4" />
-                <span class="text-sm">{{ t('geneMarket.evoTotalGenes') }}</span>
-              </div>
-              <div class="text-2xl font-bold">{{ evoStats?.total_genes ?? 0 }}</div>
-            </div>
-            <div class="rounded-xl border border-border bg-card p-4">
-              <div class="flex items-center gap-2 text-muted-foreground mb-1">
-                <Download class="w-4 h-4" />
-                <span class="text-sm">{{ t('geneMarket.evoTotalInstalls') }}</span>
-              </div>
-              <div class="text-2xl font-bold">{{ evoStats?.total_installs ?? 0 }}</div>
-            </div>
-            <div class="rounded-xl border border-border bg-card p-4">
-              <div class="flex items-center gap-2 text-muted-foreground mb-1">
-                <TrendingUp class="w-4 h-4" />
-                <span class="text-sm">{{ t('geneMarket.evoLearning') }}</span>
-              </div>
-              <div class="text-2xl font-bold">{{ evoStats?.learning_count ?? 0 }}</div>
-            </div>
-            <div class="rounded-xl border border-border bg-card p-4">
-              <div class="flex items-center gap-2 text-muted-foreground mb-1">
-                <AlertCircle class="w-4 h-4" />
-                <span class="text-sm">{{ t('geneMarket.evoFailed') }}</span>
-              </div>
-              <div class="text-2xl font-bold">{{ evoStats?.failed_count ?? 0 }}</div>
-            </div>
-            <div class="rounded-xl border border-border bg-card p-4">
-              <div class="flex items-center gap-2 text-muted-foreground mb-1">
-                <Sparkles class="w-4 h-4" />
-                <span class="text-sm">{{ t('geneMarket.evoAgentCreated') }}</span>
-              </div>
-              <div class="text-2xl font-bold">{{ evoStats?.agent_created_count ?? 0 }}</div>
-            </div>
-          </div>
-
-          <div class="grid md:grid-cols-2 gap-6 mb-8">
-            <div class="rounded-xl border border-border bg-card overflow-hidden">
-              <div class="px-4 py-3 border-b border-border">
-                <h2 class="font-semibold">{{ t('geneMarket.evoHotGenes') }}</h2>
-              </div>
-              <div class="divide-y divide-border max-h-[320px] overflow-y-auto">
-                <div
-                  v-for="(g, i) in evoHotGenes"
-                  :key="g.id"
-                  class="px-4 py-3 flex items-center justify-between gap-4 cursor-pointer hover:bg-muted/50 transition-colors"
-                  @click="goToGene(g.slug)"
-                >
-                  <span class="text-muted-foreground w-6">{{ i + 1 }}</span>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2">
-                      <span class="font-medium truncate">{{ g.name }}</span>
-                      <span
-                        v-if="hasNativeTools(g)"
-                        class="shrink-0 bg-cyan-500/10 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded"
-                      >
-                        {{ t('geneMarket.hasNativeTools') }}
-                      </span>
-                    </div>
-                    <div class="text-xs text-muted-foreground">{{ g.slug }}</div>
-                  </div>
-                  <div class="shrink-0">
-                    <div class="text-sm font-medium">{{ Math.round((g.effectiveness_score ?? 0) * 100) }}%</div>
-                    <div class="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
-                      <div
-                        class="h-full rounded-full bg-primary"
-                        :style="{ width: `${Math.min(100, (g.effectiveness_score ?? 0) * 100)}%` }"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div v-if="evoHotGenes.length === 0" class="px-4 py-8 text-center text-muted-foreground text-sm">
-                  {{ t('geneMarket.evoNoData') }}
-                </div>
-              </div>
-            </div>
-
-            <div class="rounded-xl border border-border bg-card overflow-hidden">
-              <div class="px-4 py-3 border-b border-border flex items-center gap-2">
-                <Activity class="w-4 h-4" />
-                <h2 class="font-semibold">{{ t('geneMarket.evoActivity') }}</h2>
-              </div>
-              <div class="divide-y divide-border max-h-[320px] overflow-y-auto">
-                <div v-if="evoActivityLoading" class="px-4 py-8 flex justify-center">
-                  <Loader2 class="w-6 h-6 animate-spin text-muted-foreground" />
-                </div>
-                <div
-                  v-else
-                  v-for="a in evoActivity"
-                  :key="a.id"
-                  class="px-4 py-2.5 text-sm"
-                >
-                  <span class="font-medium">{{ a.gene_name }}</span>
-                  <span class="text-muted-foreground mx-1">{{ formatMetricType(a.metric_type) }}</span>
-                  <span class="text-muted-foreground">{{ formatDate(a.created_at) }}</span>
-                </div>
-                <div v-if="!evoActivityLoading && evoActivity.length === 0" class="px-4 py-8 text-center text-muted-foreground text-sm">
-                  {{ t('geneMarket.evoNoActivity') }}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="rounded-xl border border-border bg-card overflow-hidden">
-            <div class="px-4 py-3 border-b border-border">
-              <h2 class="font-semibold">{{ t('geneMarket.evoPendingReview') }}</h2>
-            </div>
-            <div v-if="evoPendingLoading" class="px-4 py-8 flex justify-center">
-              <Loader2 class="w-6 h-6 animate-spin text-muted-foreground" />
-            </div>
-            <div v-else-if="evoPending.length === 0" class="px-4 py-8 text-center text-muted-foreground text-sm">
-              {{ t('geneMarket.evoNoPending') }}
-            </div>
-            <div v-else class="divide-y divide-border">
-              <div
-                v-for="g in evoPending"
-                :key="g.id"
-                class="px-4 py-3 flex items-center justify-between gap-4"
-              >
-                <div class="min-w-0 flex-1">
-                  <div class="font-medium">{{ g.name }}</div>
-                  <div class="text-sm text-muted-foreground">{{ g.slug }} · {{ g.review_status }}</div>
-                </div>
-                <div class="flex items-center gap-2 shrink-0">
-                  <button
-                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-green-500/10 text-green-600 hover:bg-green-500/20 disabled:opacity-50"
-                    :disabled="evoReviewingId === g.id"
-                    @click="handleReview(g.id, 'approve')"
-                  >
-                    <Loader2 v-if="evoReviewingId === g.id" class="w-4 h-4 animate-spin" />
-                    <Check v-else class="w-4 h-4" />
-                    {{ t('geneMarket.approve') }}
-                  </button>
-                  <button
-                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-red-500/10 text-red-600 hover:bg-red-500/20 disabled:opacity-50"
-                    :disabled="evoReviewingId === g.id"
-                    @click="handleReview(g.id, 'reject')"
-                  >
-                    <X class="w-4 h-4" />
-                    {{ t('geneMarket.reject') }}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </template>
-      </template>
-
-      <!-- 基因/基因组/模板 Tab -->
+      <!-- 基因/模板/本地上传 Tab -->
       <template v-else>
 
         <!-- Visibility filter -->
         <div v-if="viewMode === 'genes' || viewMode === 'templates'" class="flex gap-2 mb-4">
           <button
             v-for="vis in [
-              { value: null, key: 'geneMarket.visAll' },
-              { value: 'public', key: 'geneMarket.visPublic' },
               { value: 'org_private', key: 'geneMarket.visOrg' },
+              { value: 'public', key: 'geneMarket.visPublic' },
             ]"
             :key="String(vis.value)"
             :class="[
@@ -578,22 +412,6 @@ function hasNativeTools(gene: GeneItem): boolean {
               :placeholder="t('geneMarket.searchPlaceholder')"
               class="w-full pl-10 pr-4 py-2 rounded-lg border border-border bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
-          </div>
-
-          <div v-if="viewMode === 'genes'" class="flex flex-wrap gap-2">
-            <button
-              v-for="t in store.tagStats"
-              :key="t.tag"
-              :class="[
-                'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
-                selectedTag === t.tag
-                  ? 'bg-primary/10 text-primary'
-                  : 'bg-muted/50 text-muted-foreground hover:text-foreground hover:bg-muted',
-              ]"
-              @click="selectedTag = selectedTag === t.tag ? null : t.tag"
-            >
-              {{ localizeGeneMeta(t.tag) }}
-            </button>
           </div>
 
           <CustomSelect
@@ -678,49 +496,6 @@ function hasNativeTools(gene: GeneItem): boolean {
                     </div>
                   </div>
                   <span class="shrink-0">{{ t('geneMarket.learnCount', { count: gene.install_count ?? 0 }) }}</span>
-                </div>
-              </div>
-              </template>
-              <template v-else-if="viewMode === 'genomes'">
-              <div
-                v-for="genome in store.genomes"
-                :key="genome.id"
-                class="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition cursor-pointer"
-                @click="goToGenome(genome.id)"
-              >
-                <div class="flex items-start gap-3 mb-2">
-                  <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                    <component :is="resolveIcon(genome.icon)" class="w-5 h-5 text-primary" />
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2 flex-wrap">
-                      <span class="font-medium truncate">{{ genome.name }}</span>
-                      <span
-                        v-if="genome.native_tool_count"
-                        class="shrink-0 inline-flex items-center gap-1 bg-cyan-500/10 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded"
-                      >
-                        <Wrench class="w-3 h-3" />
-                        {{ t('genome.nativeToolCount', { count: genome.native_tool_count }) }}
-                      </span>
-                      <span
-                        v-if="genome.mcp_server_count"
-                        class="shrink-0 inline-flex items-center gap-1 bg-violet-500/10 text-violet-400 text-[10px] px-1.5 py-0.5 rounded"
-                      >
-                        <Server class="w-3 h-3" />
-                        {{ t('genome.mcpServerCount', { count: genome.mcp_server_count }) }}
-                      </span>
-                    </div>
-                    <p class="text-xs text-muted-foreground line-clamp-2 mt-1">
-                      {{ genome.short_description ?? genome.description ?? '' }}
-                    </p>
-                  </div>
-                </div>
-                <div class="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
-                  <span class="flex items-center gap-0.5">
-                    <Star class="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                    {{ (genome.avg_rating ?? 0).toFixed(1) }}
-                  </span>
-                  <span class="shrink-0">{{ t('geneMarket.learnCount', { count: genome.install_count ?? 0 }) }}</span>
                 </div>
               </div>
               </template>
