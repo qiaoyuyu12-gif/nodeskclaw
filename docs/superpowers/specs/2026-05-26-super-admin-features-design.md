@@ -183,6 +183,54 @@ async def is_enabled(feature_id: str, org_id: str | None = None) -> bool:
 
 全部以 `/admin` 为前缀，全部受双守卫，全部落审计。
 
+### 5.0 响应契约（统一遵循项目现有约定）
+
+**分页响应（所有列表端点必须）**：复用 `app/schemas/common.py::PaginatedResponse`：
+
+```json
+{
+  "code": 0,
+  "error_code": null,
+  "message_key": null,
+  "message": "success",
+  "data": [...],
+  "pagination": { "page": 1, "page_size": 20, "total": 123 }
+}
+```
+
+不允许自定义 `items / size / nextCursor` 等字段名。
+
+**单体响应**：复用 `ApiResponse[T]`，data 为对象。
+
+**错误响应**：复用全站约定 `HTTPException(detail={error_code, message_key, message})`：
+
+```json
+{
+  "detail": {
+    "error_code": 40901,
+    "message_key": "errors.admin.last_super_admin_forbidden",
+    "message": "Cannot remove the last super admin"
+  }
+}
+```
+
+字段约束：
+- `error_code` 为 **int**（与全站一致；不引入字符串型 code，避免双标）
+- `message_key` 命名规范：`errors.<domain>.<reason>`，前端 i18n 缺失时回退 `message`
+- 语义化由 `message_key` 表达；前端按 `message_key` 走分支判断而非 `error_code` 数值
+
+**本期 error_code 分配区段**（避免与现网冲突）：
+
+| 区段 | 含义 |
+|---|---|
+| 40901–40919 | 自我保护类（停用自己、撤销自己超管、删除自己、删除最后超管） |
+| 40920–40939 | 组织管理类（slug 冲突、有运行实例、组织最后 admin） |
+| 40940–40959 | 用户管理类（用户不存在、邮箱冲突、user 已被删除） |
+| 40960–40979 | Feature override 类（feature_id 不在 yaml、override 不存在） |
+| 40980–40999 | 审计类（非法 action value、时间范围非法） |
+
+新增错误码必须在 PR 描述中列出，并同步 zh-CN + en i18n。
+
 ### 5.1 组织成员（追加到 organizations.py）
 
 操作对象：`OrgMembership` 表（已存在）。role 取值来自现有 `OrgRole` 枚举：`admin` / `operator` / `member`。
@@ -215,6 +263,34 @@ GET    /admin/orgs/:id/features             # 某组织所有 feature 的 effect
 PUT    /admin/orgs/:id/features/:feature_id body: {enabled, reason?}
 DELETE /admin/orgs/:id/features/:feature_id
 ```
+
+**`/admin/orgs/:id/features` 单条返回结构**（前端不再猜来源）：
+
+```json
+{
+  "feature_id": "knowledge_base",
+  "enabled": true,
+  "source": "override",          // "default" | "override"
+  "default_enabled": false,      // edition_features 中的默认值
+  "reason": "试点用户提前启用",   // 仅 source=override 时有
+  "set_by_user_id": "...",
+  "set_at": "2026-05-26T08:00:00Z"
+}
+```
+
+`GET /admin/features` 列表项：
+
+```json
+{
+  "feature_id": "knowledge_base",
+  "name": "Knowledge Base",
+  "description": "...",
+  "default_enabled": false,
+  "override_count": 3            // 该 feature 上有 override 的组织数
+}
+```
+
+前端只看 `source` 字段判断状态，不依据"是否存在 override 行"做隐式推断。
 
 ### 5.4 审计（audit.py）
 
