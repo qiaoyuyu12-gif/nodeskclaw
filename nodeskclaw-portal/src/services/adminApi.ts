@@ -3,6 +3,81 @@
 import api from '@/services/api'
 import type { AxiosInstance } from 'axios'
 
+// ── 分页元数据 ─────────────────────────────────────────
+
+interface AdminPagination {
+  total: number
+  page: number
+  page_size: number
+}
+
+// ── 用户管理类型 ───────────────────────────────────────
+
+export interface AdminUser {
+  id: string
+  email: string
+  name: string
+  is_active: boolean
+  is_super_admin: boolean
+  must_change_password: boolean
+  created_at: string
+  org_count: number
+}
+
+export interface AdminUserPatch {
+  is_active?: boolean
+  is_super_admin?: boolean
+}
+
+// ── 组织成员类型 ───────────────────────────────────────
+
+export type OrgMemberRole = 'admin' | 'operator' | 'member'
+
+export interface AdminOrgMember {
+  user_id: string
+  role: OrgMemberRole
+  joined_at: string
+  user_email: string
+  user_name: string
+}
+
+// ── Feature 类型 ───────────────────────────────────────
+
+export type FeatureSource = 'default' | 'override'
+
+export interface AdminFeatureItem {
+  feature_id: string
+  name: string
+  description: string
+  default_enabled: boolean
+  override_count: number
+}
+
+export interface AdminOrgFeatureState {
+  feature_id: string
+  enabled: boolean
+  source: FeatureSource
+  default_enabled: boolean
+  reason?: string
+  set_by_user_id?: string
+  set_at?: string
+}
+
+// ── 审计日志类型 ───────────────────────────────────────
+
+export interface AdminAuditRow {
+  id: string
+  action: string
+  actor_id: string
+  actor_name: string
+  actor_type: string
+  target_type: string
+  target_id: string
+  org_id: string
+  details: Record<string, unknown>
+  created_at: string
+}
+
 export interface AdminOrg {
   id: string
   name: string
@@ -125,12 +200,147 @@ export function useAdminApi(http?: AxiosInstance) {
     await client.delete(`/admin/orgs/${id}`)
   }
 
+  // ── 用户管理 ──────────────────────────────────────────
+
+  async function fetchUsers(params: {
+    q?: string
+    page?: number
+    pageSize?: number
+  }): Promise<{ data: AdminUser[]; pagination: AdminPagination }> {
+    const res = await client.get('/admin/users', { params })
+    return res.data
+  }
+
+  async function fetchUser(id: string): Promise<AdminUser> {
+    const res = await client.get(`/admin/users/${id}`)
+    return res.data.data
+  }
+
+  async function updateUser(id: string, patch: AdminUserPatch): Promise<AdminUser> {
+    const res = await client.patch(`/admin/users/${id}`, patch)
+    return res.data.data
+  }
+
+  async function resetUserPassword(id: string): Promise<{ temp_password: string }> {
+    const res = await client.post(`/admin/users/${id}/reset-password`)
+    return res.data.data
+  }
+
+  async function deleteUser(id: string): Promise<void> {
+    await client.delete(`/admin/users/${id}`)
+  }
+
+  // ── 组织成员管理 ───────────────────────────────────────
+
+  async function fetchOrgMembers(orgId: string): Promise<AdminOrgMember[]> {
+    const res = await client.get(`/admin/orgs/${orgId}/members`)
+    return res.data.data ?? []
+  }
+
+  async function addOrgMember(
+    orgId: string,
+    userId: string,
+    role: OrgMemberRole,
+  ): Promise<AdminOrgMember> {
+    const res = await client.post(`/admin/orgs/${orgId}/members`, { user_id: userId, role })
+    return res.data.data
+  }
+
+  async function updateOrgMember(
+    orgId: string,
+    userId: string,
+    role: OrgMemberRole,
+  ): Promise<AdminOrgMember> {
+    const res = await client.patch(`/admin/orgs/${orgId}/members/${userId}`, { role })
+    return res.data.data
+  }
+
+  async function removeOrgMember(orgId: string, userId: string): Promise<void> {
+    await client.delete(`/admin/orgs/${orgId}/members/${userId}`)
+  }
+
+  // ── Feature 管理 ───────────────────────────────────────
+
+  async function fetchFeatures(): Promise<AdminFeatureItem[]> {
+    const res = await client.get('/admin/features')
+    return res.data.data ?? []
+  }
+
+  async function fetchFeatureOverrides(
+    featureId: string,
+    page = 1,
+    pageSize = 20,
+  ): Promise<{ data: AdminOrgFeatureState[]; pagination: AdminPagination }> {
+    const res = await client.get(`/admin/features/${featureId}/overrides`, {
+      params: { page, page_size: pageSize },
+    })
+    return res.data
+  }
+
+  async function fetchOrgFeatures(orgId: string): Promise<AdminOrgFeatureState[]> {
+    const res = await client.get(`/admin/orgs/${orgId}/features`)
+    return res.data.data ?? []
+  }
+
+  async function setOrgFeature(
+    orgId: string,
+    featureId: string,
+    enabled: boolean,
+    reason?: string,
+  ): Promise<AdminOrgFeatureState> {
+    const res = await client.put(`/admin/orgs/${orgId}/features/${featureId}`, {
+      enabled,
+      reason,
+    })
+    return res.data.data
+  }
+
+  async function clearOrgFeature(orgId: string, featureId: string): Promise<AdminOrgFeatureState> {
+    const res = await client.delete(`/admin/orgs/${orgId}/features/${featureId}`)
+    return res.data.data
+  }
+
+  // ── 审计日志 ───────────────────────────────────────────
+
+  async function fetchAuditActions(): Promise<string[]> {
+    const res = await client.get('/admin/audit/actions')
+    return res.data.data ?? []
+  }
+
+  async function fetchAuditLogs(params: {
+    actor?: string
+    action?: string
+    from?: string
+    to?: string
+    page?: number
+    pageSize?: number
+  }): Promise<{ data: AdminAuditRow[]; pagination: AdminPagination }> {
+    const res = await client.get('/admin/audit/logs', { params })
+    return res.data
+  }
+
   return {
     fetchOrgs,
     fetchOrg,
     createOrg,
     updateOrg,
     deleteOrg,
+    fetchUsers,
+    fetchUser,
+    updateUser,
+    resetUserPassword,
+    deleteUser,
+    fetchOrgMembers,
+    addOrgMember,
+    updateOrgMember,
+    removeOrgMember,
+    fetchFeatures,
+    fetchFeatureOverrides,
+    fetchOrgFeatures,
+    setOrgFeature,
+    clearOrgFeature,
+    fetchAuditActions,
+    fetchAuditLogs,
   }
 }
 
