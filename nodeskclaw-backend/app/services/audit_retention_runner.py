@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +30,8 @@ async def purge_expired_audit_logs(
     batch_limit: int = 100_000,
 ) -> int:
     """单次清理超期审计日志；返回删除行数。分批删除避免长时间锁表。"""
-    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    # 使用时区感知 UTC 时间，与数据库 TIMESTAMPTZ 列比较时无时区偏差
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=retention_days)
     total_deleted = 0
     while True:
         # 先 SELECT 出待删 id，再 DELETE IN (ids)，兼容不支持 LIMIT 的 DELETE 语法

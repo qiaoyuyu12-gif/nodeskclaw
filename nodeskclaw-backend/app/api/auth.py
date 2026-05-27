@@ -9,6 +9,7 @@ from app.core import hooks
 from app.core.deps import get_db, require_feature, require_super_admin_dep
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.security import get_current_user, get_current_user_unchecked
+from app.models.admin_action import AdminAction  # CE 层 enum，供 _write_auth_audit 使用
 from app.models.admin_membership import AdminMembership
 from app.models.user import User
 from app.schemas.auth import (
@@ -35,7 +36,7 @@ router = APIRouter()
 async def _write_auth_audit(
     db: AsyncSession,
     *,
-    action: str,
+    action: AdminAction,  # 调用方必须传 AdminAction enum 实例，禁止裸字符串
     actor_id: str | None,
     actor_email: str | None,
     details: dict | None = None,
@@ -48,12 +49,11 @@ async def _write_auth_audit(
     """
     try:
         # 延迟 import 防 CE 模式 ImportError
-        from app.models.admin_action import AdminAction
         from app.models.user import User as _User
         from ee.backend.services.admin import audit_service
         from sqlalchemy import select as _select
 
-        action_enum = AdminAction(action)
+        # action 已是 AdminAction enum 实例，无需再做 AdminAction(action) 转换
         actor_obj: _User | None = None
         if actor_id:
             # 用 session 内的 User 对象给 with_audit
@@ -65,7 +65,7 @@ async def _write_auth_audit(
             # 如果 user 已删除/找不到，actor_obj 为 None，with_audit 会写 anonymous
         async with audit_service.with_audit(
             db,
-            action=action_enum,
+            action=action,
             actor=actor_obj,
             target_type="auth",
             target_id=actor_id or actor_email or "anonymous",
@@ -94,7 +94,7 @@ async def email_login(body: EmailLoginRequest, db: AsyncSession = Depends(get_db
         # 登录失败：写审计后重新抛出，密码绝不入 details
         await _write_auth_audit(
             db,
-            action="auth.login_failed",
+            action=AdminAction.AUTH_LOGIN_FAILED,
             actor_id=None,
             actor_email=None,
             details={"attempted_email": body.email, "reason": "invalid_credentials"},
@@ -102,7 +102,7 @@ async def email_login(body: EmailLoginRequest, db: AsyncSession = Depends(get_db
         raise exc
     await _write_auth_audit(
         db,
-        action="auth.login_success",
+        action=AdminAction.AUTH_LOGIN_SUCCESS,
         actor_id=result.user.id,
         actor_email=result.user.email,
         details={"method": "email"},
@@ -198,7 +198,7 @@ async def logout(
     """登出（客户端清除 Token 即可，服务端写审计）。"""
     await _write_auth_audit(
         db,
-        action="auth.logout",
+        action=AdminAction.AUTH_LOGOUT,
         actor_id=current_user.id,
         actor_email=current_user.email,
         details={},
