@@ -25,6 +25,7 @@ def _register_ee_admin_routes():
         try:
             from ee.backend.api.admin.organizations import router as ee_org_router
             from ee.backend.api.admin.plans import router as ee_plans_router
+            from ee.backend.api.admin.users import router as ee_users_router
 
             ee_admin_router.include_router(
                 ee_org_router,
@@ -35,6 +36,12 @@ def _register_ee_admin_routes():
                 ee_plans_router,
                 prefix="/plans",
                 tags=["EE - 超管套餐管理"],
+            )
+            # 全局用户管理（T13）
+            ee_admin_router.include_router(
+                ee_users_router,
+                prefix="/users",
+                tags=["EE - 超管用户管理"],
             )
             logger.info("EE 超管路由已注册到 ee_admin_router")
         except ImportError as e:
