@@ -38,6 +38,9 @@ TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/n
 _TRUNCATE_TABLES = [
     "organization_feature_overrides",
     "operation_audit_logs",
+    "admin_memberships",
+    "user_llm_keys",
+    "user_llm_configs",
     "org_memberships",
     "instances",
     "clusters",
@@ -203,6 +206,23 @@ async def sample_user(db_session: AsyncSession) -> User:
         password_hash="not-a-real-hash",
         is_active=True,
         is_super_admin=False,
+    )
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def another_super_admin_user(db_session: AsyncSession) -> User:
+    """落库第二个超管用户，用于"最后超管"守卫测试。"""
+    user = User(
+        id=str(uuid.uuid4()),
+        name="Another Super Admin",
+        email=f"superadmin2-{uuid.uuid4().hex[:8]}@example.com",
+        password_hash="not-a-real-hash",
+        is_active=True,
+        is_super_admin=True,
     )
     db_session.add(user)
     await db_session.commit()
