@@ -342,7 +342,7 @@ async def accept_invitation(
 ) -> dict:
     """Accept an invitation: create user if needed, add to org, return JWT."""
     from app.core.security import create_access_token, create_refresh_token
-    from app.services.auth_service import _hash_password
+    from app.services.auth_service import hash_password
 
     result = await db.execute(
         select(Invitation).where(
@@ -388,7 +388,7 @@ async def accept_invitation(
         user = User(
             name=name,
             email=invitation.email,
-            password_hash=_hash_password(password),
+            password_hash=hash_password(password),
             current_org_id=invitation.org_id,
         )
         db.add(user)

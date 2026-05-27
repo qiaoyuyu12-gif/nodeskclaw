@@ -90,7 +90,7 @@ async def _seed_initial_admin(
     from app.models.org_membership import OrgMembership, OrgRole
     from app.models.organization import Organization
     from app.models.user import User, UserRole
-    from app.services.auth_service import _hash_password
+    from app.services.auth_service import hash_password
 
     async with session_factory() as db:
         result = await db.execute(
@@ -114,7 +114,7 @@ async def _seed_initial_admin(
                 is_super_admin=True,
                 is_active=True,
                 must_change_password=True,
-                password_hash=_hash_password(plain_password),
+                password_hash=hash_password(plain_password),
             )
             db.add(admin)
             await db.flush()
@@ -134,14 +134,14 @@ async def _seed_initial_admin(
 
         elif settings.RESET_ADMIN_PASSWORD:
             plain_password = secrets.token_urlsafe(9)
-            admin.password_hash = _hash_password(plain_password)
+            admin.password_hash = hash_password(plain_password)
             admin.must_change_password = True
             await db.commit()
             logger.info("种子数据：已重置超管 [%s] 密码（RESET_ADMIN_PASSWORD=True）", account)
 
         elif admin.must_change_password:
             plain_password = secrets.token_urlsafe(9)
-            admin.password_hash = _hash_password(plain_password)
+            admin.password_hash = hash_password(plain_password)
             await db.commit()
             logger.info("种子数据：超管 [%s] 尚未改密，已重新生成随机密码", account)
 
@@ -266,7 +266,7 @@ async def _seed_ee_platform_admin(
     from app.models.org_membership import OrgMembership, OrgRole
     from app.models.organization import Organization
     from app.models.user import User, UserRole
-    from app.services.auth_service import _hash_password
+    from app.services.auth_service import hash_password
 
     async with session_factory() as db:
         result = await db.execute(
@@ -286,7 +286,7 @@ async def _seed_ee_platform_admin(
                 is_super_admin=True,
                 is_active=True,
                 must_change_password=True,
-                password_hash=_hash_password(plain_password),
+                password_hash=hash_password(plain_password),
             )
             db.add(admin)
             await db.flush()
@@ -309,7 +309,7 @@ async def _seed_ee_platform_admin(
 
         elif settings.RESET_EE_ADMIN_PASSWORD:
             plain_password = secrets.token_urlsafe(9)
-            admin.password_hash = _hash_password(plain_password)
+            admin.password_hash = hash_password(plain_password)
             admin.must_change_password = True
             await db.commit()
             logger.info(
@@ -319,7 +319,7 @@ async def _seed_ee_platform_admin(
 
         elif admin.must_change_password:
             plain_password = secrets.token_urlsafe(9)
-            admin.password_hash = _hash_password(plain_password)
+            admin.password_hash = hash_password(plain_password)
             await db.commit()
             logger.info(
                 "\u79cd\u5b50\u6570\u636e\uff1aEE \u5e73\u53f0\u7ba1\u7406\u5458 [%s] \u5c1a\u672a\u6539\u5bc6\uff0c\u5df2\u91cd\u65b0\u751f\u6210\u968f\u673a\u5bc6\u7801",
