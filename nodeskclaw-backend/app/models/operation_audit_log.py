@@ -19,7 +19,7 @@ class OperationAuditLog(Base):
     workspace_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     action: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     target_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    target_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(128), nullable=False)  # 支持复合 ID，如 {org_id}:{feature_id}
     actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
     actor_id: Mapped[str] = mapped_column(String(36), nullable=False)
     actor_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
