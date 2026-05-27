@@ -109,10 +109,32 @@ async def list_all_orgs(
     )
     orgs = result.scalars().all()
 
+    # 单次 GROUP BY 查询所有 org 的实例统计，消除 N+1
+    stats_rows = (await db.execute(
+        select(
+            Instance.org_id,
+            func.count(Instance.id).label("instance_count"),
+            func.coalesce(func.sum(Instance.cpu_limit), 0).label("total_cpu"),
+            func.coalesce(func.sum(Instance.mem_limit), 0).label("total_mem"),
+            func.coalesce(func.sum(Instance.storage_size), 0).label("storage_used"),
+        )
+        .where(
+            Instance.deleted_at.is_(None),
+            Instance.status.in_([InstanceStatus.running, InstanceStatus.deploying]),
+            Instance.org_id.in_([o.id for o in orgs]),
+        )
+        .group_by(Instance.org_id)
+    )).all()
+    stats_by_org = {r.org_id: r for r in stats_rows}
+
     infos: list[AdminOrgInfo] = []
     for org in orgs:
         info = AdminOrgInfo.model_validate(org)
-        await _enrich_org_stats(db, info, org.id)
+        stat = stats_by_org.get(org.id)
+        info.instance_count = stat.instance_count if stat else 0
+        info.total_cpu = f"{stat.total_cpu}" if stat else "0"
+        info.total_mem = f"{stat.total_mem}Gi" if stat else "0"
+        info.storage_used = f"{stat.storage_used}Gi" if stat else "0"
         infos.append(info)
 
     return ApiResponse[list[AdminOrgInfo]](data=infos)

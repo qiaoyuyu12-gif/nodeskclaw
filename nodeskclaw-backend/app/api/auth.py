@@ -281,6 +281,14 @@ async def update_staff(
     if user.id == current_user.id and is_super_admin is False:
         raise BadRequestError("不能取消自己的超管权限", "errors.auth.cannot_revoke_self_admin")
 
+    # 最后超管守卫：EE 模式下防止撤销最后一个超管（CE 模式下跳过）
+    if is_super_admin is False and user.is_super_admin:
+        try:
+            from ee.backend.services.admin.user_admin_service import ensure_not_last_super_admin
+            await ensure_not_last_super_admin(db, user.id)
+        except ImportError:
+            pass
+
     if is_super_admin is not None:
         user.is_super_admin = is_super_admin
         if is_super_admin:

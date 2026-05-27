@@ -75,12 +75,42 @@ async def resolve_org_feature(
 async def list_org_features(db: AsyncSession, *, org_id: str) -> list[dict[str, Any]]:
     """该组织所有 feature 的 effective 状态（前端 AdminOrgDetail Features tab 使用）。
 
-    按 feature_id 排序，逐一调用 resolve_org_feature 合并 override 与默认值。
+    一次性查询该 org 所有 override，再在内存中与默认值 merge，消除 N+1。
     """
-    return [
-        await resolve_org_feature(db, org_id=org_id, feature_id=fid)
-        for fid in sorted(_all_feature_ids())
-    ]
+    # 单次查询该 org 所有未软删 override，按 feature_id 建立字典
+    overrides = {
+        row.feature_id: row
+        for row in (
+            await db.execute(
+                select(OrganizationFeatureOverride).where(
+                    OrganizationFeatureOverride.org_id == org_id,
+                    OrganizationFeatureOverride.deleted_at.is_(None),
+                )
+            )
+        ).scalars().all()
+    }
+    out: list[dict[str, Any]] = []
+    for fid in sorted(_all_feature_ids()):
+        default = _default_enabled(fid)
+        row = overrides.get(fid)
+        if row is None:
+            out.append({
+                "feature_id": fid,
+                "enabled": default,
+                "source": "default",
+                "default_enabled": default,
+            })
+        else:
+            out.append({
+                "feature_id": fid,
+                "enabled": row.enabled,
+                "source": "override",
+                "default_enabled": default,
+                "reason": row.reason,
+                "set_by_user_id": row.set_by_user_id,
+                "set_at": row.updated_at.isoformat() if row.updated_at else None,
+            })
+    return out
 
 
 async def list_features_with_override_count(db: AsyncSession) -> list[dict[str, Any]]:

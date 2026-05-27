@@ -32,7 +32,7 @@ async def update_user(
     _enforce_self_protection(admin, user, patch)
     # 仅当要撤销超管权限时才检查最后超管守卫
     if patch.get("is_super_admin") is False and user.is_super_admin:
-        await _ensure_not_last_super_admin(db, user.id)
+        await ensure_not_last_super_admin(db, user.id)
 
     before = {k: getattr(user, k) for k in patch.keys()}
     async with audit_service.with_audit(
@@ -84,7 +84,7 @@ async def delete_user(
             message="Cannot delete yourself",
         )
     if user.is_super_admin:
-        await _ensure_not_last_super_admin(db, user.id)
+        await ensure_not_last_super_admin(db, user.id)
 
     now = datetime.utcnow()
     async with audit_service.with_audit(
@@ -132,7 +132,7 @@ def _enforce_self_protection(admin: User, target: User, patch: dict[str, Any]) -
         )
 
 
-async def _ensure_not_last_super_admin(db: AsyncSession, exclude_user_id: str) -> None:
+async def ensure_not_last_super_admin(db: AsyncSession, exclude_user_id: str) -> None:
     """确保撤销后还有至少 1 个超管存在，否则抛错。"""
     count = (
         await db.execute(

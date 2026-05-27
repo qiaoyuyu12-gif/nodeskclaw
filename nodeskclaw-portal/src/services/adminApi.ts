@@ -217,7 +217,7 @@ export function useAdminApi(http?: AxiosInstance) {
   }
 
   async function updateUser(id: string, patch: AdminUserPatch): Promise<AdminUser> {
-    const res = await client.patch(`/admin/users/${id}`, patch)
+    const res = await client.put(`/admin/users/${id}`, patch)
     return res.data.data
   }
 
@@ -251,7 +251,7 @@ export function useAdminApi(http?: AxiosInstance) {
     userId: string,
     role: OrgMemberRole,
   ): Promise<AdminOrgMember> {
-    const res = await client.patch(`/admin/orgs/${orgId}/members/${userId}`, { role })
+    const res = await client.put(`/admin/orgs/${orgId}/members/${userId}`, { role })
     return res.data.data
   }
 
@@ -315,7 +315,7 @@ export function useAdminApi(http?: AxiosInstance) {
     page?: number
     pageSize?: number
   }): Promise<{ data: AdminAuditRow[]; pagination: AdminPagination }> {
-    const res = await client.get('/admin/audit/logs', { params })
+    const res = await client.get('/admin/audit', { params })
     return res.data
   }
 
