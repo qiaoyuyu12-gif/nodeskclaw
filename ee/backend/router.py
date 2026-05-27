@@ -23,6 +23,7 @@ def _register_ee_admin_routes():
     """将 EE 超管路由注册到 ee_admin_router。"""
     if not ee_admin_router.routes:
         try:
+            from ee.backend.api.admin.audit import router as ee_audit_router
             from ee.backend.api.admin.features import router as ee_features_router
             from ee.backend.api.admin.organizations import router as ee_org_router
             from ee.backend.api.admin.plans import router as ee_plans_router
@@ -49,6 +50,12 @@ def _register_ee_admin_routes():
                 ee_features_router,
                 prefix="",
                 tags=["EE - 超管功能开关"],
+            )
+            # 审计日志查询（T15）
+            ee_admin_router.include_router(
+                ee_audit_router,
+                prefix="",
+                tags=["EE - 超管审计"],
             )
             logger.info("EE 超管路由已注册到 ee_admin_router")
         except ImportError as e:
