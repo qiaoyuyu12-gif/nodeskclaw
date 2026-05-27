@@ -29,3 +29,15 @@ async def test_create_org_403_for_non_admin(async_client, normal_user_token):
         headers={"Authorization": f"Bearer {normal_user_token}"},
     )
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_add_member_happy(async_client, super_admin_token, sample_org, sample_user):
+    """超管可向组织添加成员，响应体包含 data.role。"""
+    resp = await async_client.post(
+        f"{ORGS_URL}/{sample_org.id}/members",
+        json={"user_id": sample_user.id, "role": "member"},
+        headers={"Authorization": f"Bearer {super_admin_token}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["role"] == "member"

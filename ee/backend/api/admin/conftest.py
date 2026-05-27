@@ -25,10 +25,13 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+import uuid
+
 from app.core.deps import get_db
 from app.core.security import create_access_token
 from app.main import app
 from app.models import Base
+from app.models.organization import Organization
 from app.models.user import User
 
 TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/nodeskclaw_test"
@@ -142,3 +145,42 @@ def super_admin_token(super_admin_user: User) -> str:
 def normal_user_token(normal_user: User) -> str:
     """普通用户 JWT token。"""
     return create_access_token(user_id=normal_user.id)
+
+
+@pytest_asyncio.fixture
+async def sample_org() -> Organization:
+    """创建并持久化一个测试组织，供成员管理 endpoint 测试使用。"""
+    async with TestSessionLocal() as session:
+        org = Organization(
+            name="Test Org",
+            slug=f"test-org-{uuid.uuid4().hex[:8]}",
+            plan="free",
+            max_instances=1,
+            max_cpu_total="4",
+            max_mem_total="8Gi",
+            max_storage_total="500Gi",
+            max_collaboration_depth=3,
+            is_active=True,
+        )
+        session.add(org)
+        await session.commit()
+        await session.refresh(org)
+        return org
+
+
+@pytest_asyncio.fixture
+async def sample_user() -> User:
+    """创建并持久化一个普通用户，供成员管理 endpoint 测试使用。"""
+    async with TestSessionLocal() as session:
+        user = User(
+            id=str(uuid.uuid4()),
+            name="Sample User",
+            email=f"user-{uuid.uuid4().hex[:8]}@example.com",
+            password_hash="not-a-real-hash",
+            is_active=True,
+            is_super_admin=False,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        return user

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -181,5 +182,86 @@ async def delete_org(
 ):
     """超管删除组织（业务规则全部在 service 层）。"""
     await org_admin_service.delete_org(db, admin=admin, org_id=org_id)
+    await db.commit()
+    return ApiResponse[dict](data={"deleted": True})
+
+
+# ── 成员 Schema ──────────────────────────────────────────────
+
+class AdminOrgMemberIn(BaseModel):
+    """添加成员请求体。"""
+    user_id: str
+    role: str = Field(..., pattern=r"^(admin|operator|member)$")
+
+
+class AdminOrgMemberPatch(BaseModel):
+    """更新成员角色请求体。"""
+    role: str = Field(..., pattern=r"^(admin|operator|member)$")
+
+
+class AdminOrgMemberInfo(BaseModel):
+    """成员信息（仅含 membership 自身字段）。"""
+    user_id: str
+    role: str
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+# ── 成员 Endpoints ────────────────────────────────────────────
+
+@router.get("/{org_id}/members", response_model=ApiResponse[list[AdminOrgMemberInfo]])
+async def list_org_members(
+    org_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_super_admin_dep),
+):
+    """列出组织所有成员（超管）。"""
+    members = await org_admin_service.list_members(db, org_id=org_id)
+    return ApiResponse[list[AdminOrgMemberInfo]](
+        data=[AdminOrgMemberInfo.model_validate(m) for m in members]
+    )
+
+
+@router.post("/{org_id}/members", response_model=ApiResponse[AdminOrgMemberInfo])
+async def add_org_member(
+    org_id: str,
+    body: AdminOrgMemberIn,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_super_admin_dep),
+):
+    """超管向组织添加成员（业务规则在 service 层）。"""
+    m = await org_admin_service.add_member(
+        db, admin=admin, org_id=org_id, user_id=body.user_id, role=body.role,
+    )
+    await db.commit()
+    return ApiResponse[AdminOrgMemberInfo](data=AdminOrgMemberInfo.model_validate(m))
+
+
+@router.put("/{org_id}/members/{user_id}", response_model=ApiResponse[AdminOrgMemberInfo])
+async def update_org_member(
+    org_id: str,
+    user_id: str,
+    body: AdminOrgMemberPatch,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_super_admin_dep),
+):
+    """超管更新组织成员角色（业务规则在 service 层）。"""
+    m = await org_admin_service.update_member_role(
+        db, admin=admin, org_id=org_id, user_id=user_id, role=body.role,
+    )
+    await db.commit()
+    return ApiResponse[AdminOrgMemberInfo](data=AdminOrgMemberInfo.model_validate(m))
+
+
+@router.delete("/{org_id}/members/{user_id}", response_model=ApiResponse[dict])
+async def remove_org_member(
+    org_id: str,
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_super_admin_dep),
+):
+    """超管移除组织成员（业务规则在 service 层）。"""
+    await org_admin_service.remove_member(db, admin=admin, org_id=org_id, user_id=user_id)
     await db.commit()
     return ApiResponse[dict](data={"deleted": True})
