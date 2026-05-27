@@ -169,6 +169,13 @@ async def sample_org() -> Organization:
 
 
 @pytest_asyncio.fixture
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    """提供直接访问测试数据库的 AsyncSession（独立 session，不走 app 依赖注入）。"""
+    async with TestSessionLocal() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
 async def sample_user() -> User:
     """创建并持久化一个普通用户，供成员管理 endpoint 测试使用。"""
     async with TestSessionLocal() as session:
