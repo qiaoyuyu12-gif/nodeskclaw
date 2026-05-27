@@ -24,6 +24,8 @@ from sqlalchemy.orm import sessionmaker
 # 导入所有 model，确保 metadata 完整（用于 create_all）
 import app.models  # noqa: F401
 from app.models.base import Base
+from app.models.cluster import Cluster
+from app.models.instance import Instance, InstanceStatus
 from app.models.organization import Organization
 from app.models.user import User
 
@@ -31,9 +33,12 @@ from app.models.user import User
 TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/nodeskclaw_test"
 
 # 需要在每个用例前后清理的表（CASCADE 自动处理外键引用顺序）
+# instances 先于 clusters / organizations，防止外键约束报错
 _TRUNCATE_TABLES = [
     "organization_feature_overrides",
     "operation_audit_logs",
+    "instances",
+    "clusters",
     "organizations",
     "users",
 ]
@@ -105,6 +110,79 @@ async def sample_org(db_session: AsyncSession) -> Organization:
         is_active=True,
     )
     db_session.add(org)
+    await db_session.commit()
+    await db_session.refresh(org)
+    return org
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def sample_org_with_running_instance(
+    db_session: AsyncSession,
+    super_admin_user: User,
+) -> Organization:
+    """落库一个含运行中实例的测试组织，用于校验删除拦截逻辑。
+
+    创建步骤：
+      1. 创建 Organization
+      2. 创建 Cluster（Instance.cluster_id 为 NOT NULL 外键）
+      3. 创建 Instance，status=running，关联到 org 与 cluster
+    测试结束由 conftest 的 TRUNCATE 统一清理（instances → clusters → organizations）。
+    """
+    # 1. 组织
+    org = Organization(
+        name="Org With Running Instance",
+        slug=f"org-running-{uuid.uuid4().hex[:8]}",
+        plan="free",
+        max_instances=5,
+        max_cpu_total="16",
+        max_mem_total="32Gi",
+        max_storage_total="1Ti",
+        max_collaboration_depth=3,
+        is_active=True,
+    )
+    db_session.add(org)
+    await db_session.flush()  # 获取 org.id，暂不 commit
+
+    # 2. 集群（Instance.cluster_id NOT NULL 外键）
+    cluster = Cluster(
+        id=str(uuid.uuid4()),
+        name=f"test-cluster-{uuid.uuid4().hex[:8]}",
+        compute_provider="k8s",
+        status="connected",
+        created_by=super_admin_user.id,
+        provider_config={},
+    )
+    db_session.add(cluster)
+    await db_session.flush()
+
+    # 3. 运行中实例（填充所有 NOT NULL 列）
+    instance = Instance(
+        id=str(uuid.uuid4()),
+        name="running-instance",
+        slug=f"running-{uuid.uuid4().hex[:8]}",
+        cluster_id=cluster.id,
+        namespace="test-ns",
+        image_version="latest",
+        replicas=1,
+        cpu_request="500m",
+        cpu_limit="2000m",
+        mem_request="2Gi",
+        mem_limit="2Gi",
+        service_type="ClusterIP",
+        quota_cpu="4",
+        quota_mem="8Gi",
+        quota_max_pods=20,
+        storage_size="80Gi",
+        available_replicas=1,
+        status=InstanceStatus.running,
+        health_status="healthy",
+        current_revision=1,
+        compute_provider="k8s",
+        runtime="openclaw",
+        created_by=super_admin_user.id,
+        org_id=org.id,
+    )
+    db_session.add(instance)
     await db_session.commit()
     await db_session.refresh(org)
     return org
