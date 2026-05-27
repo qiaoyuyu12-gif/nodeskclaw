@@ -203,6 +203,11 @@ async def delete_org(
         await db.flush()
 
 
+async def get_org(db: AsyncSession, *, org_id: str) -> Organization:
+    """读取组织详情（仅找未软删的）；不存在抛 ORG_NOT_FOUND。"""
+    return await _get_org_or_404(db, org_id)
+
+
 async def _get_org_or_404(db: AsyncSession, org_id: str) -> Organization:
     """查询未软删除的组织，不存在时抛 ORG_NOT_FOUND（409）。
 
