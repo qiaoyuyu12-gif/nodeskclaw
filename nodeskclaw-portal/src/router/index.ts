@@ -151,6 +151,20 @@ const ceRoutes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/admin',
+    component: () => import('@/views/admin/AdminLayout.vue'),
+    meta: { requiresAuth: true, requireSuperAdmin: true },
+    children: [
+      { path: '', redirect: '/admin/orgs' },
+      { path: 'orgs', name: 'AdminOrgList', component: () => import('@/views/admin/AdminOrgList.vue') },
+      { path: 'orgs/:id', name: 'AdminOrgDetail', component: () => import('@/views/admin/AdminOrgDetail.vue'), props: true },
+      { path: 'users', name: 'AdminUserList', component: () => import('@/views/admin/AdminUserList.vue') },
+      { path: 'users/:id', name: 'AdminUserDetail', component: () => import('@/views/admin/AdminUserDetail.vue'), props: true },
+      { path: 'features', name: 'AdminFeatureList', component: () => import('@/views/admin/AdminFeatureList.vue') },
+      { path: 'audit', name: 'AdminAuditLog', component: () => import('@/views/admin/AdminAuditLog.vue') },
+    ],
+  },
+  {
     path: '/create',
     redirect: '/workspace/create',
   },
