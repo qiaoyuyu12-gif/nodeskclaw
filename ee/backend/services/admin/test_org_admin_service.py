@@ -77,3 +77,32 @@ async def test_create_org_writes_audit(db_session, super_admin_user):
         )
     ).scalars().all()
     assert any(a.action == "org.create" for a in audits)
+
+
+@pytest.mark.asyncio
+async def test_add_member_duplicate_rejected(db_session, super_admin_user, sample_org, sample_user):
+    """同一用户重复添加到同一组织时，第二次必须抛 409 + ORG_MEMBER_DUPLICATE 错误码。"""
+    # 第一次成功添加
+    await org_admin_service.add_member(
+        db_session, admin=super_admin_user, org_id=sample_org.id,
+        user_id=sample_user.id, role="member",
+    )
+    await db_session.commit()
+    # 第二次重复添加，应被拦截
+    with pytest.raises(HTTPException) as exc:
+        await org_admin_service.add_member(
+            db_session, admin=super_admin_user, org_id=sample_org.id,
+            user_id=sample_user.id, role="member",
+        )
+    assert exc.value.detail["error_code"] == int(AdminErrorCode.ORG_MEMBER_DUPLICATE)
+
+
+@pytest.mark.asyncio
+async def test_remove_last_org_admin_rejected(db_session, super_admin_user, sample_org_with_single_admin):
+    """移除 org 最后一个 admin 成员时，必须抛 409 + ORG_LAST_ADMIN_FORBIDDEN 错误码。"""
+    org, admin_user = sample_org_with_single_admin
+    with pytest.raises(HTTPException) as exc:
+        await org_admin_service.remove_member(
+            db_session, admin=super_admin_user, org_id=org.id, user_id=admin_user.id,
+        )
+    assert exc.value.detail["error_code"] == int(AdminErrorCode.ORG_LAST_ADMIN_FORBIDDEN)

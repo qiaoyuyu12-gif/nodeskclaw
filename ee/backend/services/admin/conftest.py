@@ -26,6 +26,7 @@ import app.models  # noqa: F401
 from app.models.base import Base
 from app.models.cluster import Cluster
 from app.models.instance import Instance, InstanceStatus
+from app.models.org_membership import OrgMembership
 from app.models.organization import Organization
 from app.models.user import User
 
@@ -37,6 +38,7 @@ TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/n
 _TRUNCATE_TABLES = [
     "organization_feature_overrides",
     "operation_audit_logs",
+    "org_memberships",
     "instances",
     "clusters",
     "organizations",
@@ -186,3 +188,71 @@ async def sample_org_with_running_instance(
     await db_session.commit()
     await db_session.refresh(org)
     return org
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def sample_user(db_session: AsyncSession) -> User:
+    """落库一个普通用户（非超管），用于成员管理测试。
+
+    每次生成随机 email 避免唯一约束冲突。
+    """
+    user = User(
+        id=str(uuid.uuid4()),
+        name="Sample User",
+        email=f"user-{uuid.uuid4().hex[:8]}@example.com",
+        password_hash="not-a-real-hash",
+        is_active=True,
+        is_super_admin=False,
+    )
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def sample_org_with_single_admin(
+    db_session: AsyncSession,
+) -> tuple[Organization, User]:
+    """落库一个仅含 1 个 admin 成员的测试组织，用于校验移除最后 admin 的拦截逻辑。
+
+    返回 (org, admin_user) 元组，其中 admin_user 是该 org 唯一的 admin 身份成员。
+    """
+    # 1. 创建 admin 用户
+    admin_user = User(
+        id=str(uuid.uuid4()),
+        name="Org Admin",
+        email=f"org-admin-{uuid.uuid4().hex[:8]}@example.com",
+        password_hash="not-a-real-hash",
+        is_active=True,
+        is_super_admin=False,
+    )
+    db_session.add(admin_user)
+    await db_session.flush()
+
+    # 2. 创建组织
+    org = Organization(
+        name="Single Admin Org",
+        slug=f"single-admin-org-{uuid.uuid4().hex[:8]}",
+        plan="free",
+        max_instances=1,
+        max_cpu_total="4",
+        max_mem_total="8Gi",
+        max_storage_total="500Gi",
+        max_collaboration_depth=3,
+        is_active=True,
+    )
+    db_session.add(org)
+    await db_session.flush()
+
+    # 3. 添加该用户为 org 的唯一 admin 成员
+    membership = OrgMembership(
+        org_id=org.id,
+        user_id=admin_user.id,
+        role="admin",
+    )
+    db_session.add(membership)
+    await db_session.commit()
+    await db_session.refresh(org)
+    await db_session.refresh(admin_user)
+    return org, admin_user

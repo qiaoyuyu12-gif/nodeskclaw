@@ -32,6 +32,7 @@ class AdminErrorCode(IntEnum):
     ORG_LAST_ADMIN_FORBIDDEN = 40922
     ORG_NOT_FOUND = 40923
     ORG_MEMBER_DUPLICATE = 40924
+    ORG_MEMBER_NOT_FOUND = 40925  # 组织成员不存在
 
     # 用户
     USER_NOT_FOUND = 40940
