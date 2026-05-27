@@ -231,6 +231,37 @@ async def another_super_admin_user(db_session: AsyncSession) -> User:
 
 
 @pytest_asyncio.fixture(loop_scope="function")
+async def sample_user_with_memberships(
+    db_session: AsyncSession,
+    sample_org: Organization,
+) -> User:
+    """落库一个普通用户，并在 sample_org 中创建 member 级别的 OrgMembership。
+
+    用于级联软删测试：验证 delete_user 后该成员关系也被软删。
+    """
+    user = User(
+        id=str(uuid.uuid4()),
+        name="Member",
+        email=f"member-{uuid.uuid4().hex[:8]}@example.com",
+        password_hash="not-a-real-hash",
+        is_active=True,
+        is_super_admin=False,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    membership = OrgMembership(
+        org_id=sample_org.id,
+        user_id=user.id,
+        role="member",
+    )
+    db_session.add(membership)
+    await db_session.commit()
+    await db_session.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture(loop_scope="function")
 async def sample_org_with_single_admin(
     db_session: AsyncSession,
 ) -> tuple[Organization, User]:
