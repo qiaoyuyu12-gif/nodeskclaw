@@ -15,7 +15,7 @@
       </tr></thead>
       <tbody>
         <!-- 每行点击跳转用户详情；操作列阻止冒泡避免意外导航 -->
-        <tr v-for="u in users" :key="u.id" class="hover:bg-gray-50 cursor-pointer"
+        <tr v-for="u in users" :key="u.id" class="hover:bg-muted/50 cursor-pointer"
             @click="$router.push(`/admin/users/${u.id}`)">
           <td>{{ u.email }}</td>
           <td>{{ u.name ?? '-' }}</td>

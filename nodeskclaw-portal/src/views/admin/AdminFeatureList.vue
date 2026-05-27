@@ -18,12 +18,12 @@
         <tr
           v-for="f in features"
           :key="f.feature_id"
-          class="hover:bg-gray-50 cursor-pointer border-b"
+          class="hover:bg-muted/50 cursor-pointer border-b"
           @click="openDrawer(f)"
         >
           <td class="py-2 pr-4 font-mono text-xs">{{ f.feature_id }}</td>
           <td class="py-2 pr-4">{{ f.name }}</td>
-          <td class="py-2 pr-4 text-gray-500">{{ f.description }}</td>
+          <td class="py-2 pr-4 text-muted-foreground">{{ f.description }}</td>
           <td class="py-2 pr-4">{{ f.default_enabled ? '开' : '关' }}</td>
           <td class="py-2">{{ f.override_count }} 个组织</td>
         </tr>
@@ -33,16 +33,16 @@
     <!-- 右侧抽屉：显示选中 feature 的 org override 列表 -->
     <aside
       v-if="drawerFeature"
-      class="fixed top-0 right-0 h-full w-[480px] bg-white shadow-xl border-l p-6 overflow-auto z-50"
+      class="fixed top-0 right-0 h-full w-[480px] bg-card shadow-xl border-l border-border p-6 overflow-auto z-50"
     >
       <div class="flex justify-between items-center mb-4">
         <h3 class="text-lg font-semibold">{{ drawerFeature.feature_id }} 的组织覆盖</h3>
         <!-- 关闭按钮 -->
-        <button class="text-gray-500 hover:text-gray-800" @click="drawerFeature = null">关闭</button>
+        <button class="text-muted-foreground hover:text-foreground" @click="drawerFeature = null">关闭</button>
       </div>
 
       <!-- 覆盖列表为空时的提示 -->
-      <p v-if="overrides.length === 0" class="text-sm text-gray-400">暂无组织覆盖。</p>
+      <p v-if="overrides.length === 0" class="text-sm text-muted-foreground/70">暂无组织覆盖。</p>
 
       <table v-else class="w-full text-sm">
         <thead>
@@ -58,8 +58,8 @@
           <tr v-for="o in overrides" :key="o.org_id" class="border-b">
             <td class="py-2 pr-3 font-mono text-xs">{{ o.org_id }}</td>
             <td class="py-2 pr-3">{{ o.enabled ? '强制开' : '强制关' }}</td>
-            <td class="py-2 pr-3 text-gray-500">{{ o.reason ?? '-' }}</td>
-            <td class="py-2 pr-3 text-gray-400 text-xs">{{ o.set_at }}</td>
+            <td class="py-2 pr-3 text-muted-foreground">{{ o.reason ?? '-' }}</td>
+            <td class="py-2 pr-3 text-muted-foreground/70 text-xs">{{ o.set_at }}</td>
             <!-- 清除该 org 的 feature override -->
             <td class="py-2">
               <button class="text-red-500 hover:text-red-700 text-xs" @click="onClear(o)">清除</button>

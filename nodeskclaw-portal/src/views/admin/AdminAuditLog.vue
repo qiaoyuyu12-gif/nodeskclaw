@@ -29,7 +29,7 @@
       <tbody>
         <template v-for="r in rows" :key="r.id">
           <!-- 主行：点击切换 details 展开/收起 -->
-          <tr class="hover:bg-gray-50 cursor-pointer" @click="toggle(r.id)">
+          <tr class="hover:bg-muted/50 cursor-pointer" @click="toggle(r.id)">
             <td class="py-1">{{ r.created_at }}</td>
             <td class="py-1">{{ r.actor_name ?? r.actor_id }}</td>
             <td class="py-1">{{ r.action }}</td>
@@ -39,7 +39,7 @@
           <!-- 展开行：以 pre 展示 details JSON，使用 Set 判断是否展开 -->
           <tr v-if="expanded.has(r.id)">
             <td colspan="5">
-              <pre class="bg-gray-50 p-3 text-xs overflow-auto">{{ JSON.stringify(r.details, null, 2) }}</pre>
+              <pre class="bg-muted p-3 text-xs overflow-auto">{{ JSON.stringify(r.details, null, 2) }}</pre>
             </td>
           </tr>
         </template>

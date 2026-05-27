@@ -3,7 +3,7 @@
 <template>
   <div class="p-6 space-y-6 max-w-2xl">
     <!-- 返回列表 -->
-    <RouterLink to="/admin/users" class="text-sm text-gray-500">← 返回用户列表</RouterLink>
+    <RouterLink to="/admin/users" class="text-sm text-muted-foreground">← 返回用户列表</RouterLink>
 
     <!-- 用户邮箱标题 -->
     <h2 class="text-2xl font-semibold" v-if="user">{{ user.email }}</h2>
@@ -32,11 +32,11 @@
     <button class="border px-3 py-1 rounded" @click="onReset" v-if="user">重置密码</button>
 
     <!-- 临时密码弹窗：复制后才可关闭 -->
-    <div v-if="tempPwd" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div class="bg-white p-6 rounded shadow w-96 space-y-3">
+    <div v-if="tempPwd" class="fixed inset-0 bg-background/80 flex items-center justify-center z-50">
+      <div class="bg-card p-6 rounded shadow w-96 space-y-3">
         <h3 class="text-lg font-semibold">临时密码（仅本次可见）</h3>
         <!-- 临时密码展示区，可全选复制 -->
-        <pre class="bg-gray-100 px-3 py-2 select-all">{{ tempPwd }}</pre>
+        <pre class="bg-muted px-3 py-2 select-all">{{ tempPwd }}</pre>
         <div class="flex gap-2">
           <!-- 点击复制到剪贴板，并标记 copied=true -->
           <button @click="copy" class="border px-3 py-1 rounded">复制</button>

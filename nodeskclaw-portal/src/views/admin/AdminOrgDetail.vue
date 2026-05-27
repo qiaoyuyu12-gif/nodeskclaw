@@ -3,7 +3,7 @@
   <div class="p-6 space-y-6">
     <!-- 返回导航 -->
     <div class="flex items-center gap-2">
-      <RouterLink to="/admin/orgs" class="text-sm text-gray-500 hover:text-gray-900">
+      <RouterLink to="/admin/orgs" class="text-sm text-muted-foreground hover:text-foreground">
         ← 返回组织列表
       </RouterLink>
     </div>
@@ -15,7 +15,7 @@
         v-for="t in tabs"
         :key="t.value"
         class="px-3 py-2 text-sm"
-        :class="active === t.value ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'"
+        :class="active === t.value ? 'border-b-2 border-blue-600 text-blue-600' : 'text-muted-foreground'"
         @click="active = t.value"
       >
         {{ t.label }}

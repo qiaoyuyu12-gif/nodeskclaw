@@ -1,13 +1,13 @@
 <template>
   <!-- 超管后台布局：左侧导航 + 右侧内容区 -->
-  <div class="flex h-screen bg-gray-50">
+  <div class="flex h-screen bg-background">
     <!-- 左侧侧边栏 -->
-    <aside class="w-56 shrink-0 border-r border-gray-200 bg-white flex flex-col">
+    <aside class="w-56 shrink-0 border-r border-border bg-card flex flex-col">
       <!-- 返回门户 -->
-      <div class="p-4 border-b border-gray-200">
+      <div class="p-4 border-b border-border">
         <router-link
           to="/"
-          class="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+          class="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <Home class="w-4 h-4" />
           <span>返回门户</span>
@@ -20,8 +20,8 @@
           v-for="item in navItems"
           :key="item.to"
           :to="item.to"
-          class="flex items-center gap-2.5 px-3 py-2 rounded-md text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-          active-class="bg-gray-100 text-gray-900 font-medium"
+          class="flex items-center gap-2.5 px-3 py-2 rounded-md text-sm text-foreground hover:bg-muted transition-colors"
+          active-class="bg-muted text-foreground font-medium"
         >
           <component :is="item.icon" class="w-4 h-4 shrink-0" />
           <span>{{ item.label }}</span>
