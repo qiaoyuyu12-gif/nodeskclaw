@@ -207,7 +207,14 @@ export function useAdminApi(http?: AxiosInstance) {
     page?: number
     pageSize?: number
   }): Promise<{ data: AdminUser[]; pagination: AdminPagination }> {
-    const res = await client.get('/admin/users', { params })
+    // 后端使用 page_size(snake_case),前端 pageSize → 显式转换避免参数被忽略
+    const res = await client.get('/admin/users', {
+      params: {
+        q: params.q,
+        page: params.page,
+        page_size: params.pageSize,
+      },
+    })
     return res.data
   }
 
