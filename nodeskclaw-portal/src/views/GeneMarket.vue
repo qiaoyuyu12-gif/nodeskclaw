@@ -417,7 +417,6 @@ function hasNativeTools(gene: GeneItem): boolean {
       </div>
 
       <!-- 基因/模板/本地上传 Tab -->
-      <template>
 
         <!-- Visibility filter -->
         <div v-if="viewMode === 'genes' || viewMode === 'templates'" class="flex gap-2 mb-4">
@@ -699,7 +698,6 @@ function hasNativeTools(gene: GeneItem): boolean {
             </button>
           </div>
         </template>
-      </template>
     </div>
   </div>
 </template>
