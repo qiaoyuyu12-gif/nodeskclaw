@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import hooks
-from app.core.deps import get_current_org, get_db, require_feature, require_org_admin, require_org_member
+from app.core.deps import get_current_org, get_db, require_feature, require_org_admin, require_org_member, require_org_member_role
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.security import get_current_user
 from app.models.base import not_deleted
@@ -72,7 +72,7 @@ async def _get_instance_in_org(instance_id: str, org_id: str, db: AsyncSession) 
 async def list_model_providers(
     org_id: str,
     db: AsyncSession = Depends(get_db),
-    _auth: tuple = Depends(require_org_admin),
+    _auth: tuple = Depends(require_org_member_role("member")),  # 读=member 及以上可访问
 ):
     result = await db.execute(
         select(OrgModelProvider).where(
@@ -122,7 +122,7 @@ async def create_model_provider(
     org_id: str,
     body: OrgModelProviderCreate,
     db: AsyncSession = Depends(get_db),
-    _auth: tuple = Depends(require_org_admin),
+    _auth: tuple = Depends(require_org_member_role("operator")),  # 写=operator 及以上可操作
 ):
     if is_codex_provider(body.provider):
         raise BadRequestError("Codex 仅支持个人配置，不支持 Working Plan")
@@ -172,7 +172,7 @@ async def update_model_provider(
     key_id: str,
     body: OrgModelProviderUpdate,
     db: AsyncSession = Depends(get_db),
-    _auth: tuple = Depends(require_org_admin),
+    _auth: tuple = Depends(require_org_member_role("operator")),  # 写=operator 及以上可操作
 ):
     result = await db.execute(
         select(OrgModelProvider).where(

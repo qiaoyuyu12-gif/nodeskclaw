@@ -1729,6 +1729,7 @@ const enUS = {
       org_required: "Please choose an organization first",
       org_admin_required: "Organization admin permission is required",
       org_member_required: "You are not a member of this organization",
+      insufficient_member_role: "Requires {role} role or above",
       missing_tenant_key: "No Feishu tenant associated with your account",
       slug_already_taken: "This organization slug is already taken, please choose another",
       cannot_reset_own_password: "Cannot reset your own password. Please change it in Settings.",

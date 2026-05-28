@@ -243,6 +243,101 @@ async def require_org_member(
     return user, org
 
 
+def require_org_member_role(min_role: str):
+    """工厂函数：要求当前用户在 OrgMembership 中至少拥有 min_role。
+
+    用法：在端点上 `dependencies=[Depends(require_org_member_role("operator"))]`，
+    或参数 `_=Depends(require_org_member_role("member"))` 返回 (user, org)。
+
+    与 require_org_role 的区别：本工厂查 OrgMembership（普通组织成员），
+    require_org_role 查 AdminMembership（平台管理身份）。
+
+    super_admin 视为天然 admin。
+    """
+    from app.models.org_membership import ADMIN_ROLE_LEVEL, OrgMembership
+    from app.models.organization import Organization
+
+    # 预先计算最低权限等级，避免每次请求重复查找
+    min_level = ADMIN_ROLE_LEVEL[min_role]
+
+    async def _dependency(
+        request: Request,
+        db: AsyncSession = Depends(get_db),
+        user=Depends(_get_current_user_dep()),
+    ):
+        # 优先从 URL path 参数取 org_id，否则使用用户当前 org
+        path_org_id = request.path_params.get("org_id")
+        target_org_id = path_org_id or user.current_org_id
+
+        if target_org_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": 40010,
+                    "message_key": "errors.org.user_has_no_org",
+                    "message": "用户未加入任何组织",
+                },
+            )
+
+        # super_admin 天然拥有最高权限，直接查询组织并返回
+        if user.is_super_admin:
+            org = (
+                await db.execute(
+                    select(Organization).where(
+                        Organization.id == target_org_id,
+                        Organization.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            return user, org
+
+        # 查询普通组织成员身份
+        membership = (
+            await db.execute(
+                select(OrgMembership).where(
+                    OrgMembership.user_id == user.id,
+                    OrgMembership.org_id == target_org_id,
+                    OrgMembership.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": 40312,
+                    "message_key": "errors.org.org_member_required",
+                    "message": "您不是该组织的成员",
+                },
+            )
+
+        # 校验角色等级是否满足最低要求
+        user_level = ADMIN_ROLE_LEVEL.get(membership.role, 0)
+        if user_level < min_level:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": 40315,
+                    "message_key": "errors.org.insufficient_member_role",
+                    "message": f"需要 {min_role} 及以上角色",
+                },
+            )
+
+        # 查询组织对象并一并返回
+        org = (
+            await db.execute(
+                select(Organization).where(
+                    Organization.id == target_org_id,
+                    Organization.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        return user, org
+
+    return _dependency
+
+
 # ── 管理平台 RBAC（admin 路由前缀专用） ──────────────────────
 
 def require_org_role(min_role: str):

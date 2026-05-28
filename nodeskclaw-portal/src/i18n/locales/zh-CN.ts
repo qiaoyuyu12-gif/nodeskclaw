@@ -1729,6 +1729,7 @@ const zhCN = {
       org_required: "请先选择组织",
       org_admin_required: "仅限组织管理员操作",
       org_member_required: "您不是该组织的成员",
+      insufficient_member_role: "需要 {role} 及以上角色",
       missing_tenant_key: "当前用户没有关联飞书租户，无法使用飞书开通组织",
       slug_already_taken: "该企业标识符已被使用，请更换一个",
       cannot_reset_own_password: "不能重置自己的密码，请到设置页修改",
