@@ -2719,6 +2719,95 @@ async def soft_delete_gene(db: AsyncSession, gene_id: str) -> dict:
     return {"deleted": True}
 
 
+async def delete_user_gene(
+    db: AsyncSession,
+    gene_id: str,
+    *,
+    current_user,  # app.models.user.User 对象
+) -> dict:
+    """用户级删除已上传的 skill / gene。
+
+    权限策略（任一满足即可）：
+      1. 上传者本人（gene.created_by == current_user.id）
+      2. 当前组织的 admin（OrgMembership.role == OrgRole.admin）
+      3. 超管（current_user.is_super_admin == True）
+
+    引用检查：若有 active 的 InstanceGene（deleted_at IS NULL），
+    拒绝并在响应体中返回依赖的 instance_id 列表，前端可提示用户先卸载。
+
+    Raises:
+        NotFoundError: gene 不存在或已软删
+        HTTPException 403:   无权删除
+        HTTPException 409:   有实例正在引用该 gene
+    """
+    from fastapi import HTTPException, status
+
+    from app.models.org_membership import OrgMembership, OrgRole
+
+    # ── 1. 取 gene，不存在或已软删则 404 ──────────────────────────────────
+    gene = (await db.execute(
+        select(Gene).where(Gene.id == gene_id, not_deleted(Gene))
+    )).scalar_one_or_none()
+    if not gene:
+        raise NotFoundError("基因不存在")
+
+    # ── 2. 权限校验 ────────────────────────────────────────────────────────
+    allowed = False
+
+    if current_user.is_super_admin:
+        # 超管直接放行
+        allowed = True
+    elif gene.created_by and gene.created_by == current_user.id:
+        # 上传者本人
+        allowed = True
+    elif gene.org_id:
+        # 检查当前用户是否为 gene 所属 org 的 admin
+        membership = (await db.execute(
+            select(OrgMembership).where(
+                OrgMembership.user_id == current_user.id,
+                OrgMembership.org_id == gene.org_id,
+                OrgMembership.role == OrgRole.admin,
+                OrgMembership.deleted_at.is_(None),
+            )
+        )).scalar_one_or_none()
+        if membership:
+            allowed = True
+
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error_code": 40316,
+                "message_key": "errors.gene.delete_forbidden",
+                "message": "您无权删除此基因（需是上传者或组织管理员）",
+            },
+        )
+
+    # ── 3. 引用检查：有 active instance 引用时拒绝 ─────────────────────────
+    refs = (await db.execute(
+        select(InstanceGene.instance_id).where(
+            InstanceGene.gene_id == gene_id,
+            InstanceGene.deleted_at.is_(None),
+        )
+    )).scalars().all()
+
+    if refs:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error_code": 40920,
+                "message_key": "errors.gene.has_instance_refs",
+                "message": f"该基因被 {len(refs)} 个实例引用，请先卸载",
+                "instance_ids": list(refs),
+            },
+        )
+
+    # ── 4. 软删除 ──────────────────────────────────────────────────────────
+    gene.soft_delete()
+    await db.commit()
+    return {"deleted": True, "id": gene_id}
+
+
 async def update_genome(db: AsyncSession, genome_id: str, req: UpdateGenomeRequest) -> dict:
     result = await db.execute(select(Genome).where(Genome.id == genome_id, not_deleted(Genome)))
     genome = result.scalar_one_or_none()

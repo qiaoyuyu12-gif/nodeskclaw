@@ -99,4 +99,12 @@ export const skillApi = {
     const url = overwrite ? `/genes/upload-folder?overwrite=true` : '/genes/upload-folder'
     return api.post<{ data: Skill }>(url, form).then((r) => r.data.data)
   },
+
+  /**
+   * 用户级删除已上传的 gene（上传者本人 / org admin / 超管）。
+   * 后端返回 { deleted: true, id: geneId }。
+   * 若有实例引用则返回 409，若无权限则返回 403。
+   */
+  deleteGene: (geneId: string): Promise<{ deleted: boolean; id: string }> =>
+    api.delete<{ data: { deleted: boolean; id: string } }>(`/genes/${geneId}`).then((r) => r.data.data),
 }

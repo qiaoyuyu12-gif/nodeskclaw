@@ -737,3 +737,19 @@ async def publish_gene_to_market(
         db, gene_id, user_id=current_user.id,
     )
     return ApiResponse(data=result)
+
+
+@router.delete("/genes/{gene_id}")
+async def delete_gene(
+    gene_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """用户删除自己上传的 skill / gene（上传者本人 / org admin / 超管均可操作）。
+
+    权限和引用检查均由 gene_service.delete_user_gene 负责：
+    - 403：无权删除
+    - 409：有实例正在引用，需先卸载
+    """
+    result = await gene_service.delete_user_gene(db, gene_id, current_user=current_user)
+    return ApiResponse(data=result)

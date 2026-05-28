@@ -1146,6 +1146,10 @@ const enUS = {
     metricAgentSelfEval: "AI Employee Self Eval",
     hasNativeTools: "Native Tools",
     tabTemplates: "AI Employee Templates",
+    deleteGene: "Delete",
+    deleteConfirm: "Delete gene \"{name}\"? This cannot be undone.",
+    deleteSuccess: "Gene deleted",
+    deleteFailed: "Delete failed",
   },
   template: {
     geneCount: "{count} skill genes",

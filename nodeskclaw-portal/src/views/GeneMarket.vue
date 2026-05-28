@@ -32,16 +32,19 @@ import {
   FolderOpen,
   AlertTriangle,
   Code2,
+  Trash2,
   type Component,
 } from 'lucide-vue-next'
 import { useGeneStore } from '@/stores/gene'
 import type { GeneItem, GenomeItem, TemplateInfo } from '@/stores/gene'
 import { useToast } from '@/composables/useToast'
+import { useAuthStore } from '@/stores/auth'
 import CustomSelect from '@/components/shared/CustomSelect.vue'
 import { skillApi } from '@/services/skills'
 
 const router = useRouter()
 const store = useGeneStore()
+const authStore = useAuthStore()  // 用于获取当前登录用户，判断删除权限
 const toast = useToast()
 const { t, locale } = useI18n()
 
@@ -272,6 +275,40 @@ const totalPages = computed(() => Math.ceil(totalCount.value / pageSize.value) |
 const canPrev = computed(() => page.value > 1)
 const canNext = computed(() => page.value < totalPages.value)
 
+/**
+ * 判断当前用户是否有权限删除某个 gene。
+ * 前端仅做显示层过滤（上传者本人 / 超管），
+ * org admin 权限需查 membership，由后端兜底拦截。
+ * 仅本地上传（source_registry === 'local'）的 gene 才显示删除按钮。
+ */
+function canDeleteGene(gene: GeneItem): boolean {
+  if (gene.source_registry !== 'local') return false
+  const me = authStore.user
+  if (!me) return false
+  return me.is_super_admin || gene.created_by === me.id
+}
+
+/**
+ * 删除 gene 的确认 + 请求逻辑。
+ * 后端 409：提示用户先卸载引用实例；403：无权操作；其他：通用错误 toast。
+ */
+async function onDeleteGene(gene: GeneItem) {
+  if (!confirm(t('geneMarket.deleteConfirm', { name: gene.name }))) return
+  try {
+    await skillApi.deleteGene(gene.id)
+    toast.success(t('geneMarket.deleteSuccess'))
+    await loadData()
+  } catch (e: unknown) {
+    const err = e as { response?: { status?: number; data?: { message?: string } } }
+    if (err?.response?.status === 409) {
+      // 有实例正在引用该 gene，提示用户先卸载
+      toast.error(err.response?.data?.message ?? t('geneMarket.deleteFailed'))
+    } else {
+      toast.error(err?.response?.data?.message ?? t('geneMarket.deleteFailed'))
+    }
+  }
+}
+
 async function loadData() {
   if (viewMode.value === 'genes') {
     await store.fetchGenes({
@@ -433,9 +470,18 @@ function hasNativeTools(gene: GeneItem): boolean {
               <div
                 v-for="gene in store.genes"
                 :key="gene.id"
-                class="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition cursor-pointer"
+                class="relative p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition cursor-pointer"
                 @click="goToGene(gene.slug)"
               >
+                <!-- 删除按钮：仅本地上传 gene 且当前用户有权限时显示 -->
+                <button
+                  v-if="canDeleteGene(gene)"
+                  class="absolute top-2 right-2 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition z-10"
+                  :title="t('geneMarket.deleteGene')"
+                  @click.stop="onDeleteGene(gene)"
+                >
+                  <Trash2 class="w-4 h-4" />
+                </button>
                 <div class="flex items-start gap-3 mb-2">
                   <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                     <component :is="resolveIcon(gene.icon)" class="w-5 h-5 text-primary" />

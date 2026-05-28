@@ -1146,6 +1146,10 @@ const zhCN = {
     metricAgentSelfEval: "AI 员工自评",
     hasNativeTools: "含原生工具",
     tabTemplates: "AI 员工模板",
+    deleteGene: "删除",
+    deleteConfirm: "确认删除基因「{name}」？此操作不可撤销。",
+    deleteSuccess: "基因已删除",
+    deleteFailed: "删除失败",
   },
   template: {
     geneCount: "{count} 个技能基因",
