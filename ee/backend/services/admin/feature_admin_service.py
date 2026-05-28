@@ -146,22 +146,22 @@ async def list_features_with_override_count(db: AsyncSession) -> list[dict[str, 
 
 async def list_overrides_for_feature(
     db: AsyncSession, *, feature_id: str, page: int = 1, page_size: int = 20
-) -> tuple[list[OrganizationFeatureOverride], int]:
-    """某 feature 上的所有有效 override（分页）。
+) -> tuple[list[dict], int]:
+    """某 feature 上的所有有效 override（分页），含 org_name 与 set_by_name。
 
-    先校验 feature_id 合法性，再分页查询该 feature 的所有未软删 override 行。
-    返回 (rows, total_count)。
+    先校验 feature_id 合法性，再 JOIN Organization + User 一次性查询，
+    返回 (list[dict], total_count)，dict 含 org_name 和 set_by_name 供前端展示。
     """
+    from app.models.organization import Organization
+
     if feature_id not in _all_feature_ids():
         raise_admin_error(
             AdminErrorCode.FEATURE_ID_UNKNOWN,
             message_key="errors.admin.feature_id_unknown",
             message=f"Unknown feature_id: {feature_id}",
         )
-    base = select(OrganizationFeatureOverride).where(
-        OrganizationFeatureOverride.feature_id == feature_id,
-        OrganizationFeatureOverride.deleted_at.is_(None),
-    )
+
+    # 统计总数（不带 join，效率更高）
     total = (
         await db.execute(
             select(sa_func.count(OrganizationFeatureOverride.id)).where(
@@ -170,14 +170,50 @@ async def list_overrides_for_feature(
             )
         )
     ).scalar_one()
-    rows = (
-        await db.execute(
-            base.order_by(OrganizationFeatureOverride.updated_at.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+
+    # JOIN Organization + User，一次查询获取 org_name 和操作人信息
+    stmt = (
+        select(
+            OrganizationFeatureOverride,
+            Organization.name.label("org_name"),
+            User.name.label("user_name"),
+            User.email.label("user_email"),
         )
-    ).scalars().all()
-    return list(rows), total
+        .join(Organization, OrganizationFeatureOverride.org_id == Organization.id)
+        .outerjoin(User, OrganizationFeatureOverride.set_by_user_id == User.id)
+        .where(
+            OrganizationFeatureOverride.feature_id == feature_id,
+            OrganizationFeatureOverride.deleted_at.is_(None),
+        )
+        .order_by(OrganizationFeatureOverride.updated_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = (await db.execute(stmt)).all()
+
+    # 构造 dict 列表，set_by_name 优先取 user.name，再取 user.email，最后降级为 user_id
+    data = [
+        {
+            "org_id": r.OrganizationFeatureOverride.org_id,
+            "org_name": r.org_name,
+            "feature_id": feature_id,
+            "enabled": r.OrganizationFeatureOverride.enabled,
+            "reason": r.OrganizationFeatureOverride.reason,
+            "set_by_user_id": r.OrganizationFeatureOverride.set_by_user_id,
+            "set_by_name": (
+                r.user_name
+                or r.user_email
+                or r.OrganizationFeatureOverride.set_by_user_id
+            ),
+            "set_at": (
+                r.OrganizationFeatureOverride.updated_at.isoformat()
+                if r.OrganizationFeatureOverride.updated_at
+                else None
+            ),
+        }
+        for r in rows
+    ]
+    return data, total
 
 
 async def set_override(

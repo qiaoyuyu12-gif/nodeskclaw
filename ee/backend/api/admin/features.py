@@ -43,20 +43,10 @@ async def list_feature_overrides(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin_dep),
 ):
-    """列出指定 feature 在所有组织上的有效 override（分页）。"""
-    rows, total = await feature_admin_service.list_overrides_for_feature(
+    """列出指定 feature 在所有组织上的有效 override（分页），含 org_name 与 set_by_name。"""
+    data, total = await feature_admin_service.list_overrides_for_feature(
         db, feature_id=feature_id, page=page, page_size=page_size,
     )
-    data = [
-        {
-            "org_id": r.org_id,
-            "enabled": r.enabled,
-            "reason": r.reason,
-            "set_by_user_id": r.set_by_user_id,
-            "set_at": r.updated_at.isoformat() if r.updated_at else None,
-        }
-        for r in rows
-    ]
     return PaginatedResponse[dict](
         data=data,
         pagination=Pagination(page=page, page_size=page_size, total=total),
