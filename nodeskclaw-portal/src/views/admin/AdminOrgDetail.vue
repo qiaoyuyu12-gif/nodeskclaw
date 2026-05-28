@@ -92,7 +92,7 @@ const tabs = [
   { value: 'overview', label: '概览' },
   { value: 'members', label: '成员' },
   { value: 'features', label: '功能开关' },
-]
+] as const  // as const 让 value 成为字面量类型,与 active 的联合类型匹配
 const active = ref<'overview' | 'members' | 'features'>('overview')
 
 const org = ref<AdminOrg | null>(null)
