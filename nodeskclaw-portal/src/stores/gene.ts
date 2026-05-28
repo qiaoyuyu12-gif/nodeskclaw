@@ -39,6 +39,7 @@ export interface GeneItem {
   visibility?: string
   source_registry?: string
   source_registry_name?: string
+  created_by?: string  // 上传者用户 ID,用于前端判断删除权限(本人/超管)
   created_at?: string
 }
 
