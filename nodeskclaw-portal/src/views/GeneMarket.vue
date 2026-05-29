@@ -334,8 +334,10 @@ async function onForkGene(slug: string, target: 'personal' | 'org') {
     if (selectedVisibility.value === target || (target === 'org' && selectedVisibility.value === 'org_private')) {
       await loadData()
     }
-  } catch {
-    toast.error(t('geneMarket.forkFailed'))
+  } catch (e: unknown) {
+    // 显示后端真实错误（如"源基因不存在"/"仅可从公共市场已审核通过的基因 fork"）
+    const err = e as { response?: { data?: { message?: string } } }
+    toast.error(err?.response?.data?.message ?? t('geneMarket.forkFailed'))
   } finally {
     forkingSlug.value = null
   }

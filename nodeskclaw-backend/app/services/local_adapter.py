@@ -106,15 +106,24 @@ class LocalAdapter(RegistryAdapter):
             if visibility == "org_private":
                 base = base.where(Gene.visibility == "org_private", Gene.org_id == org_id)
             elif visibility == "public":
-                # 公共市场仅展示审核通过的
+                # 公共市场：审核通过 OR 历史无审核态（review_status IS NULL，兼容老数据）
                 base = base.where(
                     Gene.visibility == "public",
-                    Gene.review_status == "approved",
+                    or_(
+                        Gene.review_status == "approved",
+                        Gene.review_status.is_(None),
+                    ),
                 )
             elif org_id:
                 base = base.where(
                     or_(
-                        and_(Gene.visibility == "public", Gene.review_status == "approved"),
+                        and_(
+                            Gene.visibility == "public",
+                            or_(
+                                Gene.review_status == "approved",
+                                Gene.review_status.is_(None),
+                            ),
+                        ),
                         and_(Gene.visibility == "org_private", Gene.org_id == org_id),
                     )
                 )

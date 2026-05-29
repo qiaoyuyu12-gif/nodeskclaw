@@ -505,17 +505,24 @@ async def _list_genes_local(
     elif visibility == "org_private":
         base = base.where(Gene.visibility == "org_private", Gene.org_id == org_id)
     elif visibility == "public":
-        # 公共市场仅展示已审核通过的
+        # 公共市场：审核通过 OR 历史无审核态（review_status IS NULL，向后兼容老数据）
+        # 仅排除 pending_* / rejected 状态
         base = base.where(
             Gene.visibility == "public",
-            Gene.review_status == GeneReviewStatus.approved,
+            or_(
+                Gene.review_status == GeneReviewStatus.approved,
+                Gene.review_status.is_(None),
+            ),
         )
     elif org_id:
         base = base.where(
             or_(
                 and_(
                     Gene.visibility == "public",
-                    Gene.review_status == GeneReviewStatus.approved,
+                    or_(
+                        Gene.review_status == GeneReviewStatus.approved,
+                        Gene.review_status.is_(None),
+                    ),
                 ),
                 and_(Gene.visibility == "org_private", Gene.org_id == org_id),
             )
@@ -3146,26 +3153,60 @@ async def fork_gene_to_library(
 ) -> dict:
     """从公共市场 fork 一份 gene 到个人/组织 library。
 
-    - 源必须是 visibility=public 且 review_status=approved
-    - 复制全部内容字段；parent_gene_id 指向源 gene
+    - 源必须是 visibility=public 的 gene（在公共市场可见即可 fork）
+    - 优先查本地 DB；若本地无（来自外部注册表），通过 aggregator 拉取 manifest
+    - 复制全部内容字段；parent_gene_id 指向源 gene（外部源可能为 None）
     - 新 slug 自动追加后缀避免与 (slug, org_id) 唯一冲突
     - source 标记为 manual（fork 后是本地副本，便于后续编辑/再发布）
     """
     if target not in ("personal", "org"):
         raise BadRequestError("fork 目标必须是 personal 或 org")
 
-    source = await get_gene_by_slug(db, source_slug)
-    if not source:
-        raise NotFoundError(f"源基因不存在: {source_slug}")
-    if source.visibility != "public" or source.review_status != GeneReviewStatus.approved:
-        raise BadRequestError("仅可从公共市场已审核通过的基因 fork")
-
     attrs = resolve_target_attrs(target, user_id=user_id, org_id=org_id)
 
-    # 计算副本 slug：先尝试原 slug，冲突则追加短后缀
+    # ── 1. 优先本地 DB 查源 gene ──────────────────────────────────────
+    source = await get_gene_by_slug(db, source_slug)
+
+    if source is not None:
+        # 本地有：必须是公共可见才能 fork
+        if source.visibility != "public":
+            raise BadRequestError("仅可从公共市场的基因 fork")
+        source_name = source.name
+        source_description = source.description
+        source_short_description = source.short_description
+        source_category = source.category
+        source_tags = source.tags
+        source_icon = source.icon
+        source_version = source.version
+        source_manifest = source.manifest
+        source_dependencies = source.dependencies
+        source_synergies = source.synergies
+        source_parent_id: str | None = source.id
+    else:
+        # ── 2. 兜底：从聚合器（外部注册表）拉取 ────────────────────
+        try:
+            detail = await get_aggregator().get_skill(source_slug)
+        except Exception:
+            detail = None
+        if detail is None:
+            raise NotFoundError(f"源基因不存在: {source_slug}")
+        # 外部源默认视为公共（聚合器返回的就是外部市场内容）
+        source_name = detail.name
+        source_description = detail.description
+        source_short_description = detail.short_description
+        source_category = detail.category
+        source_tags = _json_dumps(detail.tags or [])
+        source_icon = detail.icon
+        source_version = detail.version or "1.0.0"
+        source_manifest = _json_dumps(detail.manifest or {})
+        source_dependencies = _json_dumps(detail.dependencies or [])
+        source_synergies = _json_dumps(detail.synergies or [])
+        source_parent_id = None  # 外部源没有本地 id 可指
+
+    # ── 3. 计算副本 slug：本地冲突则追加短后缀 ──────────────────────
     import uuid
 
-    new_slug = source.slug
+    new_slug = source_slug
     existing = await db.execute(
         select(Gene).where(
             Gene.slug == new_slug,
@@ -3175,23 +3216,23 @@ async def fork_gene_to_library(
     )
     if existing.scalar_one_or_none() is not None:
         suffix = uuid.uuid4().hex[:6]
-        new_slug = f"{source.slug}-fork-{suffix}"
+        new_slug = f"{source_slug}-fork-{suffix}"
 
     fork = Gene(
-        name=source.name,
+        name=source_name or source_slug,
         slug=new_slug,
-        description=source.description,
-        short_description=source.short_description,
-        category=source.category,
-        tags=source.tags,
+        description=source_description,
+        short_description=source_short_description,
+        category=source_category,
+        tags=source_tags,
         source=GeneSource.manual,
-        source_ref=f"fork:{source.slug}",
-        icon=source.icon,
-        version=source.version,
-        manifest=source.manifest,
-        dependencies=source.dependencies,
-        synergies=source.synergies,
-        parent_gene_id=source.id,
+        source_ref=f"fork:{source_slug}",
+        icon=source_icon,
+        version=source_version,
+        manifest=source_manifest,
+        dependencies=source_dependencies,
+        synergies=source_synergies,
+        parent_gene_id=source_parent_id,
         visibility=attrs["visibility"],
         org_id=attrs["org_id"],
         created_by=attrs["created_by"],
