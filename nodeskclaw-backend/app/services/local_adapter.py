@@ -96,17 +96,25 @@ class LocalAdapter(RegistryAdapter):
         page: int = 1,
         page_size: int = 20,
     ) -> RegistrySearchResult | None:
+        # 个人 library 不通过聚合器查询（personal 走 gene_service._list_genes_local 直查）
+        if visibility == "personal":
+            return RegistrySearchResult(items=[], total=0)
+
         async with self._session_factory() as db:
             base = select(Gene).where(not_deleted(Gene), Gene.is_published.is_(True))
 
             if visibility == "org_private":
                 base = base.where(Gene.visibility == "org_private", Gene.org_id == org_id)
             elif visibility == "public":
-                base = base.where(Gene.visibility == "public")
+                # 公共市场仅展示审核通过的
+                base = base.where(
+                    Gene.visibility == "public",
+                    Gene.review_status == "approved",
+                )
             elif org_id:
                 base = base.where(
                     or_(
-                        Gene.visibility == "public",
+                        and_(Gene.visibility == "public", Gene.review_status == "approved"),
                         and_(Gene.visibility == "org_private", Gene.org_id == org_id),
                     )
                 )

@@ -490,19 +490,35 @@ async def _list_genes_local(
     source: str | None = None,
     visibility: str | None = None,
     org_id: str | None = None,
+    user_id: str | None = None,
     sort: str = "popularity",
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[dict], int]:
     base = select(Gene).where(not_deleted(Gene), Gene.is_published.is_(True))
 
-    if visibility == "org_private":
+    if visibility == "personal":
+        # 个人 library：必须按 created_by 过滤；user_id 为空时返回空集（避免越权）
+        if not user_id:
+            return [], 0
+        base = base.where(Gene.visibility == "personal", Gene.created_by == user_id)
+    elif visibility == "org_private":
         base = base.where(Gene.visibility == "org_private", Gene.org_id == org_id)
     elif visibility == "public":
-        base = base.where(Gene.visibility == "public")
+        # 公共市场仅展示已审核通过的
+        base = base.where(
+            Gene.visibility == "public",
+            Gene.review_status == GeneReviewStatus.approved,
+        )
     elif org_id:
         base = base.where(
-            or_(Gene.visibility == "public", and_(Gene.visibility == "org_private", Gene.org_id == org_id))
+            or_(
+                and_(
+                    Gene.visibility == "public",
+                    Gene.review_status == GeneReviewStatus.approved,
+                ),
+                and_(Gene.visibility == "org_private", Gene.org_id == org_id),
+            )
         )
 
     if keyword:
@@ -540,10 +556,20 @@ async def list_genes(
     source: str | None = None,
     visibility: str | None = None,
     org_id: str | None = None,
+    user_id: str | None = None,
     sort: str = "popularity",
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[dict], int]:
+    # 个人 library 仅存在于本地 DB，不走聚合器（远程注册表没有个人数据）
+    if visibility == "personal":
+        return await _list_genes_local(
+            db,
+            keyword=keyword, tag=tag, category=category, source=source,
+            visibility=visibility, org_id=org_id, user_id=user_id,
+            sort=sort, page=page, page_size=page_size,
+        )
+
     aggregator = get_aggregator()
     result = await aggregator.search(
         keyword=keyword, tag=tag, category=category, source=source,
@@ -2244,19 +2270,66 @@ async def _push_approved_gene_to_registry(gene: Gene) -> None:
     logger.info("Approved gene %s: no external registry to push to", gene.slug)
 
 
-async def review_gene(db: AsyncSession, gene_id: str, action: str, reason: str | None = None) -> dict:
+async def review_gene(
+    db: AsyncSession,
+    gene_id: str,
+    action: str,
+    reason: str | None = None,
+    *,
+    current_user=None,  # app.models.user.User 对象（API 层注入；保留 None 以兼容老调用）
+) -> dict:
+    """审核 gene。
+
+    权限：当前用户必须是该 gene 所属 org 的 OrgRole.admin 或平台超管。
+    个人 library（visibility=personal）无需审核，不应进入此函数。
+
+    状态机（已简化为单步）：
+      - pending_owner / pending_admin → approved（is_published=True，且若为公共可见性则推送注册表）
+      - 任意状态 → rejected（is_published=False）
+    """
+    from fastapi import HTTPException, status
+
+    from app.models.org_membership import OrgMembership, OrgRole
+
     result = await db.execute(select(Gene).where(Gene.id == gene_id, not_deleted(Gene)))
     gene = result.scalar_one_or_none()
     if not gene:
         raise NotFoundError("基因不存在")
 
+    # ── 权限校验：超管 / 该 gene 所属 org 的 admin ────────────────────────
+    if current_user is not None:
+        allowed = False
+        if getattr(current_user, "is_super_admin", False):
+            allowed = True
+        elif gene.org_id:
+            membership = (await db.execute(
+                select(OrgMembership).where(
+                    OrgMembership.user_id == current_user.id,
+                    OrgMembership.org_id == gene.org_id,
+                    OrgMembership.role == OrgRole.admin,
+                    OrgMembership.deleted_at.is_(None),
+                )
+            )).scalar_one_or_none()
+            if membership:
+                allowed = True
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error_code": 40317,
+                    "message_key": "errors.gene.review_forbidden",
+                    "message": "您无权审核此基因（需该基因所属组织的管理员）",
+                },
+            )
+
+    # ── 状态机 ────────────────────────────────────────────────────────
     if action == "approve":
-        if gene.review_status == GeneReviewStatus.pending_owner:
-            gene.review_status = GeneReviewStatus.pending_admin
-        elif gene.review_status == GeneReviewStatus.pending_admin:
+        if gene.review_status in (GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin):
             gene.review_status = GeneReviewStatus.approved
             gene.is_published = True
-            _fire_task(_push_approved_gene_to_registry(gene))
+            # 仅公共可见性的 gene 需要推送到外部注册表
+            if gene.visibility == "public":
+                _fire_task(_push_approved_gene_to_registry(gene))
         else:
             raise BadRequestError(f"当前审核状态 '{gene.review_status}' 不可审核通过")
     elif action == "reject":
@@ -2965,6 +3038,14 @@ async def get_co_install_analysis(db: AsyncSession, min_count: int = 2) -> list[
 async def publish_gene_to_market(
     db: AsyncSession, gene_id: str, user_id: str | None = None,
 ) -> dict:
+    """将组织/个人 library 中的 gene 提交到公共市场审核。
+
+    流程：
+      1. 校验来源（仅 manual / agent 可发布）
+      2. 切换 visibility=public
+      3. review_status=pending_owner（等待组织 admin 审核）
+      4. is_published=False（审核通过前不在公共市场出现）
+    """
     result = await db.execute(
         select(Gene).where(Gene.id == gene_id, not_deleted(Gene))
     )
@@ -2975,11 +3056,12 @@ async def publish_gene_to_market(
     if gene.source not in ("manual", "agent"):
         raise ConflictError("仅 manual 或 agent 来源的技能基因可以发布到基因市场")
 
-    if gene.is_published:
-        raise ConflictError("该技能基因已发布")
+    if gene.visibility == "public" and gene.review_status == GeneReviewStatus.approved:
+        raise ConflictError("该技能基因已在公共市场上架")
 
-    gene.is_published = True
-    gene.review_status = GeneReviewStatus.pending_admin
+    gene.visibility = "public"
+    gene.is_published = False
+    gene.review_status = GeneReviewStatus.pending_owner
 
     event = EvolutionEvent(
         instance_id=gene.created_by_instance_id or "",
@@ -2992,4 +3074,129 @@ async def publish_gene_to_market(
     db.add(event)
     await db.commit()
 
-    return {"id": gene.id, "slug": gene.slug, "is_published": True, "review_status": gene.review_status}
+    return {
+        "id": gene.id,
+        "slug": gene.slug,
+        "is_published": gene.is_published,
+        "review_status": gene.review_status,
+        "visibility": gene.visibility,
+    }
+
+
+# ═══════════════════════════════════════════════════
+#  Target 解析 + Fork
+# ═══════════════════════════════════════════════════
+
+
+def resolve_target_attrs(
+    target: str,
+    *,
+    user_id: str | None,
+    org_id: str | None,
+) -> dict:
+    """根据上传/Fork 目标 (personal/org/public) 派生 gene 行的归属字段。
+
+    返回字典直接合并进 Gene(...) 构造或 GeneCreateRequest：
+      - personal：归属个人，无需审核，立即可用
+      - org：归属组织，pending_owner 等组织 admin 审核
+      - public：归属上传者所在组织（用于追溯背书方），pending_owner 等组织 admin 审核
+    """
+    if target == "personal":
+        if not user_id:
+            raise BadRequestError("personal 目标必须提供 user_id")
+        return {
+            "visibility": "personal",
+            "org_id": None,
+            "created_by": user_id,
+            "is_published": True,
+            "review_status": None,
+        }
+    if target == "org":
+        if not org_id or not user_id:
+            raise BadRequestError("org 目标必须提供 org_id 与 user_id")
+        return {
+            "visibility": "org_private",
+            "org_id": org_id,
+            "created_by": user_id,
+            "is_published": False,
+            "review_status": GeneReviewStatus.pending_owner,
+        }
+    if target == "public":
+        if not org_id or not user_id:
+            raise BadRequestError("public 目标必须提供 org_id 与 user_id（组织 admin 背书）")
+        return {
+            "visibility": "public",
+            "org_id": org_id,
+            "created_by": user_id,
+            "is_published": False,
+            "review_status": GeneReviewStatus.pending_owner,
+        }
+    raise BadRequestError(f"未知上传目标: {target}")
+
+
+async def fork_gene_to_library(
+    db: AsyncSession,
+    source_slug: str,
+    target: str,
+    *,
+    user_id: str,
+    org_id: str | None,
+) -> dict:
+    """从公共市场 fork 一份 gene 到个人/组织 library。
+
+    - 源必须是 visibility=public 且 review_status=approved
+    - 复制全部内容字段；parent_gene_id 指向源 gene
+    - 新 slug 自动追加后缀避免与 (slug, org_id) 唯一冲突
+    - source 标记为 manual（fork 后是本地副本，便于后续编辑/再发布）
+    """
+    if target not in ("personal", "org"):
+        raise BadRequestError("fork 目标必须是 personal 或 org")
+
+    source = await get_gene_by_slug(db, source_slug)
+    if not source:
+        raise NotFoundError(f"源基因不存在: {source_slug}")
+    if source.visibility != "public" or source.review_status != GeneReviewStatus.approved:
+        raise BadRequestError("仅可从公共市场已审核通过的基因 fork")
+
+    attrs = resolve_target_attrs(target, user_id=user_id, org_id=org_id)
+
+    # 计算副本 slug：先尝试原 slug，冲突则追加短后缀
+    import uuid
+
+    new_slug = source.slug
+    existing = await db.execute(
+        select(Gene).where(
+            Gene.slug == new_slug,
+            Gene.org_id == attrs["org_id"],
+            not_deleted(Gene),
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        suffix = uuid.uuid4().hex[:6]
+        new_slug = f"{source.slug}-fork-{suffix}"
+
+    fork = Gene(
+        name=source.name,
+        slug=new_slug,
+        description=source.description,
+        short_description=source.short_description,
+        category=source.category,
+        tags=source.tags,
+        source=GeneSource.manual,
+        source_ref=f"fork:{source.slug}",
+        icon=source.icon,
+        version=source.version,
+        manifest=source.manifest,
+        dependencies=source.dependencies,
+        synergies=source.synergies,
+        parent_gene_id=source.id,
+        visibility=attrs["visibility"],
+        org_id=attrs["org_id"],
+        created_by=attrs["created_by"],
+        is_published=attrs["is_published"],
+        review_status=attrs["review_status"],
+    )
+    db.add(fork)
+    await db.commit()
+    await db.refresh(fork)
+    return _gene_to_dict(fork)
