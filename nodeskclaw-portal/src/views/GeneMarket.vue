@@ -51,7 +51,8 @@ const { t, locale } = useI18n()
 const viewMode = ref<'genes' | 'templates' | 'local'>('genes')
 const keyword = ref('')
 const selectedCategory = ref<string | null>(null)
-const selectedVisibility = ref<string | null>(null)
+// 三栏归属过滤：默认进入「公共市场」；'personal' / 'org_private' / 'public'
+const selectedVisibility = ref<string>('public')
 const sortBy = ref('popularity')
 const page = ref(1)
 const pageSize = ref(12)
@@ -269,7 +270,7 @@ const featuredItems = computed(() => {
   return []
 })
 
-const hasFeatured = computed(() => featuredItems.value.length > 0 && selectedVisibility.value !== 'org_private')
+const hasFeatured = computed(() => featuredItems.value.length > 0 && selectedVisibility.value === 'public')
 
 const totalCount = computed(() => {
   if (viewMode.value === 'genes') return store.totalGenes
@@ -312,6 +313,31 @@ async function onDeleteGene(gene: GeneItem) {
     } else {
       toast.error(err?.response?.data?.message ?? t('geneMarket.deleteFailed'))
     }
+  }
+}
+
+/**
+ * 公共市场卡片：fork 一份到个人 / 组织 library。
+ * - personal：归属当前用户，无需审核
+ * - org：归属当前组织，pending_owner 等组织 admin 审核
+ */
+const forkingSlug = ref<string | null>(null)
+async function onForkGene(slug: string, target: 'personal' | 'org') {
+  forkingSlug.value = slug
+  try {
+    await store.forkGene(slug, target)
+    toast.success(
+      target === 'personal'
+        ? t('geneMarket.forkToPersonalSuccess')
+        : t('geneMarket.forkToOrgSuccess'),
+    )
+    if (selectedVisibility.value === target || (target === 'org' && selectedVisibility.value === 'org_private')) {
+      await loadData()
+    }
+  } catch {
+    toast.error(t('geneMarket.forkFailed'))
+  } finally {
+    forkingSlug.value = null
   }
 }
 
@@ -424,16 +450,17 @@ function hasNativeTools(gene: GeneItem): boolean {
 
       <!-- 基因/模板/本地上传 Tab -->
 
-        <!-- Visibility filter -->
+        <!-- 归属三栏 Tab：个人 library / 组织 library / 公共市场（仅 genes/templates 视图） -->
         <div v-if="viewMode === 'genes' || viewMode === 'templates'" class="flex gap-2 mb-4">
           <button
             v-for="vis in [
-              { value: 'org_private', key: 'geneMarket.visOrg' },
-              { value: 'public', key: 'geneMarket.visPublic' },
+              { value: 'public', key: 'geneMarket.scopePublic' },
+              { value: 'org_private', key: 'geneMarket.scopeOrg' },
+              { value: 'personal', key: 'geneMarket.scopePersonal' },
             ]"
-            :key="String(vis.value)"
+            :key="vis.value"
             :class="[
-              'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+              'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
               selectedVisibility === vis.value
                 ? 'bg-primary/10 text-primary'
                 : 'bg-muted/50 text-muted-foreground hover:text-foreground hover:bg-muted',
@@ -547,6 +574,31 @@ function hasNativeTools(gene: GeneItem): boolean {
                     </div>
                   </div>
                   <span class="shrink-0">{{ t('geneMarket.learnCount', { count: gene.install_count ?? 0 }) }}</span>
+                </div>
+
+                <!-- 公共市场卡片：Fork 到个人 / 组织 library -->
+                <div
+                  v-if="selectedVisibility === 'public'"
+                  class="flex items-center gap-2 mt-3 pt-3 border-t border-border"
+                >
+                  <button
+                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                    :disabled="forkingSlug === gene.slug"
+                    @click.stop="onForkGene(gene.slug, 'personal')"
+                  >
+                    <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
+                    <Download v-else class="w-3 h-3" />
+                    {{ t('geneMarket.forkToPersonal') }}
+                  </button>
+                  <button
+                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                    :disabled="forkingSlug === gene.slug"
+                    @click.stop="onForkGene(gene.slug, 'org')"
+                  >
+                    <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
+                    <Download v-else class="w-3 h-3" />
+                    {{ t('geneMarket.forkToOrg') }}
+                  </button>
                 </div>
               </div>
               </template>
