@@ -2814,13 +2814,12 @@ async def delete_user_gene(
       2. 当前组织的 admin（OrgMembership.role == OrgRole.admin）
       3. 超管（current_user.is_super_admin == True）
 
-    引用检查：若有 active 的 InstanceGene（deleted_at IS NULL），
-    拒绝并在响应体中返回依赖的 instance_id 列表，前端可提示用户先卸载。
+    删除策略：直接软删 gene 本身，并级联软删所有 active 的 InstanceGene 引用，
+    使依赖该 gene 的 agent 实例也立即看不到该 skill；前端无需先卸载。
 
     Raises:
         NotFoundError: gene 不存在或已软删
-        HTTPException 403:   无权删除
-        HTTPException 409:   有实例正在引用该 gene
+        HTTPException 403: 无权删除
     """
     from fastapi import HTTPException, status
 
@@ -2865,29 +2864,23 @@ async def delete_user_gene(
             },
         )
 
-    # ── 3. 引用检查：有 active instance 引用时拒绝 ─────────────────────────
-    refs = (await db.execute(
-        select(InstanceGene.instance_id).where(
+    # ── 3. 级联软删所有 active InstanceGene 引用 ─────────────────────────
+    # 查询所有依赖该 gene 的 active 实例安装记录
+    refs_result = await db.execute(
+        select(InstanceGene).where(
             InstanceGene.gene_id == gene_id,
             InstanceGene.deleted_at.is_(None),
         )
-    )).scalars().all()
+    )
+    refs = refs_result.scalars().all()
+    cascaded_count = len(refs)
+    for ig in refs:
+        ig.soft_delete()
 
-    if refs:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error_code": 40920,
-                "message_key": "errors.gene.has_instance_refs",
-                "message": f"该基因被 {len(refs)} 个实例引用，请先卸载",
-                "instance_ids": list(refs),
-            },
-        )
-
-    # ── 4. 软删除 ──────────────────────────────────────────────────────────
+    # ── 4. 软删 gene 本身 ───────────────────────────────────────────────────
     gene.soft_delete()
     await db.commit()
-    return {"deleted": True, "id": gene_id}
+    return {"deleted": True, "id": gene_id, "cascaded_instance_genes": cascaded_count}
 
 
 async def update_genome(db: AsyncSession, genome_id: str, req: UpdateGenomeRequest) -> dict:

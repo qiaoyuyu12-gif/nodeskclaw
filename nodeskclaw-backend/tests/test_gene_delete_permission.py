@@ -1,15 +1,15 @@
-"""验证 delete_user_gene 的权限校验与引用检查逻辑（单元测试，mock db）。
+"""验证 delete_user_gene 的权限校验与级联软删 InstanceGene 的逻辑（单元测试，mock db）。
 
 测试矩阵：
   - 非上传者、非 org admin、非超管 → 403
   - 超管 → 允许（软删成功）
   - 上传者本人 → 允许（软删成功）
-  - 有 active InstanceGene 引用时 → 409
+  - 有 active InstanceGene 引用时 → 级联软删，不再返回 409
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -39,19 +39,30 @@ class _FakeGene:
         self._deleted = True
 
 
+class _FakeInstanceGene:
+    """模拟 InstanceGene 对象，提供 soft_delete 方法。"""
+
+    def __init__(self, instance_id: str):
+        self.instance_id = instance_id
+        self._deleted = False
+
+    def soft_delete(self) -> None:
+        self._deleted = True
+
+
 # ─── 辅助：构造 mock AsyncSession ─────────────────────────────────────────────
 
-def _make_db(gene: _FakeGene | None, instance_refs: list[str], membership=None) -> AsyncMock:
+def _make_db(gene: _FakeGene | None, instance_refs: list[_FakeInstanceGene], membership=None) -> AsyncMock:
     """构造一个 AsyncMock 的 db session，按查询顺序返回预设结果。
 
     查询顺序：
       1. select(Gene) → gene
       2. select(OrgMembership) → membership（若 gene.org_id 非空）
-      3. select(InstanceGene.instance_id) → instance_refs
+      3. select(InstanceGene) → instance_refs（InstanceGene 行对象列表）
     """
     db = AsyncMock()
+    db.commit = AsyncMock()
 
-    # 每次 db.execute() 依次返回不同的 mock 结果
     execute_results: list[MagicMock] = []
 
     # 第 1 次：Gene 查询
@@ -66,7 +77,7 @@ def _make_db(gene: _FakeGene | None, instance_refs: list[str], membership=None) 
             membership_result.scalar_one_or_none.return_value = membership
             execute_results.append(membership_result)
 
-        # 第 3 次（若到达引用检查阶段）：InstanceGene 查询
+        # 第 3 次（若到达级联软删阶段）：InstanceGene 查询
         refs_result = MagicMock()
         refs_result.scalars.return_value.all.return_value = instance_refs
         execute_results.append(refs_result)
@@ -105,7 +116,7 @@ async def test_delete_gene_allowed_super_admin():
 
     result = await delete_user_gene(db, "gene-2", current_user=user)
 
-    assert result == {"deleted": True, "id": "gene-2"}
+    assert result == {"deleted": True, "id": "gene-2", "cascaded_instance_genes": 0}
     assert gene._deleted is True
 
 
@@ -120,27 +131,26 @@ async def test_delete_gene_allowed_uploader():
 
     result = await delete_user_gene(db, "gene-3", current_user=user)
 
-    assert result == {"deleted": True, "id": "gene-3"}
+    assert result == {"deleted": True, "id": "gene-3", "cascaded_instance_genes": 0}
     assert gene._deleted is True
 
 
 @pytest.mark.asyncio
-async def test_delete_gene_conflict_with_active_refs():
-    """gene 被 active 实例引用时 → HTTPException 409。"""
+async def test_delete_gene_cascades_instance_refs():
+    """有 active 实例引用时：级联软删 InstanceGene，不再返回 409。"""
     from app.services.gene_service import delete_user_gene
 
     gene = _FakeGene("gene-4", created_by="uploader-id", org_id=None)
     user = _FakeUser("uploader-id", is_super_admin=False)
-    # 模拟两个 instance 引用
-    db = _make_db(gene, instance_refs=["inst-a", "inst-b"])
+    refs = [_FakeInstanceGene("inst-a"), _FakeInstanceGene("inst-b")]
+    db = _make_db(gene, instance_refs=refs)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await delete_user_gene(db, "gene-4", current_user=user)
+    result = await delete_user_gene(db, "gene-4", current_user=user)
 
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail["error_code"] == 40920
-    assert "inst-a" in exc_info.value.detail["instance_ids"]
-    assert "inst-b" in exc_info.value.detail["instance_ids"]
+    assert result == {"deleted": True, "id": "gene-4", "cascaded_instance_genes": 2}
+    assert gene._deleted is True
+    # 所有引用 InstanceGene 都被一起软删
+    assert all(ref._deleted for ref in refs)
 
 
 @pytest.mark.asyncio
