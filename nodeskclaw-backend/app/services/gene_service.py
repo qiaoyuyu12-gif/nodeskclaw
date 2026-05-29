@@ -606,6 +606,7 @@ async def get_gene_by_slug(db: AsyncSession, slug: str) -> Gene | None:
 async def create_gene(
     db: AsyncSession, req: GeneCreateRequest, user_id: str | None = None, org_id: str | None = None,
     visibility: str | None = None,
+    review_status: str | None = None,
 ) -> dict:
     existing = await get_gene_by_slug(db, req.slug)
     if existing:
@@ -635,6 +636,7 @@ async def create_gene(
         is_featured=req.is_featured,
         is_published=req.is_published,
         visibility=visibility or req.visibility,
+        review_status=review_status,
         created_by=user_id,
         org_id=org_id,
     )

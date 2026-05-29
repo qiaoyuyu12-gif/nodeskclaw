@@ -3,8 +3,6 @@
 import logging
 import re
 
-from typing import List
-
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +17,7 @@ from app.schemas.gene import (
     ApplyGenomeRequest,
     CreateGeneRequest,
     EffectivenessRequest,
+    ForkGeneRequest,
     GeneCreateRequest,
     GenomeCreateRequest,
     InstallGeneRequest,
@@ -30,6 +29,7 @@ from app.schemas.gene import (
     UninstallGeneRequest,
     UpdateGeneRequest,
     UpdateGenomeRequest,
+    UploadTarget,
 )
 from app.services import gene_service
 
@@ -84,6 +84,7 @@ async def list_genes(
     genes, total = await gene_service.list_genes(
         db, keyword=keyword, tag=tag, category=category, source=source,
         visibility=visibility, org_id=current_user.current_org_id,
+        user_id=current_user.id,
         sort=sort, page=page, page_size=page_size,
     )
     return PaginatedResponse(
@@ -113,23 +114,29 @@ async def featured_genes(
 
 @router.post("/genes/upload-folder", response_model=ApiResponse[dict])
 async def upload_gene_folder(
-    files: List[UploadFile] = File(...),
+    files: list[UploadFile] = File(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
     overwrite: bool = Query(False, description="是否覆盖已存在的同名基因"),
+    target: UploadTarget = Query(
+        "personal",
+        description="上传目标：personal(个人 library) / org(组织 library, 需 admin 审核) / public(公共市场, 需 admin 审核)",
+    ),
 ):
     """通过文件夹（多文件 multipart）上传本地 Gene。
 
-    将 SKILL.md + Python 脚本 + assets + references 解析后
-    直接创建 Gene 记录（source=manual, is_published=True），
-    manifest 存储所有内联文件内容供 agent 使用。
+    根据 target 派生归属字段：
+      - personal：visibility=personal，归属当前用户，立即可用
+      - org：visibility=org_private，归属当前组织，pending_owner 等审
+      - public：visibility=public，归属当前组织，pending_owner 等审
 
     前端使用 <input webkitdirectory> 选择文件夹后上传。
     """
     from app.services import skill_package_service
 
-    if not current_user.current_org_id:
-        raise BadRequestError("用户未加入组织")
+    # personal 目标不需要 org，其他目标需要组织上下文
+    if target != "personal" and not current_user.current_org_id:
+        raise BadRequestError("上传到组织或公共市场前需先加入组织")
 
     # 收集文件（与 skills.py upload-folder 相同的前缀剥离逻辑）
     raw_entries: list[tuple[str, UploadFile]] = []
@@ -159,14 +166,21 @@ async def upload_gene_folder(
     skill_content = skill_package_service._find_skill_md_in_files(files_dict)
     skill_raw = skill_content.decode("utf-8") if skill_content else ""
 
+    # 根据 target 派生 visibility / org_id / created_by / is_published / review_status
+    attrs = gene_service.resolve_target_attrs(
+        target,
+        user_id=current_user.id,
+        org_id=current_user.current_org_id,
+    )
+
     gene_req = GeneCreateRequest(
         name=meta["name"],
         slug=meta["name"].lower().replace(" ", "-")[:64],
         description=meta.get("description", ""),
         short_description=meta.get("description", "")[:256] if meta.get("description") else None,
         source="manual",
-        is_published=True,
-        visibility="org_private",
+        is_published=attrs["is_published"],
+        visibility=attrs["visibility"],
         overwrite=overwrite,
         manifest={
             "skill": {
@@ -180,9 +194,10 @@ async def upload_gene_folder(
 
     gene_data = await gene_service.create_gene(
         db, gene_req,
-        user_id=current_user.id,
-        org_id=current_user.current_org_id,
-        visibility=gene_req.visibility,
+        user_id=attrs["created_by"],
+        org_id=attrs["org_id"],
+        visibility=attrs["visibility"],
+        review_status=attrs["review_status"],
     )
     return ApiResponse(data=gene_data)
 
@@ -643,9 +658,12 @@ async def admin_review_gene(
     gene_id: str,
     req: ReviewRequest,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    result = await gene_service.review_gene(db, gene_id, req.action, req.reason)
+    # 权限校验下沉到 service：仅 gene 所属 org 的 OrgRole.admin 或平台超管
+    result = await gene_service.review_gene(
+        db, gene_id, req.action, req.reason, current_user=current_user,
+    )
     return ApiResponse(data=result)
 
 
@@ -710,6 +728,16 @@ async def create_manual_gene(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # 按 target 派生归属字段（默认 personal）
+    if req.target != "personal" and not current_user.current_org_id:
+        raise BadRequestError("上传到组织或公共市场前需先加入组织")
+
+    attrs = gene_service.resolve_target_attrs(
+        req.target,
+        user_id=current_user.id,
+        org_id=current_user.current_org_id,
+    )
+
     gene_req = GeneCreateRequest(
         name=req.name,
         slug=req.slug,
@@ -717,13 +745,43 @@ async def create_manual_gene(
         short_description=req.short_description,
         category=req.category,
         source="manual",
-        is_published=False,
+        is_published=attrs["is_published"],
+        visibility=attrs["visibility"],
         manifest={"skill": {"name": req.slug, "content": req.skill_content}},
     )
     gene_data = await gene_service.create_gene(
-        db, gene_req, user_id=current_user.id, org_id=current_user.current_org_id,
+        db, gene_req,
+        user_id=attrs["created_by"],
+        org_id=attrs["org_id"],
+        visibility=attrs["visibility"],
+        review_status=attrs["review_status"],
     )
-    await gene_service.install_gene_prerestart(req.instance_id, req.slug)
+    # 仅个人 library 时立即同步到 agent 实例；其他目标等审核通过后由用户自行 install
+    if req.target == "personal":
+        await gene_service.install_gene_prerestart(req.instance_id, req.slug)
+    return ApiResponse(data=gene_data)
+
+
+@router.post("/genes/{gene_slug}/fork")
+async def fork_gene(
+    gene_slug: str,
+    req: ForkGeneRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """从公共市场 fork 一份 gene 到个人 / 组织 library。
+
+    - target=personal：副本归属当前用户，无需审核
+    - target=org：副本归属当前组织，pending_owner 等组织 admin 审核
+    """
+    if req.target == "org" and not current_user.current_org_id:
+        raise BadRequestError("fork 到组织 library 前需先加入组织")
+
+    gene_data = await gene_service.fork_gene_to_library(
+        db, gene_slug, req.target,
+        user_id=current_user.id,
+        org_id=current_user.current_org_id,
+    )
     return ApiResponse(data=gene_data)
 
 
