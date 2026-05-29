@@ -55,6 +55,18 @@ type ViewState = 'list' | 'gene-detail' | 'genome-detail'
 const viewState = ref<ViewState>('list')
 const viewMode = ref<'genes' | 'genomes'>('genes')
 
+// ── 三层归属 Tab：个人 library / 组织 library / 公共市场 ──
+// 仅 genes 视图支持；genome 暂不分层
+type ScopeMode = 'personal' | 'org' | 'public'
+const scopeMode = ref<ScopeMode>('public')
+
+// 后端 /genes 参数：scope -> visibility
+const visibilityForScope = computed<string>(() => {
+  if (scopeMode.value === 'personal') return 'personal'
+  if (scopeMode.value === 'org') return 'org_private'
+  return 'public'
+})
+
 // ── List state (independent from store.loading) ─
 
 const dialogLoading = ref(false)
@@ -99,6 +111,7 @@ async function loadGenes() {
         keyword: keyword.value || undefined,
         tag: selectedTag.value || undefined,
         category: selectedCategory.value || undefined,
+        visibility: visibilityForScope.value,
         sort: sortBy.value,
         page: page.value,
         page_size: pageSize,
@@ -248,6 +261,24 @@ async function handleApplyGenome(genomeId: string) {
   }
 }
 
+// 公共市场卡片：fork 到个人 / 组织 library（不影响 agent 实例安装）
+const forking = ref<string | null>(null)
+async function handleForkGene(slug: string, target: 'personal' | 'org') {
+  forking.value = slug
+  try {
+    await store.forkGene(slug, target)
+    toast.success(
+      target === 'personal'
+        ? t('geneMarket.forkToPersonalSuccess')
+        : t('geneMarket.forkToOrgSuccess'),
+    )
+  } catch {
+    toast.error(t('geneMarket.forkFailed'))
+  } finally {
+    forking.value = null
+  }
+}
+
 // ── Helpers ─────────────────────────────────────
 
 const geneMetaKeyMap: Record<string, string> = {
@@ -393,6 +424,7 @@ watch(() => props.modelValue, async (open) => {
   if (open) {
     viewState.value = 'list'
     viewMode.value = 'genes'
+    scopeMode.value = 'public'
     keyword.value = ''
     selectedTag.value = null
     selectedCategory.value = null
@@ -416,7 +448,7 @@ watch(keyword, () => {
   }, 300)
 })
 
-watch([viewMode, selectedTag, selectedCategory, sortBy], () => {
+watch([viewMode, scopeMode, selectedTag, selectedCategory, sortBy], () => {
   page.value = 1
   loadData()
 })
@@ -468,7 +500,7 @@ onUnmounted(() => {
             <div class="flex h-full min-h-0 flex-col">
               <div class="flex-1 min-h-0 overflow-y-auto">
                 <!-- Tabs -->
-                <div class="flex items-center gap-2 mb-4">
+                <div class="flex items-center gap-2 mb-3">
                   <button
                     :class="['px-4 py-2 rounded-lg text-sm font-medium transition-colors', viewMode === 'genes' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-muted']"
                     @click="viewMode = 'genes'"
@@ -480,6 +512,28 @@ onUnmounted(() => {
                     @click="viewMode = 'genomes'"
                   >
                     {{ t('geneMarket.tabGenomes') }}
+                  </button>
+                </div>
+
+                <!-- Scope tabs: 个人 library / 组织 library / 公共市场（仅 genes 视图） -->
+                <div v-if="viewMode === 'genes'" class="flex items-center gap-1 mb-4 p-1 rounded-lg bg-muted/40 w-fit">
+                  <button
+                    :class="['px-3 py-1.5 rounded-md text-xs font-medium transition-colors', scopeMode === 'public' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground']"
+                    @click="scopeMode = 'public'"
+                  >
+                    {{ t('geneMarket.scopePublic') }}
+                  </button>
+                  <button
+                    :class="['px-3 py-1.5 rounded-md text-xs font-medium transition-colors', scopeMode === 'org' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground']"
+                    @click="scopeMode = 'org'"
+                  >
+                    {{ t('geneMarket.scopeOrg') }}
+                  </button>
+                  <button
+                    :class="['px-3 py-1.5 rounded-md text-xs font-medium transition-colors', scopeMode === 'personal' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground']"
+                    @click="scopeMode = 'personal'"
+                  >
+                    {{ t('geneMarket.scopePersonal') }}
                   </button>
                 </div>
 
@@ -562,6 +616,28 @@ onUnmounted(() => {
                           </div>
                         </div>
                         <span class="shrink-0">{{ t('geneMarket.learnCount', { count: gene.install_count ?? 0 }) }}</span>
+                      </div>
+
+                      <!-- Fork 按钮：仅公共市场卡片显示，点击不触发详情打开 -->
+                      <div v-if="scopeMode === 'public'" class="flex items-center gap-2 mt-3 pt-3 border-t border-border">
+                        <button
+                          class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                          :disabled="forking === gene.slug"
+                          @click.stop="handleForkGene(gene.slug, 'personal')"
+                        >
+                          <Loader2 v-if="forking === gene.slug" class="w-3 h-3 animate-spin" />
+                          <Download v-else class="w-3 h-3" />
+                          {{ t('geneMarket.forkToPersonal') }}
+                        </button>
+                        <button
+                          class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                          :disabled="forking === gene.slug"
+                          @click.stop="handleForkGene(gene.slug, 'org')"
+                        >
+                          <Loader2 v-if="forking === gene.slug" class="w-3 h-3 animate-spin" />
+                          <Download v-else class="w-3 h-3" />
+                          {{ t('geneMarket.forkToOrg') }}
+                        </button>
                       </div>
                     </div>
                   </div>

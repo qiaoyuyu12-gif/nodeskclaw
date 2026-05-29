@@ -65,6 +65,8 @@ const localDragOver = ref(false)
 const localFileInputRef = ref<HTMLInputElement>()
 const selectedLocalFiles = ref<string[]>([])
 const localFolderInputRef = ref<HTMLInputElement>()
+// 上传目标库：默认 personal（个人 library，无需审核），可选 org / public
+const uploadTarget = ref<'personal' | 'org' | 'public'>('personal')
 
 async function handleLocalFile(file: File) {
   localError.value = '请使用文件夹上传功能'
@@ -81,8 +83,12 @@ async function handleLocalFolder() {
   localError.value = null
   localSuccess.value = null
   try {
-    await skillApi.uploadFolder(input.files)
-    localSuccess.value = `本地基因上传成功`
+    await skillApi.uploadFolder(input.files, false, uploadTarget.value)
+    localSuccess.value = uploadTarget.value === 'personal'
+      ? '已上传到个人技能 library'
+      : uploadTarget.value === 'org'
+        ? '已提交到组织技能 library，等待组织管理员审核'
+        : '已提交到公共市场，等待组织管理员审核'
     showLocalUpload.value = false
     selectedLocalFiles.value = []
     await loadData()
@@ -96,7 +102,7 @@ async function handleLocalFolder() {
         if (ok) {
           // 重新上传，携带覆盖参数
           try {
-            await skillApi.uploadFolder(input.files, true)
+            await skillApi.uploadFolder(input.files, true, uploadTarget.value)
             localSuccess.value = `基因已覆盖`
             showLocalUpload.value = false
             selectedLocalFiles.value = []
@@ -620,6 +626,50 @@ function hasNativeTools(gene: GeneItem): boolean {
                     <span class="text-gray-600">{{ path }}</span>
                   </li>
                 </ul>
+
+                <!-- 上传目标库选择：personal 无需审核，org/public 需组织 admin 审核 -->
+                <div class="mt-3 rounded-lg bg-white border border-gray-200 p-3">
+                  <p class="text-xs font-medium text-gray-600 mb-2">上传到：</p>
+                  <div class="flex flex-col gap-2">
+                    <label class="flex items-start gap-2 cursor-pointer text-xs">
+                      <input
+                        v-model="uploadTarget"
+                        type="radio"
+                        value="personal"
+                        class="mt-0.5"
+                      />
+                      <span class="text-gray-700">
+                        <span class="font-medium">个人技能 library</span>
+                        <span class="text-gray-500"> — 仅自己可见，立即可用</span>
+                      </span>
+                    </label>
+                    <label class="flex items-start gap-2 cursor-pointer text-xs">
+                      <input
+                        v-model="uploadTarget"
+                        type="radio"
+                        value="org"
+                        class="mt-0.5"
+                      />
+                      <span class="text-gray-700">
+                        <span class="font-medium">组织技能 library</span>
+                        <span class="text-gray-500"> — 组织内可见，需组织管理员审核</span>
+                      </span>
+                    </label>
+                    <label class="flex items-start gap-2 cursor-pointer text-xs">
+                      <input
+                        v-model="uploadTarget"
+                        type="radio"
+                        value="public"
+                        class="mt-0.5"
+                      />
+                      <span class="text-gray-700">
+                        <span class="font-medium">公共市场</span>
+                        <span class="text-gray-500"> — 所有用户可见，需组织管理员审核</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
                 <div class="mt-3 flex justify-end">
                   <button
                     :disabled="localUploading"

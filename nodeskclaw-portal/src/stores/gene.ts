@@ -36,7 +36,7 @@ export interface GeneItem {
   synergies?: string[]
   review_status?: string
   is_published: boolean
-  visibility?: string
+  visibility?: 'public' | 'org_private' | 'personal' | string
   source_registry?: string
   source_registry_name?: string
   created_by?: string  // 上传者用户 ID,用于前端判断删除权限(本人/超管)
@@ -379,6 +379,16 @@ export const useGeneStore = defineStore('gene', () => {
     return res.data.data
   }
 
+  /**
+   * 从公共市场 fork 一份 gene 到个人/组织 library。
+   * - target='personal'：归属当前用户，立即可用
+   * - target='org'：归属当前组织，pending_owner 等组织 admin 审核
+   */
+  async function forkGene(geneSlug: string, target: 'personal' | 'org'): Promise<GeneItem> {
+    const res = await api.post(`/genes/${geneSlug}/fork`, { target })
+    return res.data.data
+  }
+
   // ── Instance Templates ──────────────────────────
 
   async function fetchTemplates(params: { keyword?: string; visibility?: string; page?: number; page_size?: number } = {}) {
@@ -543,6 +553,7 @@ export const useGeneStore = defineStore('gene', () => {
     triggerCreation,
     createManualGene,
     publishGeneToMarket,
+    forkGene,
     fetchEvolutionLog,
 
     fetchGeneStats,

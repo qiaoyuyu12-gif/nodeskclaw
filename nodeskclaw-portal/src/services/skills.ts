@@ -83,20 +83,27 @@ export const kbApi = {
   remove: (id: string) => api.delete(`/knowledge-bases/${id}`),
 }
 
+/** 上传目标：个人 library / 组织 library / 公共市场 */
+export type UploadTarget = 'personal' | 'org' | 'public'
+
 export const skillApi = {
   /**
    * 文件夹上传：统一走 /genes/upload-folder 端点。
    * 前端使用 webkitdirectory 选择文件夹后上传，
    * 每个文件使用 webkitRelativePath 作为 filename（保留目录结构），
    * 后端自动剥离顶层文件夹名并序列化为 manifest JSON。
+   *
+   * @param target 上传目标库（默认 personal，进入用户个人 library 立即可用）
    */
-  uploadFolder: (files: FileList, overwrite = false) => {
+  uploadFolder: (files: FileList, overwrite = false, target: UploadTarget = 'personal') => {
     const form = new FormData()
     for (const file of Array.from(files)) {
       const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
       form.append('files', file, relPath)
     }
-    const url = overwrite ? `/genes/upload-folder?overwrite=true` : '/genes/upload-folder'
+    const params = new URLSearchParams({ target })
+    if (overwrite) params.set('overwrite', 'true')
+    const url = `/genes/upload-folder?${params.toString()}`
     return api.post<{ data: Skill }>(url, form).then((r) => r.data.data)
   },
 
