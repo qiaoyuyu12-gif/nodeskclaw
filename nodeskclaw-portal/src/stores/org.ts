@@ -131,6 +131,14 @@ export const useOrgStore = defineStore('org', () => {
     try {
       const res = await api.get('/billing/usage')
       usage.value = res.data.data
+    } catch (err: unknown) {
+      // billing 未实现时后端会返回 404；前端将 usage 置空，由模板隐藏用量卡片，避免页面崩溃
+      const status = (err as { response?: { status?: number } })?.response?.status
+      if (status === 404) {
+        usage.value = null
+      } else {
+        throw err
+      }
     } finally {
       loading.value = false
     }
