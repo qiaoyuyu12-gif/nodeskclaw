@@ -6,15 +6,13 @@ import { useAuthStore } from '@/stores/auth'
 import { getCurrentLocale, setCurrentLocale } from '@/i18n'
 import { resolveApiErrorMessage } from '@/i18n/error'
 import { useConfirm } from '@/composables/useConfirm'
-import { useEdition } from '@/composables/useFeature'
-import { Loader2, Building2, BrainCircuit, Rocket, Target, KeyRound, MessageSquareCode, Eye, EyeOff, ExternalLink } from 'lucide-vue-next'
+import { Loader2, Building2, BrainCircuit, Rocket, Target, KeyRound, MessageSquareCode, Eye, EyeOff } from 'lucide-vue-next'
 import LocaleSelect from '@/components/shared/LocaleSelect.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
 const { t } = useI18n()
 const { confirm } = useConfirm()
-const { isEE } = useEdition()
 
 const loading = ref(false)
 const error = ref('')
@@ -48,12 +46,25 @@ const canSubmitCode = computed(() => {
   return isEmailInput(codeForm.value.account) && codeForm.value.code.length >= 4
 })
 
+// 统一处理"账号未注册"场景：弹出对话框询问是否跳转注册页
+// 返回 true 表示已识别为未注册错误（调用方应短路），false 表示其他错误（继续走通用错误提示）
+async function handleNotRegisteredError(detail: any, prefillAccount: string): Promise<boolean> {
+  if (detail?.message_key !== 'errors.auth.email_not_registered') return false
+  const confirmed = await confirm({
+    title: t('auth.notRegistered.title'),
+    description: t('auth.notRegistered.description'),
+    confirmText: t('auth.notRegistered.goRegister'),
+    cancelText: t('auth.notRegistered.cancel'),
+  })
+  if (confirmed) {
+    // 跳转注册页时把账号带过去，避免用户重新输入
+    router.push({ path: '/register', query: { email: prefillAccount } })
+  }
+  return true
+}
+
 async function handleAccountSubmit() {
   if (!canSubmitAccount.value || loading.value) return
-  if (isEE.value && isNonWhitelistedEmail(accountForm.value.account)) {
-    await showWaitlistDialog()
-    return
-  }
   loading.value = true
   try {
     await authStore.accountLogin(accountForm.value.account, accountForm.value.password)
@@ -61,10 +72,8 @@ async function handleAccountSubmit() {
     router.replace('/')
   } catch (e: any) {
     const detail = e?.response?.data?.detail
-    if (isEE.value && detail?.message_key === 'errors.auth.email_domain_not_allowed') {
-      await showWaitlistDialog()
-      return
-    }
+    // 账号未注册 -> 弹"是否去注册"对话框
+    if (await handleNotRegisteredError(detail, accountForm.value.account)) return
     error.value = resolveApiErrorMessage(e, t('auth.loginFailed'))
   } finally {
     loading.value = false
@@ -75,10 +84,6 @@ async function handleSendCode() {
   if (!codeForm.value.account || codeSending.value || codeCountdown.value > 0) return
   if (!isEmailInput(codeForm.value.account)) {
     error.value = t('auth.codeEmailOnly')
-    return
-  }
-  if (isEE.value && isNonWhitelistedEmail(codeForm.value.account)) {
-    await showWaitlistDialog()
     return
   }
   codeSending.value = true
@@ -94,10 +99,7 @@ async function handleSendCode() {
     }, 1000)
   } catch (e: any) {
     const detail = e?.response?.data?.detail
-    if (isEE.value && detail?.message_key === 'errors.auth.email_domain_not_allowed') {
-      await showWaitlistDialog()
-      return
-    }
+    if (await handleNotRegisteredError(detail, codeForm.value.account)) return
     error.value = resolveApiErrorMessage(e, t('auth.sendFailed'))
   } finally {
     codeSending.value = false
@@ -110,10 +112,6 @@ async function handleCodeSubmit() {
     error.value = t('auth.codeEmailOnly')
     return
   }
-  if (isEE.value && isNonWhitelistedEmail(codeForm.value.account)) {
-    await showWaitlistDialog()
-    return
-  }
   loading.value = true
   try {
     await authStore.verificationCodeLogin(codeForm.value.account, codeForm.value.code)
@@ -121,33 +119,10 @@ async function handleCodeSubmit() {
     router.replace('/')
   } catch (e: any) {
     const detail = e?.response?.data?.detail
-    if (isEE.value && detail?.message_key === 'errors.auth.email_domain_not_allowed') {
-      await showWaitlistDialog()
-      return
-    }
+    if (await handleNotRegisteredError(detail, codeForm.value.account)) return
     error.value = resolveApiErrorMessage(e, t('auth.loginFailed'))
   } finally {
     loading.value = false
-  }
-}
-
-const WAITLIST_URL = 'https://nodeskai.feishu.cn/share/base/form/shrcnKfwXbiUOenm73jlpElu1hg'
-
-function isNonWhitelistedEmail(input: string): boolean {
-  if (!input.includes('@')) return false
-  const domain = input.split('@').pop()?.toLowerCase()
-  return domain !== 'nodeskai.com'
-}
-
-async function showWaitlistDialog() {
-  const confirmed = await confirm({
-    title: t('auth.waitlist.title'),
-    description: t('auth.waitlist.description'),
-    confirmText: t('auth.waitlist.joinButton'),
-    cancelText: t('auth.waitlist.cancelButton'),
-  })
-  if (confirmed) {
-    window.open(WAITLIST_URL, '_blank')
   }
 }
 
@@ -399,20 +374,6 @@ watch(activeTab, () => { error.value = '' })
               {{ t('auth.register') }}
             </router-link>
           </p>
-
-        <!-- Waitlist 入口 (EE-only) -->
-        <a
-          v-if="isEE"
-          :href="WAITLIST_URL"
-          target="_blank"
-          class="block rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-center transition-all hover:bg-primary/10 hover:border-primary/40 hover:shadow-md hover:shadow-primary/5 group"
-        >
-          <p class="text-sm font-medium text-foreground">{{ t('auth.waitlist.bannerTitle') }}</p>
-          <p class="text-xs text-muted-foreground mt-0.5 flex items-center justify-center gap-1">
-            {{ t('auth.waitlist.bannerAction') }}
-            <ExternalLink class="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
-          </p>
-        </a>
 
         <!-- 底部 -->
         <div class="pt-4 text-center">
