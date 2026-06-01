@@ -81,6 +81,38 @@ def test_resolve_target_attrs_unknown():
         gene_service.resolve_target_attrs("invalid", user_id="u-1", org_id="org-1")
 
 
+# ─── resolve_target_attrs：bypass_review（admin/超管 自上传免审） ──────
+
+
+def test_resolve_target_attrs_org_bypass_review():
+    """org 目标 + bypass_review=True → 直接 approved + is_published=True。"""
+    attrs = gene_service.resolve_target_attrs(
+        "org", user_id="u-1", org_id="org-1", bypass_review=True,
+    )
+    assert attrs["visibility"] == "org_private"
+    assert attrs["review_status"] == GeneReviewStatus.approved
+    assert attrs["is_published"] is True
+
+
+def test_resolve_target_attrs_public_bypass_review():
+    """public 目标 + bypass_review=True → 直接 approved + 公共可见。"""
+    attrs = gene_service.resolve_target_attrs(
+        "public", user_id="u-1", org_id="org-1", bypass_review=True,
+    )
+    assert attrs["visibility"] == "public"
+    assert attrs["review_status"] == GeneReviewStatus.approved
+    assert attrs["is_published"] is True
+
+
+def test_resolve_target_attrs_personal_ignores_bypass():
+    """personal 本身就免审，bypass_review 不影响其语义。"""
+    attrs = gene_service.resolve_target_attrs(
+        "personal", user_id="u-1", org_id=None, bypass_review=True,
+    )
+    assert attrs["review_status"] is None
+    assert attrs["is_published"] is True
+
+
 # ─── review_gene 权限矩阵 ────────────────────────────────────────────
 
 
@@ -202,11 +234,15 @@ def _make_fork_db(
     *,
     membership=None,
     has_slug_conflict: bool = False,
+    is_target_admin: bool = False,
+    has_target_org: bool = True,
 ) -> MagicMock:
     """构造 fork 流程所需的 mock db。
 
     调用顺序（取决于路径）：
-      1. select(Gene) by slug → source
+      0. is_user_admin_of_org → OrgMembership(user, target_org, role=admin)
+         仅当非超管且 effective_org_id 不为 None 时才会真的 SQL 查询
+      1. select(Gene) by id → source
       2. （仅当非超管且源为 org scope 时）select(OrgMembership) → membership
       3. select(Gene) for slug 冲突 → existing
     db.add 为同步 MagicMock；db.commit / db.refresh 为 AsyncMock。
@@ -214,6 +250,13 @@ def _make_fork_db(
     db = MagicMock()
 
     side_effects: list[MagicMock] = []
+
+    # 0. is_user_admin_of_org 查询（target_org 存在 + 非超管才走到 SQL）
+    if has_target_org:
+        admin_result = MagicMock()
+        admin_result.scalar_one_or_none.return_value = MagicMock() if is_target_admin else None
+        side_effects.append(admin_result)
+
     # 1. 源 gene 查询
     src_result = MagicMock()
     src_result.scalar_one_or_none.return_value = source
@@ -383,7 +426,7 @@ async def test_fork_public_to_personal_anyone():
         visibility="public",
         slug="popular-skill",
     )
-    db = _make_fork_db(source)
+    db = _make_fork_db(source, has_target_org=False)
     # 与源不同组、非本人，仍可 fork（公共可见）
     user = _FakeUser("any-user", current_org_id=None)
 
@@ -405,6 +448,63 @@ async def test_fork_rejects_invalid_target():
         await gene_service.fork_gene_to_library(
             db, "skill-x", "invalid", current_user=user,
         )
+
+
+@pytest.mark.asyncio
+async def test_fork_org_admin_bypasses_review_to_org():
+    """目标 org 的 admin fork 到该 org → 直接 approved + is_published=True。"""
+    source = _FakeGene(
+        gene_id="g-public",
+        org_id="org-source",
+        created_by="some-uploader",
+        visibility="public",
+        slug="popular",
+    )
+    db = _make_fork_db(source, is_target_admin=True)  # 当前用户是 org-target 的 admin
+    user = _FakeUser("admin-id", current_org_id="org-target")
+
+    result = await gene_service.fork_gene_to_library(
+        db, "popular", "org", current_user=user,
+    )
+
+    assert result["visibility"] == "org_private"
+    assert result["org_id"] == "org-target"
+    assert result["review_status"] == GeneReviewStatus.approved
+    assert result["is_published"] is True
+
+
+@pytest.mark.asyncio
+async def test_fork_super_admin_bypasses_review_to_public():
+    """平台超管 fork 到 public → 免审，直接 approved。"""
+    source = _FakeGene(
+        gene_id="g-org",
+        org_id="org-A",
+        created_by="some-uploader",
+        visibility="org_private",
+        slug="team-skill",
+    )
+    # 超管路径：is_user_admin_of_org 在最前直接返回 True，不走 SQL；
+    # 但仍会触发后续源查询、（org 源）成员查询、冲突查询。超管路径下源
+    # 校验也直接放行（不查 OrgMembership）。
+    db = MagicMock()
+
+    src_result = MagicMock()
+    src_result.scalar_one_or_none.return_value = source
+    conflict_result = MagicMock()
+    conflict_result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(side_effect=[src_result, conflict_result])
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+
+    user = _FakeUser("u-super", is_super_admin=True, current_org_id="org-target")
+
+    result = await gene_service.fork_gene_to_library(
+        db, "team-skill", "public", current_user=user,
+    )
+
+    assert result["visibility"] == "public"
+    assert result["review_status"] == GeneReviewStatus.approved
+    assert result["is_published"] is True
 
 
 # ─── get_pending_review_genes 权限过滤 ────────────────────────────────

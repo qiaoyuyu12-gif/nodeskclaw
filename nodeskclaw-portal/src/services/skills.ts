@@ -47,6 +47,8 @@ export interface Skill {
   package_path: string | null
   /** 文件夹上传后内联序列化的完整 JSON，供 agent 直接命中使用 */
   manifest: SkillManifest | null
+  /** 上传到 org/public 时的审核态：admin/超管自上传 → approved；其他 → pending_owner */
+  review_status?: string | null
   created_at: string
 }
 

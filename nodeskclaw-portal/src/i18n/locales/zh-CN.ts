@@ -1118,6 +1118,8 @@ const zhCN = {
     forkToPersonalSuccess: "已加载到个人技能 library",
     forkToOrgSuccess: "已加载到组织技能 library，等待管理员审核",
     forkToPublicSuccess: "已提交到公共市场，等待管理员审核",
+    forkToOrgImmediate: "已加载到组织技能 library",
+    forkToPublicImmediate: "已发布到公共市场",
     forkFailed: "加载失败",
     visAll: "全部",
     visPublic: "公共市场",

@@ -85,12 +85,20 @@ async function handleLocalFolder() {
   localError.value = null
   localSuccess.value = null
   try {
-    await skillApi.uploadFolder(input.files, false, uploadTarget.value)
-    localSuccess.value = uploadTarget.value === 'personal'
-      ? '已上传到个人技能 library'
-      : uploadTarget.value === 'org'
-        ? '已提交到组织技能 library，等待组织管理员审核'
+    const uploaded = await skillApi.uploadFolder(input.files, false, uploadTarget.value)
+    // admin/超管自上传后端直接 approved；非 admin 仍 pending_owner，文案分流
+    const isApproved = uploaded?.review_status === 'approved' || uploadTarget.value === 'personal'
+    if (uploadTarget.value === 'personal') {
+      localSuccess.value = '已上传到个人技能 library'
+    } else if (uploadTarget.value === 'org') {
+      localSuccess.value = isApproved
+        ? '已上传到组织技能 library'
+        : '已提交到组织技能 library，等待组织管理员审核'
+    } else {
+      localSuccess.value = isApproved
+        ? '已发布到公共市场'
         : '已提交到公共市场，等待组织管理员审核'
+    }
     showLocalUpload.value = false
     selectedLocalFiles.value = []
     await loadData()
@@ -262,14 +270,17 @@ async function onForkGene(gene: GeneItem, target: 'personal' | 'org' | 'public')
   forkingSlug.value = gene.slug
   try {
     // 必须用 gene.id（UUID）传给后端：三向 fork 后同 slug 可在多 scope 并存，按 slug 查会冲突
-    await store.forkGene(gene.id, target)
-    // 按 target 选择对应 i18n 成功文案
-    const successKey =
-      target === 'personal'
-        ? 'geneMarket.forkToPersonalSuccess'
-        : target === 'org'
-          ? 'geneMarket.forkToOrgSuccess'
-          : 'geneMarket.forkToPublicSuccess'
+    const forked = await store.forkGene(gene.id, target)
+    // 按 target + 是否免审切换文案：admin/超管自上传时后端直接 approved，不应再提示「等待审核」
+    const isApproved = forked?.review_status === 'approved'
+    let successKey: string
+    if (target === 'personal') {
+      successKey = 'geneMarket.forkToPersonalSuccess'
+    } else if (target === 'org') {
+      successKey = isApproved ? 'geneMarket.forkToOrgImmediate' : 'geneMarket.forkToOrgSuccess'
+    } else {
+      successKey = isApproved ? 'geneMarket.forkToPublicImmediate' : 'geneMarket.forkToPublicSuccess'
+    }
     toast.success(t(successKey))
     // 当前正在浏览目标 scope 时刷新列表
     const visMatches =

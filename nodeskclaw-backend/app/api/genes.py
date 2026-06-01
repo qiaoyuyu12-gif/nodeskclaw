@@ -167,10 +167,18 @@ async def upload_gene_folder(
     skill_raw = skill_content.decode("utf-8") if skill_content else ""
 
     # 根据 target 派生 visibility / org_id / created_by / is_published / review_status
+    # 操作者若是目标 org 的 admin 或平台超管 → bypass 待审，直接 approved + published
+    bypass_review = await gene_service.is_user_admin_of_org(
+        db,
+        user_id=current_user.id,
+        org_id=current_user.current_org_id,
+        is_super_admin=getattr(current_user, "is_super_admin", False),
+    )
     attrs = gene_service.resolve_target_attrs(
         target,
         user_id=current_user.id,
         org_id=current_user.current_org_id,
+        bypass_review=bypass_review,
     )
 
     gene_req = GeneCreateRequest(
@@ -733,10 +741,18 @@ async def create_manual_gene(
     if req.target != "personal" and not current_user.current_org_id:
         raise BadRequestError("上传到组织或公共市场前需先加入组织")
 
+    # 操作者若是目标 org 的 admin 或平台超管 → bypass 待审，直接 approved + published
+    bypass_review = await gene_service.is_user_admin_of_org(
+        db,
+        user_id=current_user.id,
+        org_id=current_user.current_org_id,
+        is_super_admin=getattr(current_user, "is_super_admin", False),
+    )
     attrs = gene_service.resolve_target_attrs(
         req.target,
         user_id=current_user.id,
         org_id=current_user.current_org_id,
+        bypass_review=bypass_review,
     )
 
     gene_req = GeneCreateRequest(

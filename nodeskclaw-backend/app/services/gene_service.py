@@ -3215,6 +3215,7 @@ def resolve_target_attrs(
     *,
     user_id: str | None,
     org_id: str | None,
+    bypass_review: bool = False,
 ) -> dict:
     """根据上传/Fork 目标 (personal/org/public) 派生 gene 行的归属字段。
 
@@ -3222,6 +3223,10 @@ def resolve_target_attrs(
       - personal：归属个人，无需审核，立即可用
       - org：归属组织，pending_owner 等组织 admin 审核
       - public：归属上传者所在组织（用于追溯背书方），pending_owner 等组织 admin 审核
+
+    bypass_review=True 时跳过 org/public 的待审环节，直接落 approved + is_published=True。
+    用于操作者本身是目标 org 的 admin 或平台超管的场景 —— 自己审自己没有意义，
+    与 review_gene 的权限模型保持一致（admin 反正能 approve）。
     """
     if target == "personal":
         if not user_id:
@@ -3240,8 +3245,8 @@ def resolve_target_attrs(
             "visibility": "org_private",
             "org_id": org_id,
             "created_by": user_id,
-            "is_published": False,
-            "review_status": GeneReviewStatus.pending_owner,
+            "is_published": bypass_review,
+            "review_status": GeneReviewStatus.approved if bypass_review else GeneReviewStatus.pending_owner,
         }
     if target == "public":
         if not org_id or not user_id:
@@ -3250,10 +3255,43 @@ def resolve_target_attrs(
             "visibility": "public",
             "org_id": org_id,
             "created_by": user_id,
-            "is_published": False,
-            "review_status": GeneReviewStatus.pending_owner,
+            "is_published": bypass_review,
+            "review_status": GeneReviewStatus.approved if bypass_review else GeneReviewStatus.pending_owner,
         }
     raise BadRequestError(f"未知上传目标: {target}")
+
+
+async def is_user_admin_of_org(
+    db: AsyncSession,
+    *,
+    user_id: str | None,
+    org_id: str | None,
+    is_super_admin: bool = False,
+) -> bool:
+    """判断用户对目标 org 是否拥有 admin 权限（含平台超管捷径）。
+
+    用途：上传/fork 入口决定是否 bypass 审核流程。
+    - 平台超管：对任意 org（含 None）一律 True
+    - 否则：必须传 user_id + org_id，并存在未删除的 OrgMembership.role=admin
+    - personal scope（org_id=None 且非超管）：返回 False —— 个人 scope 本身就免审，
+      不需要也无法计算"是否 admin"。
+    """
+    if is_super_admin:
+        return True
+    if not user_id or not org_id:
+        return False
+
+    from app.models.org_membership import OrgMembership, OrgRole
+
+    membership = (await db.execute(
+        select(OrgMembership).where(
+            OrgMembership.user_id == user_id,
+            OrgMembership.org_id == org_id,
+            OrgMembership.role == OrgRole.admin,
+            OrgMembership.deleted_at.is_(None),
+        )
+    )).scalar_one_or_none()
+    return membership is not None
 
 
 async def fork_gene_to_library(
@@ -3281,7 +3319,20 @@ async def fork_gene_to_library(
 
     # 目标归属：org_id 显式传入优先，否则取 current_user.current_org_id
     effective_org_id = org_id if org_id is not None else getattr(current_user, "current_org_id", None)
-    attrs = resolve_target_attrs(target, user_id=current_user.id, org_id=effective_org_id)
+
+    # 操作者若是目标 org 的 admin 或平台超管 → bypass 待审环节
+    bypass_review = await is_user_admin_of_org(
+        db,
+        user_id=current_user.id,
+        org_id=effective_org_id,
+        is_super_admin=getattr(current_user, "is_super_admin", False),
+    )
+    attrs = resolve_target_attrs(
+        target,
+        user_id=current_user.id,
+        org_id=effective_org_id,
+        bypass_review=bypass_review,
+    )
 
     # ── 1. 优先本地 DB 按 gene.id 查源（UUID 唯一） ───────────────────
     source = (await db.execute(

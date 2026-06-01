@@ -1118,6 +1118,8 @@ const enUS = {
     forkToPersonalSuccess: "Forked to personal library",
     forkToOrgSuccess: "Forked to org library, awaiting admin review",
     forkToPublicSuccess: "Submitted to public market, awaiting admin review",
+    forkToOrgImmediate: "Forked to org library",
+    forkToPublicImmediate: "Published to public market",
     forkFailed: "Fork failed",
     visAll: "All",
     visPublic: "Public Market",
