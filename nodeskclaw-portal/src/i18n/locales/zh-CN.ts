@@ -1114,7 +1114,7 @@ const zhCN = {
     scopePersonal: "个人技能",
     forkToPersonal: "加载到个人",
     forkToOrg: "加载到组织",
-    forkToPublic: "加载到公共市场",
+    forkToPublic: "加载到市场",
     forkToPersonalSuccess: "已加载到个人技能 library",
     forkToOrgSuccess: "已加载到组织技能 library，等待管理员审核",
     forkToPublicSuccess: "已提交到公共市场，等待管理员审核",

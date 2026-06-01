@@ -1114,7 +1114,7 @@ const enUS = {
     scopePersonal: "My Skills",
     forkToPersonal: "Fork to Personal",
     forkToOrg: "Fork to Org",
-    forkToPublic: "Fork to Public Market",
+    forkToPublic: "Fork to Market",
     forkToPersonalSuccess: "Forked to personal library",
     forkToOrgSuccess: "Forked to org library, awaiting admin review",
     forkToPublicSuccess: "Submitted to public market, awaiting admin review",
