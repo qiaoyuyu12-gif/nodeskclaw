@@ -405,3 +405,79 @@ async def test_fork_rejects_invalid_target():
         await gene_service.fork_gene_to_library(
             db, "skill-x", "invalid", current_user=user,
         )
+
+
+# ─── get_pending_review_genes 权限过滤 ────────────────────────────────
+
+
+@pytest.fixture
+def _stub_gene_to_dict(monkeypatch):
+    """避免 _FakeGene 缺少 ORM 列字段：把序列化函数替换成只取 id/org_id。"""
+    monkeypatch.setattr(
+        gene_service,
+        "_gene_to_dict",
+        lambda g: {"id": g.id, "org_id": g.org_id},
+    )
+
+
+def _make_pending_db(genes_to_return, *, admin_org_ids=None):
+    """构造 mock db：
+    - 超管路径：仅 1 次 execute（gene 列表）
+    - 普通用户路径：第 1 次 execute 返回 admin org_id 列表，第 2 次返回 gene 列表
+    admin_org_ids 不为 None 时启用普通用户路径。
+    """
+    db = AsyncMock()
+    gene_result = MagicMock()
+    gene_scalars = MagicMock()
+    gene_scalars.all.return_value = genes_to_return
+    gene_result.scalars.return_value = gene_scalars
+
+    if admin_org_ids is None:
+        # 超管路径
+        db.execute = AsyncMock(return_value=gene_result)
+    else:
+        # 普通用户路径：先查 org_id 列表
+        org_result = MagicMock()
+        org_result.all.return_value = [(oid,) for oid in admin_org_ids]
+        db.execute = AsyncMock(side_effect=[org_result, gene_result])
+    return db
+
+
+@pytest.mark.asyncio
+async def test_pending_review_super_admin_sees_all(_stub_gene_to_dict):
+    """超管：返回所有待审 gene，不查 OrgMembership。"""
+    gene_a = _FakeGene(gene_id="g-a", org_id="org-1")
+    gene_b = _FakeGene(gene_id="g-b", org_id="org-2")
+    db = _make_pending_db([gene_a, gene_b])
+    user = _FakeUser("u-super", is_super_admin=True)
+
+    result = await gene_service.get_pending_review_genes(db, current_user=user)
+    assert len(result) == 2
+    # 超管只有 1 次 execute（无 OrgMembership 查询）
+    assert db.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_review_org_admin_only_sees_own_org(_stub_gene_to_dict):
+    """组织 admin：只返回作为 admin 的 org 下待审 gene。"""
+    gene_in_scope = _FakeGene(gene_id="g-a", org_id="org-A")
+    db = _make_pending_db([gene_in_scope], admin_org_ids=["org-A"])
+    user = _FakeUser("u-admin", is_super_admin=False)
+
+    result = await gene_service.get_pending_review_genes(db, current_user=user)
+    assert len(result) == 1
+    assert result[0]["id"] == "g-a"
+    # 应有 2 次 execute：先查 admin org_id，再查 gene
+    assert db.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_pending_review_normal_user_returns_empty(_stub_gene_to_dict):
+    """非超管、非任何 org admin：返回空列表，不查 gene 表。"""
+    db = _make_pending_db([], admin_org_ids=[])  # 空 admin org 列表
+    user = _FakeUser("u-normal", is_super_admin=False)
+
+    result = await gene_service.get_pending_review_genes(db, current_user=user)
+    assert result == []
+    # 仅 1 次 execute（查 admin org_id，发现为空就提前返回）
+    assert db.execute.await_count == 1

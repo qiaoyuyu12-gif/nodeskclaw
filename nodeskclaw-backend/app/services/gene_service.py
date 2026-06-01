@@ -2973,17 +2973,78 @@ async def get_gene_stats(db: AsyncSession) -> GeneStatsResponse:
     )
 
 
-async def get_pending_review_genes(db: AsyncSession) -> list[dict]:
+async def get_pending_review_genes(
+    db: AsyncSession,
+    current_user=None,
+) -> list[dict]:
+    """获取当前用户可审核的待审 gene 列表。
+
+    权限范围：
+      - 平台超管：返回所有 pending_owner / pending_admin
+      - 任意组织 admin：仅返回其作为 admin 的 org 下的待审 gene
+      - 其他用户（包括未传 current_user）：返回空列表
+
+    与 review_gene 的权限模型一致，避免列表里出现用户实际无权审核的条目。
+    """
+    # 兼容旧调用：未传 current_user 时退回到"全部"以便测试场景灵活，但
+    # 这条路径 API 层不会走到（API 必传 current_user）。
+    if current_user is None:
+        result = await db.execute(
+            select(Gene)
+            .where(
+                Gene.review_status.in_([
+                    GeneReviewStatus.pending_owner,
+                    GeneReviewStatus.pending_admin,
+                ]),
+                not_deleted(Gene),
+            )
+            .order_by(Gene.created_at.desc())
+        )
+        return [_gene_to_dict(g) for g in result.scalars().all()]
+
+    # 超管 → 全部
+    if getattr(current_user, "is_super_admin", False):
+        result = await db.execute(
+            select(Gene)
+            .where(
+                Gene.review_status.in_([
+                    GeneReviewStatus.pending_owner,
+                    GeneReviewStatus.pending_admin,
+                ]),
+                not_deleted(Gene),
+            )
+            .order_by(Gene.created_at.desc())
+        )
+        return [_gene_to_dict(g) for g in result.scalars().all()]
+
+    # 普通用户 → 查其作为 admin 的所有 org_id
+    from app.models.org_membership import OrgMembership, OrgRole
+
+    admin_orgs_result = await db.execute(
+        select(OrgMembership.org_id).where(
+            OrgMembership.user_id == current_user.id,
+            OrgMembership.role == OrgRole.admin,
+            OrgMembership.deleted_at.is_(None),
+        )
+    )
+    admin_org_ids = [row[0] for row in admin_orgs_result.all()]
+    if not admin_org_ids:
+        # 既不是超管也不是任何 org admin → 无可见待审项
+        return []
+
     result = await db.execute(
         select(Gene)
         .where(
-            Gene.review_status.in_([GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin]),
+            Gene.review_status.in_([
+                GeneReviewStatus.pending_owner,
+                GeneReviewStatus.pending_admin,
+            ]),
+            Gene.org_id.in_(admin_org_ids),
             not_deleted(Gene),
         )
         .order_by(Gene.created_at.desc())
     )
-    genes = result.scalars().all()
-    return [_gene_to_dict(g) for g in genes]
+    return [_gene_to_dict(g) for g in result.scalars().all()]
 
 
 async def get_gene_activity(db: AsyncSession, limit: int = 50) -> list[dict]:

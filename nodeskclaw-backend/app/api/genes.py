@@ -566,9 +566,10 @@ async def admin_gene_stats(
 @router.get("/admin/genes/pending-review")
 async def admin_pending_review_genes(
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    genes = await gene_service.get_pending_review_genes(db)
+    # 列表内容按权限过滤：超管全部 / 组织 admin 仅本组织 / 其他用户空列表
+    genes = await gene_service.get_pending_review_genes(db, current_user=current_user)
     return ApiResponse(data=genes)
 
 
