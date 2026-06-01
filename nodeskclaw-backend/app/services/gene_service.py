@@ -604,10 +604,42 @@ async def get_gene(db: AsyncSession, slug: str) -> dict:
 
 
 async def get_gene_by_slug(db: AsyncSession, slug: str) -> Gene | None:
+    """按 slug 返回任意一条未删除 gene。
+
+    注意：在 fork 三向架构（personal/org/public）下，同一个 slug 可以在
+    多个 scope 下并存（DB unique index 是 partial `(slug, org_id)`），
+    所以这里只能用 `.first()` 取"任一条"。需要按 scope 精确定位时，
+    请使用 get_gene_by_slug_in_scope。
+    """
     result = await db.execute(
         select(Gene).where(Gene.slug == slug, not_deleted(Gene))
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
+
+
+async def get_gene_by_slug_in_scope(
+    db: AsyncSession,
+    slug: str,
+    *,
+    org_id: str | None,
+    created_by: str | None = None,
+) -> Gene | None:
+    """按 (slug, org_id) 精确定位一条未删除 gene，与 partial unique index 语义一致。
+
+    - org_id 不为 None：组织或公共 scope，按 `slug + org_id + not_deleted` 唯一定位
+    - org_id 为 None：personal scope。由于 unique index 在 org_id IS NULL 时
+      不做唯一性约束（多个用户的同 slug personal 可并存），所以这里要按
+      `created_by` 进一步限定为"该用户的 personal 同 slug"
+    """
+    stmt = select(Gene).where(Gene.slug == slug, not_deleted(Gene))
+    if org_id is None:
+        stmt = stmt.where(Gene.org_id.is_(None))
+        if created_by is not None:
+            stmt = stmt.where(Gene.created_by == created_by)
+    else:
+        stmt = stmt.where(Gene.org_id == org_id)
+    result = await db.execute(stmt)
+    return result.scalars().first()
 
 
 async def create_gene(
@@ -615,10 +647,15 @@ async def create_gene(
     visibility: str | None = None,
     review_status: str | None = None,
 ) -> dict:
-    existing = await get_gene_by_slug(db, req.slug)
+    # 冲突判定按 (slug, org_id) 进行，对齐 partial unique index `uq_genes_slug_org_active`。
+    # personal scope（org_id IS NULL）下，索引允许多个用户共用同 slug，因此用 created_by
+    # 进一步限定到"当前用户的 personal 同 slug"，避免误报。
+    existing = await get_gene_by_slug_in_scope(
+        db, req.slug, org_id=org_id, created_by=user_id,
+    )
     if existing:
         if req.overwrite:
-            # 覆盖模式：软删除旧基因，创建新基因
+            # 覆盖模式：软删除该 scope 内的旧基因，再创建新基因
             existing.soft_delete()
             await db.commit()
         else:

@@ -481,3 +481,34 @@ async def test_pending_review_normal_user_returns_empty(_stub_gene_to_dict):
     assert result == []
     # 仅 1 次 execute（查 admin org_id，发现为空就提前返回）
     assert db.execute.await_count == 1
+
+
+# ─── get_gene_by_slug：多 scope 并存时不再 MultipleResultsFound ────────
+
+
+@pytest.mark.asyncio
+async def test_get_gene_by_slug_returns_first_when_multiple_scopes_exist():
+    """fork 三向落库后，同 slug 多条 gene 共存：旧实现的 scalar_one_or_none 会
+    抛 MultipleResultsFound 让 upload-folder 500。修复后必须用 .first() 兜底。"""
+    gene_personal = _FakeGene(gene_id="g-p", org_id=None, slug="dup-slug")
+    gene_org = _FakeGene(gene_id="g-o", org_id="org-A", slug="dup-slug")
+
+    db = AsyncMock()
+    result_obj = MagicMock()
+    scalars = MagicMock()
+    scalars.first.return_value = gene_personal  # 任取首条
+    # 防御：万一新实现误用 scalar_one_or_none 会直接抛 MultipleResultsFound
+    from sqlalchemy.exc import MultipleResultsFound
+    result_obj.scalar_one_or_none.side_effect = MultipleResultsFound(
+        "should not be called",
+    )
+    result_obj.scalars.return_value = scalars
+    db.execute = AsyncMock(return_value=result_obj)
+
+    got = await gene_service.get_gene_by_slug(db, "dup-slug")
+    assert got is gene_personal
+    # 确认走的是 scalars().first() 路径
+    scalars.first.assert_called_once()
+    result_obj.scalar_one_or_none.assert_not_called()
+    # 静默引用避免 lint 警告
+    assert gene_org.slug == "dup-slug"
