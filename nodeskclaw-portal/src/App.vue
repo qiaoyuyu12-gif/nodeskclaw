@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { getCurrentLocale, setCurrentLocale } from '@/i18n'
-import { Settings, LogOut, Boxes, Server, FlaskConical, User, Loader2, BarChart3, Brain, BookOpen } from 'lucide-vue-next'
+import { Settings, LogOut, Boxes, Server, FlaskConical, User, Loader2, BarChart3, Brain, BookOpen, ClipboardCheck } from 'lucide-vue-next'
 import { useFeature } from '@/composables/useFeature'
 import LocaleSelect from '@/components/shared/LocaleSelect.vue'
 import ToastContainer from '@/components/shared/ToastContainer.vue'
@@ -138,6 +138,19 @@ function onLocaleChange(value: string) {
               知识库
             </button>
             </template>
+            <!-- 申请审核中心入口：超管 或 任意组织 admin 可见 -->
+            <button
+              v-if="authStore.user?.is_super_admin || authStore.user?.portal_org_role === 'admin'"
+              :class="[
+                'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
+                route.path.startsWith('/approvals') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
+              ]"
+              @click="router.push('/approvals')"
+            >
+              <ClipboardCheck class="w-4 h-4 inline mr-1.5" />
+              <span class="hidden lg:inline">{{ t('approvals.navTitle') }}</span>
+              <span class="lg:hidden">{{ t('approvals.navTitleShort') }}</span>
+            </button>
             <button
               v-if="authStore.user?.is_super_admin"
               :class="[

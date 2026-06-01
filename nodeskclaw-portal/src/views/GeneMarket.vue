@@ -47,7 +47,7 @@ const router = useRouter()
 const store = useGeneStore()
 const authStore = useAuthStore()  // 用于获取当前登录用户，判断删除权限
 const toast = useToast()
-const { t, locale } = useI18n()
+const { t } = useI18n()
 
 const viewMode = ref<'genes' | 'templates' | 'local'>('genes')
 const keyword = ref('')
@@ -202,68 +202,6 @@ function resolveIcon(iconName?: string) {
   if (!iconName) return Package
   const key = iconName.toLowerCase().replace(/[- ]/g, '')
   return iconMap[key] ?? iconMap[iconName] ?? Package
-}
-
-const evoStats = ref(store.geneStats)
-const evoHotGenes = ref<GeneItem[]>([])
-const evoActivity = ref<{ id: string; gene_slug: string; gene_name: string; metric_type: string; value: number; created_at?: string }[]>([])
-const evoPending = ref<GeneItem[]>([])
-const evoLoading = ref(false)
-const evoActivityLoading = ref(false)
-const evoPendingLoading = ref(false)
-const evoReviewingId = ref<string | null>(null)
-
-async function loadEvolution() {
-  evoLoading.value = true
-  try {
-    await store.fetchGeneStats()
-    evoStats.value = store.geneStats
-    await store.fetchGenes({ sort: 'effectiveness', page_size: 10 })
-    evoHotGenes.value = [...store.genes]
-  } finally {
-    evoLoading.value = false
-  }
-  evoActivityLoading.value = true
-  store.fetchGeneActivity(50).then((data) => {
-    evoActivity.value = data as typeof evoActivity.value
-  }).finally(() => { evoActivityLoading.value = false })
-  evoPendingLoading.value = true
-  store.fetchPendingReviewGenes().then((data) => {
-    evoPending.value = (data as GeneItem[]) ?? []
-  }).finally(() => { evoPendingLoading.value = false })
-}
-
-async function handleReview(geneId: string, action: 'approve' | 'reject') {
-  evoReviewingId.value = geneId
-  try {
-    await store.reviewGene(geneId, action)
-    evoPending.value = evoPending.value.filter((g) => g.id !== geneId)
-    toast.success(action === 'approve' ? t('geneMarket.reviewApproved') : t('geneMarket.reviewRejected'))
-  } catch {
-    toast.error(t('geneMarket.actionFailed'))
-  } finally {
-    evoReviewingId.value = null
-  }
-}
-
-function formatMetricType(metricType: string): string {
-  const map: Record<string, string> = {
-    user_positive: 'geneMarket.metricUserPositive',
-    user_negative: 'geneMarket.metricUserNegative',
-    task_success: 'geneMarket.metricTaskSuccess',
-    agent_self_eval: 'geneMarket.metricAgentSelfEval',
-  }
-  const key = map[metricType]
-  if (!key) return metricType
-  const translated = t(key)
-  return translated === key ? metricType : translated
-}
-
-function formatDate(s?: string): string {
-  if (!s) return '-'
-  const d = new Date(s)
-  const currentLocale = locale.value === 'zh-CN' ? 'zh-CN' : 'en-US'
-  return d.toLocaleString(currentLocale, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 const featuredItems = computed(() => {
