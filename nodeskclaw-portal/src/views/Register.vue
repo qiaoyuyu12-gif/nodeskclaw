@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { getCurrentLocale, setCurrentLocale } from '@/i18n'
@@ -9,13 +9,16 @@ import { Loader2, Eye, EyeOff, ArrowLeft } from 'lucide-vue-next'
 import LocaleSelect from '@/components/shared/LocaleSelect.vue'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 const { t } = useI18n()
 
 const loading = ref(false)
 const error = ref('')
 
-const form = ref({ name: '', email: '', phone: '', password: '' })
+// 从登录页跳转过来时支持通过 query.email 预填邮箱，避免用户二次输入
+const prefilledEmail = typeof route.query.email === 'string' ? route.query.email : ''
+const form = ref({ name: '', email: prefilledEmail, phone: '', password: '' })
 const showPassword = ref(false)
 const locale = ref(getCurrentLocale())
 

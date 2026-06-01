@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import hooks
-from app.core.deps import get_db, require_feature, require_org_admin
+from app.core.deps import get_db, require_feature, require_org_admin, require_org_member_role
 from app.core.security import decrypt_sensitive, encrypt_sensitive
 from app.models.base import not_deleted
 from app.models.gene import Gene
@@ -41,7 +41,7 @@ def _to_info(rg: OrgRequiredGene, gene: Gene) -> OrgRequiredGeneInfo:
 async def list_required_genes(
     org_id: str,
     db: AsyncSession = Depends(get_db),
-    _auth: tuple = Depends(require_org_admin),
+    _auth: tuple = Depends(require_org_member_role("member")),  # 读=member 及以上可访问
 ):
     result = await db.execute(
         select(OrgRequiredGene, Gene)
@@ -66,7 +66,7 @@ async def add_required_gene(
     org_id: str,
     body: OrgRequiredGeneAdd,
     db: AsyncSession = Depends(get_db),
-    _auth: tuple = Depends(require_org_admin),
+    _auth: tuple = Depends(require_org_member_role("operator")),  # 写=operator 及以上可操作
 ):
     gene = await db.get(Gene, body.gene_id)
     if not gene or gene.deleted_at is not None:

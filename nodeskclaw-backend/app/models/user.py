@@ -31,6 +31,10 @@ class User(BaseModel):
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     role: Mapped[str] = mapped_column(String(16), default=UserRole.user, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 软删时记录是哪个超管删除的（仅 users 表特有；其他表本期不引入）
+    deleted_by: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True
+    )
     must_change_password: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, server_default="false",
     )

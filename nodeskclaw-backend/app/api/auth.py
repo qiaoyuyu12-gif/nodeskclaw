@@ -1,6 +1,6 @@
 """Auth endpoints: OAuth, email/password, phone/SMS, token refresh, user info, logout, user management."""
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -9,6 +9,7 @@ from app.core import hooks
 from app.core.deps import get_db, require_feature, require_super_admin_dep
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.security import get_current_user, get_current_user_unchecked
+from app.models.admin_action import AdminAction  # CE 层 enum，供 _write_auth_audit 使用
 from app.models.admin_membership import AdminMembership
 from app.models.user import User
 from app.schemas.auth import (
@@ -32,12 +33,80 @@ from app.services import auth_service
 router = APIRouter()
 
 
+async def _write_auth_audit(
+    db: AsyncSession,
+    *,
+    action: AdminAction,  # 调用方必须传 AdminAction enum 实例，禁止裸字符串
+    actor_id: str | None,
+    actor_email: str | None,
+    details: dict | None = None,
+) -> None:
+    """登录/登出审计；通过 audit_service.with_audit 落库。
+
+    审计失败不阻塞登录主流程：
+      - CE 模式下 ee 包不可 import → 静默跳过
+      - DB 异常 → 记日志后继续
+    """
+    try:
+        # 延迟 import 防 CE 模式 ImportError
+        from app.models.user import User as _User
+        from ee.backend.services.admin import audit_service
+        from sqlalchemy import select as _select
+
+        # action 已是 AdminAction enum 实例，无需再做 AdminAction(action) 转换
+        actor_obj: _User | None = None
+        if actor_id:
+            # 用 session 内的 User 对象给 with_audit
+            actor_obj = (
+                await db.execute(
+                    _select(_User).where(_User.id == actor_id)
+                )
+            ).scalar_one_or_none()
+            # 如果 user 已删除/找不到，actor_obj 为 None，with_audit 会写 anonymous
+        async with audit_service.with_audit(
+            db,
+            action=action,
+            actor=actor_obj,
+            target_type="auth",
+            target_id=actor_id or actor_email or "anonymous",
+            details=details,
+        ):
+            pass
+        await db.commit()
+    except Exception:  # noqa: BLE001 — 审计失败不阻断登录
+        # 回滚审计相关变更，但不抛出
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        import logging
+        logging.getLogger(__name__).exception("[auth_audit] failed to write audit (non-fatal)")
+
+
 # ── 邮箱密码 ─────────────────────────────────────────────
 
 @router.post("/login", response_model=ApiResponse[LoginResponse])
 async def email_login(body: EmailLoginRequest, db: AsyncSession = Depends(get_db)):
     """邮箱密码登录。"""
-    result = await auth_service.login_with_email(body.email, body.password, db)
+    try:
+        result = await auth_service.login_with_email(body.email, body.password, db)
+    except HTTPException as exc:
+        # 登录失败：写审计后重新抛出，密码绝不入 details
+        await _write_auth_audit(
+            db,
+            action=AdminAction.AUTH_LOGIN_FAILED,
+            actor_id=None,
+            actor_email=None,
+            details={"attempted_email": body.email, "reason": "invalid_credentials"},
+        )
+        raise exc
+    await _write_auth_audit(
+        db,
+        action=AdminAction.AUTH_LOGIN_SUCCESS,
+        actor_id=result.user.id,
+        actor_email=result.user.email,
+        details={"method": "email"},
+    )
     await hooks.emit("operation_audit", action="auth.login", target_type="user", target_id=result.user.id, actor_id=result.user.id, org_id=result.user.current_org_id, details={"method": "email"})
     return ApiResponse(data=result)
 
@@ -122,8 +191,18 @@ async def change_password(
 
 
 @router.post("/logout", response_model=ApiResponse)
-async def logout(current_user: User = Depends(get_current_user_unchecked)):
-    """登出（客户端清除 Token 即可，服务端无需额外操作）。"""
+async def logout(
+    current_user: User = Depends(get_current_user_unchecked),
+    db: AsyncSession = Depends(get_db),
+):
+    """登出（客户端清除 Token 即可，服务端写审计）。"""
+    await _write_auth_audit(
+        db,
+        action=AdminAction.AUTH_LOGOUT,
+        actor_id=current_user.id,
+        actor_email=current_user.email,
+        details={},
+    )
     await hooks.emit("operation_audit", action="auth.logout", target_type="user", target_id=current_user.id, actor_id=current_user.id, org_id=current_user.current_org_id, details={})
     return ApiResponse(message="已登出")
 
@@ -201,6 +280,14 @@ async def update_staff(
 
     if user.id == current_user.id and is_super_admin is False:
         raise BadRequestError("不能取消自己的超管权限", "errors.auth.cannot_revoke_self_admin")
+
+    # 最后超管守卫：EE 模式下防止撤销最后一个超管（CE 模式下跳过）
+    if is_super_admin is False and user.is_super_admin:
+        try:
+            from ee.backend.services.admin.user_admin_service import ensure_not_last_super_admin
+            await ensure_not_last_super_admin(db, user.id)
+        except ImportError:
+            pass
 
     if is_super_admin is not None:
         user.is_super_admin = is_super_admin

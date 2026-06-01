@@ -1,7 +1,5 @@
 """Auth service: email/password, phone/SMS login, JWT management."""
 
-import hashlib
-import hmac
 import logging
 import re
 import secrets
@@ -16,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.exceptions import NotFoundError
+from app.core.password import hash_password, verify_password
 from app.core.security import create_access_token, create_refresh_token, decode_token
 from app.models.user import User, UserRole
 from app.schemas.auth import LoginResponse, TokenResponse, UserInfo
@@ -62,20 +61,7 @@ async def refresh_tokens(refresh_token_str: str, db: AsyncSession) -> TokenRespo
 
 
 # ── 密码工具 ────────────────────────────────────────────
-
-def _hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
-    return f"{salt}${dk.hex()}"
-
-
-def _verify_password(password: str, hashed: str) -> bool:
-    parts = hashed.split("$", 1)
-    if len(parts) != 2:
-        return False
-    salt, stored_dk = parts
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
-    return hmac.compare_digest(dk.hex(), stored_dk)
+# hash_password / verify_password 从 app.core.password 导入，此处不再重复定义
 
 
 async def _build_user_info(user: User, db: AsyncSession) -> UserInfo:
@@ -139,13 +125,29 @@ def _check_email_domain_allowed(email: str) -> None:
 # ── 邮箱密码登录 ──────────────────────────────────────────
 
 async def login_with_email(email: str, password: str, db: AsyncSession) -> LoginResponse:
-    """邮箱密码登录。"""
+    """邮箱密码登录。
+    区分两种失败：邮箱未注册 -> 40025/email_not_registered，让前端引导去注册；
+    邮箱已存在但密码错误 -> 40120/invalid_email_or_password。
+    """
+    # 可选的环境域名白名单（LOGIN_EMAIL_WHITELIST 配置）仍然生效
     _check_email_domain_allowed(email)
+    # 查询用户（含软删过滤）
     result = await db.execute(
         select(User).options(selectinload(User.oauth_connections)).where(User.email == email, User.deleted_at.is_(None))
     )
     user = result.scalar_one_or_none()
-    if user is None or not user.password_hash:
+    # 用户不存在：直接告知未注册，便于前端弹"去注册"对话框
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error_code": 40025,
+                "message_key": "errors.auth.email_not_registered",
+                "message": "该邮箱未注册",
+            },
+        )
+    # 用户存在但无密码（只能用验证码/SSO 登录），按密码错误对待，避免泄漏账号状态细节
+    if not user.password_hash:
         raise HTTPException(
             status_code=401,
             detail={
@@ -154,7 +156,8 @@ async def login_with_email(email: str, password: str, db: AsyncSession) -> Login
                 "message": "邮箱或密码错误",
             },
         )
-    if not _verify_password(password, user.password_hash):
+    # 密码不匹配
+    if not verify_password(password, user.password_hash):
         raise HTTPException(
             status_code=401,
             detail={
@@ -236,7 +239,7 @@ async def change_password(
                     "message": "请输入当前密码",
                 },
             )
-        if not _verify_password(old_password, user.password_hash):
+        if not verify_password(old_password, user.password_hash):
             raise HTTPException(
                 status_code=401,
                 detail={
@@ -246,7 +249,7 @@ async def change_password(
                 },
             )
 
-    user.password_hash = _hash_password(new_password)
+    user.password_hash = hash_password(new_password)
     user.must_change_password = False
     await db.commit()
     logger.info("密码修改: user_id=%s", user_id)
@@ -282,7 +285,7 @@ async def _login_by_field(
                 "message": "账号或密码错误",
             },
         )
-    if not _verify_password(password, user.password_hash):
+    if not verify_password(password, user.password_hash):
         raise HTTPException(
             status_code=401,
             detail={
@@ -497,7 +500,7 @@ async def admin_reset_password(user_id: str, db: AsyncSession) -> str:
         )
 
     plain = secrets.token_urlsafe(9)
-    user.password_hash = _hash_password(plain)
+    user.password_hash = hash_password(plain)
     await db.commit()
     logger.info("管理员重置密码: user_id=%s", user_id)
     return plain
@@ -553,7 +556,7 @@ async def register_user(
         name=name,
         email=email,
         phone=phone or None,
-        password_hash=_hash_password(password),
+        password_hash=hash_password(password),
         current_org_id=default_org.id if default_org else None,
     )
     db.add(user)

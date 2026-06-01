@@ -32,23 +32,28 @@ import {
   FolderOpen,
   AlertTriangle,
   Code2,
+  Trash2,
   type Component,
 } from 'lucide-vue-next'
 import { useGeneStore } from '@/stores/gene'
 import type { GeneItem, GenomeItem, TemplateInfo } from '@/stores/gene'
 import { useToast } from '@/composables/useToast'
+import { useAuthStore } from '@/stores/auth'
+import { resolveApiErrorMessage } from '@/i18n/error'
 import CustomSelect from '@/components/shared/CustomSelect.vue'
 import { skillApi } from '@/services/skills'
 
 const router = useRouter()
 const store = useGeneStore()
+const authStore = useAuthStore()  // 用于获取当前登录用户，判断删除权限
 const toast = useToast()
 const { t, locale } = useI18n()
 
 const viewMode = ref<'genes' | 'templates' | 'local'>('genes')
 const keyword = ref('')
 const selectedCategory = ref<string | null>(null)
-const selectedVisibility = ref<string | null>(null)
+// 三栏归属过滤：默认进入「公共市场」；'personal' / 'org_private' / 'public'
+const selectedVisibility = ref<string>('public')
 const sortBy = ref('popularity')
 const page = ref(1)
 const pageSize = ref(12)
@@ -62,6 +67,8 @@ const localDragOver = ref(false)
 const localFileInputRef = ref<HTMLInputElement>()
 const selectedLocalFiles = ref<string[]>([])
 const localFolderInputRef = ref<HTMLInputElement>()
+// 上传目标库：默认 personal（个人 library，无需审核），可选 org / public
+const uploadTarget = ref<'personal' | 'org' | 'public'>('personal')
 
 async function handleLocalFile(file: File) {
   localError.value = '请使用文件夹上传功能'
@@ -78,8 +85,12 @@ async function handleLocalFolder() {
   localError.value = null
   localSuccess.value = null
   try {
-    await skillApi.uploadFolder(input.files)
-    localSuccess.value = `本地基因上传成功`
+    await skillApi.uploadFolder(input.files, false, uploadTarget.value)
+    localSuccess.value = uploadTarget.value === 'personal'
+      ? '已上传到个人技能 library'
+      : uploadTarget.value === 'org'
+        ? '已提交到组织技能 library，等待组织管理员审核'
+        : '已提交到公共市场，等待组织管理员审核'
     showLocalUpload.value = false
     selectedLocalFiles.value = []
     await loadData()
@@ -93,7 +104,7 @@ async function handleLocalFolder() {
         if (ok) {
           // 重新上传，携带覆盖参数
           try {
-            await skillApi.uploadFolder(input.files, true)
+            await skillApi.uploadFolder(input.files, true, uploadTarget.value)
             localSuccess.value = `基因已覆盖`
             showLocalUpload.value = false
             selectedLocalFiles.value = []
@@ -260,7 +271,7 @@ const featuredItems = computed(() => {
   return []
 })
 
-const hasFeatured = computed(() => featuredItems.value.length > 0 && selectedVisibility.value !== 'org_private')
+const hasFeatured = computed(() => featuredItems.value.length > 0 && selectedVisibility.value === 'public')
 
 const totalCount = computed(() => {
   if (viewMode.value === 'genes') return store.totalGenes
@@ -271,6 +282,102 @@ const totalCount = computed(() => {
 const totalPages = computed(() => Math.ceil(totalCount.value / pageSize.value) || 1)
 const canPrev = computed(() => page.value > 1)
 const canNext = computed(() => page.value < totalPages.value)
+
+/**
+ * 判断当前用户是否有权限删除某个 gene。
+ * 前端仅做显示层过滤（上传者本人 / 超管），
+ * org admin 权限需查 membership，由后端兜底拦截。
+ * 仅本地上传（source_registry === 'local'）的 gene 才显示删除按钮。
+ */
+function canDeleteGene(gene: GeneItem): boolean {
+  if (gene.source_registry !== 'local') return false
+  const me = authStore.user
+  if (!me) return false
+  return me.is_super_admin || gene.created_by === me.id
+}
+
+/**
+ * 删除 gene 的确认 + 请求逻辑。
+ * 后端 409（如个人技能已被 Agent 加载）会带 message_key，由 resolveApiErrorMessage 翻译为本地化 toast。
+ */
+async function onDeleteGene(gene: GeneItem) {
+  if (!confirm(t('geneMarket.deleteConfirm', { name: gene.name }))) return
+  try {
+    await skillApi.deleteGene(gene.id)
+    toast.success(t('geneMarket.deleteSuccess'))
+    await loadData()
+  } catch (e: unknown) {
+    // 走统一错误解析：优先 message_key 翻译；缺失时回退为后端原文 message，再退到通用文案
+    toast.error(resolveApiErrorMessage(e, t('geneMarket.deleteFailed')))
+  }
+}
+
+/**
+ * fork 一份 gene 到个人 / 组织 / 公共 library。
+ * 权限校验在后端兜底，前端按 canForkFrom 决定按钮显示。
+ * - personal：归属当前用户，无需审核
+ * - org：归属当前组织，pending_owner 等组织 admin 审核
+ * - public：visibility=public 但 pending_owner，需组织 admin 审核
+ */
+const forkingSlug = ref<string | null>(null)
+async function onForkGene(gene: GeneItem, target: 'personal' | 'org' | 'public') {
+  forkingSlug.value = gene.slug
+  try {
+    // 必须用 gene.id（UUID）传给后端：三向 fork 后同 slug 可在多 scope 并存，按 slug 查会冲突
+    await store.forkGene(gene.id, target)
+    // 按 target 选择对应 i18n 成功文案
+    const successKey =
+      target === 'personal'
+        ? 'geneMarket.forkToPersonalSuccess'
+        : target === 'org'
+          ? 'geneMarket.forkToOrgSuccess'
+          : 'geneMarket.forkToPublicSuccess'
+    toast.success(t(successKey))
+    // 当前正在浏览目标 scope 时刷新列表
+    const visMatches =
+      (target === 'personal' && selectedVisibility.value === 'personal') ||
+      (target === 'org' && selectedVisibility.value === 'org_private') ||
+      (target === 'public' && selectedVisibility.value === 'public')
+    if (visMatches) await loadData()
+  } catch (e: unknown) {
+    // 统一错误解析：优先 message_key 翻译（如 fork_personal_forbidden / fork_org_forbidden）
+    toast.error(resolveApiErrorMessage(e, t('geneMarket.forkFailed')))
+  } finally {
+    forkingSlug.value = null
+  }
+}
+
+/**
+ * 判断当前用户能将某 gene 作为源 fork 到哪些目标。
+ * 与后端 fork_gene_to_library 的权限矩阵保持一致：
+ *   - 源 personal：仅本人可 fork（→ org / public）
+ *   - 源 org：本组成员可 fork（→ personal / public）
+ *   - 源 public：任意登录用户可 fork（→ personal / org）
+ * 同 scope 隐藏自身按钮；最终以后端 403 兜底，前端仅做显示层裁剪。
+ */
+function canForkFrom(gene: GeneItem): { personal: boolean; org: boolean; public: boolean } {
+  const me = authStore.user
+  const empty = { personal: false, org: false, public: false }
+  if (!me) return empty
+
+  const fromPersonal = gene.org_id == null && gene.created_by != null
+  const fromPublic = gene.visibility === 'public'
+  const fromOrg = !fromPersonal && !fromPublic && gene.org_id != null
+
+  const allowed =
+    me.is_super_admin ||
+    fromPublic ||
+    (fromPersonal && gene.created_by === me.id) ||
+    (fromOrg && me.current_org_id === gene.org_id)
+  if (!allowed) return empty
+
+  // 隐藏同 scope；org / public 目标都需要有 current_org_id（前端拦一道，后端兜底）
+  return {
+    personal: !fromPersonal,
+    org: !fromOrg && !!me.current_org_id,
+    public: !fromPublic && !!me.current_org_id,
+  }
+}
 
 async function loadData() {
   if (viewMode.value === 'genes') {
@@ -381,16 +488,17 @@ function hasNativeTools(gene: GeneItem): boolean {
 
       <!-- 基因/模板/本地上传 Tab -->
 
-        <!-- Visibility filter -->
+        <!-- 归属三栏 Tab：个人 library / 组织 library / 公共市场（仅 genes/templates 视图） -->
         <div v-if="viewMode === 'genes' || viewMode === 'templates'" class="flex gap-2 mb-4">
           <button
             v-for="vis in [
-              { value: 'org_private', key: 'geneMarket.visOrg' },
-              { value: 'public', key: 'geneMarket.visPublic' },
+              { value: 'public', key: 'geneMarket.scopePublic' },
+              { value: 'org_private', key: 'geneMarket.scopeOrg' },
+              { value: 'personal', key: 'geneMarket.scopePersonal' },
             ]"
-            :key="String(vis.value)"
+            :key="vis.value"
             :class="[
-              'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+              'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
               selectedVisibility === vis.value
                 ? 'bg-primary/10 text-primary'
                 : 'bg-muted/50 text-muted-foreground hover:text-foreground hover:bg-muted',
@@ -433,9 +541,18 @@ function hasNativeTools(gene: GeneItem): boolean {
               <div
                 v-for="gene in store.genes"
                 :key="gene.id"
-                class="p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition cursor-pointer"
+                class="relative p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition cursor-pointer"
                 @click="goToGene(gene.slug)"
               >
+                <!-- 删除按钮：仅本地上传 gene 且当前用户有权限时显示 -->
+                <button
+                  v-if="canDeleteGene(gene)"
+                  class="absolute top-2 right-2 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition z-10"
+                  :title="t('geneMarket.deleteGene')"
+                  @click.stop="onDeleteGene(gene)"
+                >
+                  <Trash2 class="w-4 h-4" />
+                </button>
                 <div class="flex items-start gap-3 mb-2">
                   <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                     <component :is="resolveIcon(gene.icon)" class="w-5 h-5 text-primary" />
@@ -495,6 +612,43 @@ function hasNativeTools(gene: GeneItem): boolean {
                     </div>
                   </div>
                   <span class="shrink-0">{{ t('geneMarket.learnCount', { count: gene.install_count ?? 0 }) }}</span>
+                </div>
+
+                <!-- fork 按钮组：根据源 scope + 当前用户权限决定显示哪些目标按钮 -->
+                <div
+                  v-if="canForkFrom(gene).personal || canForkFrom(gene).org || canForkFrom(gene).public"
+                  class="flex items-center gap-2 mt-3 pt-3 border-t border-border"
+                >
+                  <button
+                    v-if="canForkFrom(gene).personal"
+                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                    :disabled="forkingSlug === gene.slug"
+                    @click.stop="onForkGene(gene, 'personal')"
+                  >
+                    <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
+                    <Download v-else class="w-3 h-3" />
+                    {{ t('geneMarket.forkToPersonal') }}
+                  </button>
+                  <button
+                    v-if="canForkFrom(gene).org"
+                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                    :disabled="forkingSlug === gene.slug"
+                    @click.stop="onForkGene(gene, 'org')"
+                  >
+                    <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
+                    <Download v-else class="w-3 h-3" />
+                    {{ t('geneMarket.forkToOrg') }}
+                  </button>
+                  <button
+                    v-if="canForkFrom(gene).public"
+                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                    :disabled="forkingSlug === gene.slug"
+                    @click.stop="onForkGene(gene, 'public')"
+                  >
+                    <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
+                    <Download v-else class="w-3 h-3" />
+                    {{ t('geneMarket.forkToPublic') }}
+                  </button>
                 </div>
               </div>
               </template>
@@ -574,6 +728,50 @@ function hasNativeTools(gene: GeneItem): boolean {
                     <span class="text-gray-600">{{ path }}</span>
                   </li>
                 </ul>
+
+                <!-- 上传目标库选择：personal 无需审核，org/public 需组织 admin 审核 -->
+                <div class="mt-3 rounded-lg bg-white border border-gray-200 p-3">
+                  <p class="text-xs font-medium text-gray-600 mb-2">上传到：</p>
+                  <div class="flex flex-col gap-2">
+                    <label class="flex items-start gap-2 cursor-pointer text-xs">
+                      <input
+                        v-model="uploadTarget"
+                        type="radio"
+                        value="personal"
+                        class="mt-0.5"
+                      />
+                      <span class="text-gray-700">
+                        <span class="font-medium">个人技能 library</span>
+                        <span class="text-gray-500"> — 仅自己可见，立即可用</span>
+                      </span>
+                    </label>
+                    <label class="flex items-start gap-2 cursor-pointer text-xs">
+                      <input
+                        v-model="uploadTarget"
+                        type="radio"
+                        value="org"
+                        class="mt-0.5"
+                      />
+                      <span class="text-gray-700">
+                        <span class="font-medium">组织技能 library</span>
+                        <span class="text-gray-500"> — 组织内可见，需组织管理员审核</span>
+                      </span>
+                    </label>
+                    <label class="flex items-start gap-2 cursor-pointer text-xs">
+                      <input
+                        v-model="uploadTarget"
+                        type="radio"
+                        value="public"
+                        class="mt-0.5"
+                      />
+                      <span class="text-gray-700">
+                        <span class="font-medium">公共市场</span>
+                        <span class="text-gray-500"> — 所有用户可见，需组织管理员审核</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
                 <div class="mt-3 flex justify-end">
                   <button
                     :disabled="localUploading"

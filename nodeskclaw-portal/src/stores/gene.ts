@@ -36,9 +36,11 @@ export interface GeneItem {
   synergies?: string[]
   review_status?: string
   is_published: boolean
-  visibility?: string
+  visibility?: 'public' | 'org_private' | 'personal' | string
   source_registry?: string
   source_registry_name?: string
+  created_by?: string  // 上传者用户 ID,用于前端判断删除权限(本人/超管)
+  org_id?: string | null  // 归属组织 ID；null = 个人 scope；public scope 也会挂在背书 org 下
   created_at?: string
 }
 
@@ -378,6 +380,20 @@ export const useGeneStore = defineStore('gene', () => {
     return res.data.data
   }
 
+  /**
+   * 从公共市场 fork 一份 gene 到个人/组织 library。
+   * - target='personal'：归属当前用户，立即可用
+   * - target='org'：归属当前组织，pending_owner 等组织 admin 审核
+   * - target='public'：归属当前组织，visibility=public 但 pending_owner 等审批
+   *
+   * 参数说明：geneIdentifier 应为本地 gene 的 id（UUID），外部 aggregator 来源传其 slug。
+   * 同一 slug 经三向 fork 后可能在本地多 scope 并存，按 slug 查会冲突，必须用 id 定位。
+   */
+  async function forkGene(geneIdentifier: string, target: 'personal' | 'org' | 'public'): Promise<GeneItem> {
+    const res = await api.post(`/genes/${geneIdentifier}/fork`, { target })
+    return res.data.data
+  }
+
   // ── Instance Templates ──────────────────────────
 
   async function fetchTemplates(params: { keyword?: string; visibility?: string; page?: number; page_size?: number } = {}) {
@@ -542,6 +558,7 @@ export const useGeneStore = defineStore('gene', () => {
     triggerCreation,
     createManualGene,
     publishGeneToMarket,
+    forkGene,
     fetchEvolutionLog,
 
     fetchGeneStats,

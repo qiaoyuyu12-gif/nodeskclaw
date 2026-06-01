@@ -33,7 +33,7 @@ from app.api.workspaces import router as workspace_router
 from app.api.templates import router as template_router
 from app.api.workspace_deploys import router as workspace_deploys_router
 from app.api.instance_templates import router as instance_template_router
-from app.core.deps import require_ce_edition, require_org_admin, require_org_role
+from app.core.deps import require_org_admin, require_org_role
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.core.feature_gate import feature_gate
 from app.core.config import settings
@@ -115,7 +115,7 @@ api_router.include_router(org_settings_router, prefix="/orgs", tags=["组织设�
 api_router.include_router(audit_router, prefix="/orgs", tags=["操作审计"])
 api_router.include_router(portal_cluster_router, prefix="/clusters", tags=["集群"])
 api_router.include_router(portal_cluster_write_router, prefix="/clusters", tags=["集群"],
-    dependencies=[Depends(require_ce_edition), Depends(require_org_admin)])
+    dependencies=[Depends(require_org_admin)])
 api_router.include_router(portal_deploy_router, prefix="/deploy", tags=["部署"])
 api_router.include_router(portal_events_router, prefix="/events", tags=["事件"])
 api_router.include_router(portal_instance_router, prefix="/instances", tags=["实例"])
@@ -127,7 +127,7 @@ api_router.include_router(llm_keys_router, tags=["LLM Key 管理"])
 api_router.include_router(performance_router, tags=["绩效"])
 api_router.include_router(registry_router, prefix="/registry", tags=["镜像仓库"])
 api_router.include_router(settings_router, prefix="/settings", tags=["系统配置"],
-    dependencies=[Depends(require_ce_edition), Depends(require_org_admin)])
+    dependencies=[Depends(require_org_admin)])
 api_router.include_router(spec_presets_router, prefix="/spec-presets", tags=["规格预设"])
 api_router.include_router(storage_router, prefix="/storage-classes", tags=["存储"])
 api_router.include_router(template_router, prefix="/workspaces", tags=["办公室模板"])
@@ -143,7 +143,7 @@ api_router.include_router(gene_router, tags=["基因进化"])
 api_router.include_router(engine_router, prefix="/engines", tags=["工作引擎"])
 api_router.include_router(engine_version_read_router, prefix="/engine-versions", tags=["引擎版本"])
 api_router.include_router(engine_version_write_router, prefix="/engine-versions", tags=["引擎版本"],
-    dependencies=[Depends(require_ce_edition), Depends(require_org_admin)])
+    dependencies=[Depends(require_org_admin)])
 api_router.include_router(invite_router, prefix="/orgs", tags=["邀请"])
 api_router.include_router(invite_public_router, prefix="/invite", tags=["邀请（公开）"])
 api_router.include_router(security_ws_router, tags=["安全评估"])

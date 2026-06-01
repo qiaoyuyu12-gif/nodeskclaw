@@ -19,8 +19,12 @@ from app.models.base import BaseModel
 
 
 class ContentVisibility(str, Enum):
+    # 公共市场：所有用户可见（需 is_published=True 且审核 approved）
     public = "public"
+    # 组织私有：仅当前 org 成员可见
     org_private = "org_private"
+    # 个人 library：仅创建者（created_by）本人可见，org_id 为空
+    personal = "personal"
 
 
 class GeneSource(str, Enum):

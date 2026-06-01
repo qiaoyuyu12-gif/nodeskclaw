@@ -1,8 +1,17 @@
 """Pydantic schemas for Gene Evolution Ecosystem."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
+
+# 上传/Fork 目标库：个人 library / 组织 library / 公共市场
+# - personal：visibility=personal，归属当前用户，无需审核
+# - org：visibility=org_private，归属当前组织，需组织 admin 审核
+# - public：visibility=public，归属当前组织，需组织 admin 审核后才上架
+UploadTarget = Literal["personal", "org", "public"]
+# Fork 目标库：与 UploadTarget 同集合（三向互 fork：personal/org/public 任意组合）
+ForkTarget = Literal["personal", "org", "public"]
 
 
 # ── Gene ─────────────────────────────────────────
@@ -258,6 +267,15 @@ class ManualGeneCreate(BaseModel):
     skill_content: str
     category: str | None = None
     instance_id: str
+    # 上传目标：默认进个人 library，向后兼容旧调用（不传则当 personal）
+    target: UploadTarget = "personal"
+
+
+class ForkGeneRequest(BaseModel):
+    """从公共市场 fork 一份 gene 到个人/组织 library。"""
+
+    # 仅允许 fork 到 personal / org，公共市场副本不能直接 fork（要走 publish_to_market）
+    target: ForkTarget
 
 
 # ── Learning Callback ────────────────────────────

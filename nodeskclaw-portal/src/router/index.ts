@@ -83,13 +83,13 @@ const ceRoutes: RouteRecordRaw[] = [
     redirect: { name: 'OrgInfo' },
     children: [
       { path: 'info', name: 'OrgInfo', component: () => import('@/views/OrgInfo.vue') },
-      { path: 'clusters', name: 'OrgSettingsClusters', component: () => import('@/views/OrgSettingsClusters.vue'), meta: { ceOnly: true } },
-      { path: 'registry', name: 'OrgSettingsRegistry', component: () => import('@/views/OrgSettingsRegistry.vue'), meta: { ceOnly: true } },
-      { path: 'engine-versions', name: 'OrgSettingsEngineVersions', component: () => import('@/views/OrgSettingsEngineVersions.vue'), meta: { ceOnly: true } },
-      { path: 'specs', name: 'OrgSettingsSpecs', component: () => import('@/views/OrgSettingsSpecs.vue'), meta: { ceOnly: true } },
+      { path: 'clusters', name: 'OrgSettingsClusters', component: () => import('@/views/OrgSettingsClusters.vue') },
+      { path: 'registry', name: 'OrgSettingsRegistry', component: () => import('@/views/OrgSettingsRegistry.vue') },
+      { path: 'engine-versions', name: 'OrgSettingsEngineVersions', component: () => import('@/views/OrgSettingsEngineVersions.vue') },
+      { path: 'specs', name: 'OrgSettingsSpecs', component: () => import('@/views/OrgSettingsSpecs.vue') },
       { path: 'genes', name: 'OrgSettingsGenes', component: () => import('@/views/OrgSettingsGenes.vue') },
       { path: 'llm-keys', name: 'OrgSettingsLlmKeys', component: () => import('@/views/OrgSettingsLlmKeys.vue') },
-      { path: 'smtp', name: 'OrgSettingsSmtp', component: () => import('@/views/OrgSettingsSmtp.vue'), meta: { ceOnly: true } },
+      { path: 'smtp', name: 'OrgSettingsSmtp', component: () => import('@/views/OrgSettingsSmtp.vue') },
       { path: 'network', name: 'OrgSettingsNetwork', component: () => import('@/views/OrgSettingsNetwork.vue') },
       { path: 'members', name: 'OrgMembers', component: () => import('@/views/OrgMembers.vue') },
       { path: 'audit', name: 'OrgSettingsAudit', component: () => import('@/views/OrgSettingsAudit.vue') },
@@ -100,7 +100,6 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/clusters/:id',
     name: 'ClusterDetail',
     component: () => import('@/views/ClusterDetail.vue'),
-    meta: { ceOnly: true },
   },
   {
     path: '/members',
@@ -149,6 +148,20 @@ const ceRoutes: RouteRecordRaw[] = [
     name: 'AdminKnowledgeBaseEdit',
     component: () => import('@/views/skills/admin/KnowledgeBaseFormView.vue'),
     meta: { requiresAuth: true },
+  },
+  {
+    path: '/admin',
+    component: () => import('@/views/admin/AdminLayout.vue'),
+    meta: { requiresAuth: true, requireSuperAdmin: true },
+    children: [
+      { path: '', redirect: '/admin/orgs' },
+      { path: 'orgs', name: 'AdminOrgList', component: () => import('@/views/admin/AdminOrgList.vue') },
+      { path: 'orgs/:id', name: 'AdminOrgDetail', component: () => import('@/views/admin/AdminOrgDetail.vue'), props: true },
+      { path: 'users', name: 'AdminUserList', component: () => import('@/views/admin/AdminUserList.vue') },
+      { path: 'users/:id', name: 'AdminUserDetail', component: () => import('@/views/admin/AdminUserDetail.vue'), props: true },
+      { path: 'features', name: 'AdminFeatureList', component: () => import('@/views/admin/AdminFeatureList.vue') },
+      { path: 'audit', name: 'AdminAuditLog', component: () => import('@/views/admin/AdminAuditLog.vue') },
+    ],
   },
   {
     path: '/create',
@@ -205,10 +218,6 @@ router.beforeEach(async (to, _from, next) => {
       if (authStore.user && !authStore.user.current_org_id && router.hasRoute('OrgSetup')) {
         return next('/setup-org')
       }
-    }
-
-    if (to.meta.ceOnly && authStore.systemInfo?.edition === 'ee') {
-      return next('/')
     }
 
     const requiredFeature = to.meta.requireFeature as string | undefined

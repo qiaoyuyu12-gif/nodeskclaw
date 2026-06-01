@@ -3,44 +3,39 @@ import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useOrgStore } from '@/stores/org'
-import { useEdition } from '@/composables/useFeature'
 import { Settings, Users, Dna, FolderOpen, Mail, Server, Building2, Container, ScrollText, Globe, Cpu, Layers, KeyRound } from 'lucide-vue-next'
 
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const orgStore = useOrgStore()
-const { isEE } = useEdition()
 
 interface NavItem {
   name: string
   label: () => string
   icon: typeof Settings
   matchPrefix?: string
-  ceOnly?: boolean
 }
 
+// 组织设置侧边栏导航项；EE/CE 现已共享同一份菜单（集群/Registry/SMTP 等不再 CE 独占）
 const allNavItems: NavItem[] = [
   { name: 'OrgInfo', label: () => t('orgSettings.orgInfo'), icon: Building2 },
-  { name: 'OrgSettingsClusters', label: () => t('orgSettings.clusters'), icon: Server, ceOnly: true },
-  { name: 'OrgSettingsRegistry', label: () => t('orgSettings.registryTitle'), icon: Container, ceOnly: true },
-  { name: 'OrgSettingsEngineVersions', label: () => t('orgSettings.engineVersionsTab'), icon: Layers, ceOnly: true },
-  { name: 'OrgSettingsSpecs', label: () => t('orgSettings.specsTab'), icon: Cpu, ceOnly: true },
+  { name: 'OrgSettingsClusters', label: () => t('orgSettings.clusters'), icon: Server },
+  { name: 'OrgSettingsRegistry', label: () => t('orgSettings.registryTitle'), icon: Container },
+  { name: 'OrgSettingsEngineVersions', label: () => t('orgSettings.engineVersionsTab'), icon: Layers },
+  { name: 'OrgSettingsSpecs', label: () => t('orgSettings.specsTab'), icon: Cpu },
   { name: 'OrgMembers', label: () => t('orgSettings.humanMembers'), icon: Users },
   { name: 'OrgSettingsLlmKeys', label: () => t('orgSettings.llmKeysTab'), icon: KeyRound },
   { name: 'OrgSettingsGenes', label: () => t('orgSettings.requiredGenesTab'), icon: Dna },
-  { name: 'OrgSettingsSmtp', label: () => t('orgSettings.smtpTitle'), icon: Mail, ceOnly: true },
-  { name: 'OrgSettingsNetwork', label: () => t('orgSettings.networkTab'), icon: Globe, ceOnly: true },
+  { name: 'OrgSettingsSmtp', label: () => t('orgSettings.smtpTitle'), icon: Mail },
+  { name: 'OrgSettingsNetwork', label: () => t('orgSettings.networkTab'), icon: Globe },
   { name: 'OrgEnterpriseFiles', label: () => t('enterpriseFiles.title'), icon: FolderOpen, matchPrefix: '/org-settings/files' },
   { name: 'OrgSettingsAudit', label: () => t('auditLogs.title'), icon: ScrollText },
 ]
 
+// 仅根据"路由是否真实存在"做过滤，避免渲染 EE 端未注册的路由（如 OrgEnterpriseFiles）
 const navItems = computed(() =>
-  allNavItems.filter(item => {
-    if (!router.hasRoute(item.name)) return false
-    if (item.ceOnly && isEE.value) return false
-    return true
-  })
+  allNavItems.filter(item => router.hasRoute(item.name))
 )
 
 function isActive(item: NavItem): boolean {

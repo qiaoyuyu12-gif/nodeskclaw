@@ -305,6 +305,21 @@ async def _create_docker_cluster(
             message=f"Docker 环境检查超时，{_docker_env_hint()}",
             message_key="errors.cluster.docker_check_timeout",
         )
+    except NotImplementedError as exc:
+        # Windows + SelectorEventLoop 下 asyncio.create_subprocess_exec 不被支持
+        # 回退到线程池里跑同步 subprocess 做 docker 探活，保证跨平台可用
+        logger.warning(
+            "asyncio subprocess not supported on this loop (platform=%s, err=%s); 回退到同步 subprocess",
+            sys.platform, exc,
+        )
+        await _probe_docker_sync()
+    except Exception:
+        # 未被预期的异常：留 traceback 便于排查，再转成 400，避免前端拿到无信息的 500
+        logger.exception("Docker 环境检查异常 (platform=%s)", sys.platform)
+        raise BadRequestError(
+            message=f"Docker 环境检查失败，{_docker_env_hint()}",
+            message_key="errors.cluster.docker_unavailable",
+        )
 
     cluster = Cluster(
         name=name or "local-docker",
@@ -320,6 +335,52 @@ async def _create_docker_cluster(
     await db.commit()
     await db.refresh(cluster)
     return ClusterInfo.model_validate(cluster)
+
+
+async def _probe_docker_sync() -> None:
+    """在线程池里用同步 subprocess 探测 docker compose；失败时抛 BadRequestError。
+
+    用作 asyncio.create_subprocess_exec 在某些事件循环（如 Windows SelectorEventLoop）
+    不支持时的回退路径。
+    """
+    import subprocess
+
+    def _run() -> tuple[int, str, str]:
+        try:
+            r = subprocess.run(
+                ["docker", "compose", "version"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return r.returncode, r.stdout or "", r.stderr or ""
+        except FileNotFoundError as e:
+            return -1, "", f"FileNotFoundError: {e}"
+        except subprocess.TimeoutExpired:
+            return -2, "", "timeout"
+
+    rc, stdout, stderr = await asyncio.to_thread(_run)
+    if rc == 0:
+        return
+    if rc == -1:
+        raise BadRequestError(
+            message=_docker_cli_hint(),
+            message_key="errors.cluster.docker_cli_not_found",
+        )
+    if rc == -2:
+        raise BadRequestError(
+            message=f"Docker 环境检查超时，{_docker_env_hint()}",
+            message_key="errors.cluster.docker_check_timeout",
+        )
+    err_text = (stderr or stdout).strip()
+    logger.warning("sync docker compose version failed: rc=%d, stderr=%s", rc, err_text[:500])
+    if "permission denied" in err_text.lower() or "connect" in err_text.lower():
+        raise BadRequestError(
+            message=f"无法连接 Docker daemon，{_docker_env_hint()}",
+            message_key="errors.cluster.docker_socket_unavailable",
+        )
+    raise BadRequestError(
+        message=err_text or "Docker Compose 不可用",
+        message_key="errors.cluster.docker_unavailable",
+    )
 
 
 async def test_connection(

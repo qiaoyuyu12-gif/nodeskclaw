@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAdminApi } from '@/services/adminApi'
 import { useToast } from '@/composables/useToast'
@@ -8,6 +9,7 @@ import { resolveApiErrorMessage } from '@/i18n/error'
 import { Building2, Plus, Pencil, Trash2, Loader2, Search, X, Check } from 'lucide-vue-next'
 
 const { t } = useI18n()
+const router = useRouter()
 const toast = useToast()
 const { isEnabled: platformAdminEnabled } = useFeature('platform_admin')
 const { fetchOrgs, createOrg, updateOrg, deleteOrg } = useAdminApi()
@@ -19,6 +21,10 @@ const showCreate = ref(false)
 const createLoading = ref(false)
 const deleteConfirm = ref<string | null>(null)
 const deleteLoading = ref(false)
+
+// 编辑状态：editingOrg 保存当前被编辑的组织 id，isEditing 区分创建 vs 编辑
+const isEditing = ref(false)
+const editingOrgId = ref<string | null>(null)
 
 const form = ref({
   name: '',
@@ -46,7 +52,27 @@ function resetForm() {
 
 function cancelCreate() {
   showCreate.value = false
+  isEditing.value = false
+  editingOrgId.value = null
   resetForm()
+}
+
+// 打开编辑弹窗：预填当前行数据
+function openEdit(org: Awaited<ReturnType<typeof fetchOrgs>>[number]) {
+  isEditing.value = true
+  editingOrgId.value = org.id
+  form.value = {
+    name: org.name,
+    slug: org.slug,
+    plan: org.plan,
+    max_instances: org.max_instances,
+    max_cpu_total: org.max_cpu_total,
+    max_mem_total: org.max_mem_total,
+    max_storage_total: org.max_storage_total,
+    max_collaboration_depth: org.max_collaboration_depth,
+    cluster_id: org.cluster_id ?? null,
+  }
+  showCreate.value = true
 }
 
 async function submitCreate() {
@@ -56,13 +82,23 @@ async function submitCreate() {
   }
   createLoading.value = true
   try {
-    const newOrg = await createOrg(form.value)
-    orgs.value.push(newOrg)
-    toast.success(t('admin.orgs.created'))
+    if (isEditing.value && editingOrgId.value) {
+      // 编辑模式：调 updateOrg 并更新列表中对应项
+      const updated = await updateOrg(editingOrgId.value, form.value)
+      const idx = orgs.value.findIndex(o => o.id === editingOrgId.value)
+      if (idx !== -1) orgs.value[idx] = updated
+      toast.success(t('admin.orgs.updated'))
+    } else {
+      const newOrg = await createOrg(form.value)
+      orgs.value.push(newOrg)
+      toast.success(t('admin.orgs.created'))
+    }
     showCreate.value = false
+    isEditing.value = false
+    editingOrgId.value = null
     resetForm()
   } catch (e: unknown) {
-    toast.error(resolveApiErrorMessage(e, t('admin.orgs.createFailed')))
+    toast.error(resolveApiErrorMessage(e, isEditing.value ? t('admin.orgs.updateFailed') : t('admin.orgs.createFailed')))
   } finally {
     createLoading.value = false
   }
@@ -145,7 +181,7 @@ onMounted(async () => {
           </tr>
         </thead>
         <tbody class="divide-y divide-border">
-          <tr v-for="org in filteredOrgs" :key="org.id" class="hover:bg-muted/20 transition-colors">
+          <tr v-for="org in filteredOrgs" :key="org.id" class="hover:bg-muted/20 transition-colors cursor-pointer" @click="router.push(`/admin/orgs/${org.id}`)">
             <td class="px-4 py-3">
               <div class="flex items-center gap-2">
                 <Building2 class="w-4 h-4 text-muted-foreground shrink-0" />
@@ -168,9 +204,10 @@ onMounted(async () => {
             <td class="px-4 py-3 text-right text-muted-foreground hidden sm:table-cell">
               {{ formatDate(org.created_at) }}
             </td>
-            <td class="px-4 py-3 text-right">
+            <!-- @click.stop 防止行点击冒泡触发路由跳转 -->
+            <td class="px-4 py-3 text-right" @click.stop>
               <div class="flex items-center justify-end gap-1">
-                <button class="p-1.5 rounded hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors" :title="t('admin.common.edit')">
+                <button class="p-1.5 rounded hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors" :title="t('admin.common.edit')" @click="openEdit(org)">
                   <Pencil class="w-3.5 h-3.5" />
                 </button>
                 <button class="p-1.5 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400 transition-colors" :title="t('admin.common.delete')" @click="deleteConfirm = org.id">
@@ -192,7 +229,7 @@ onMounted(async () => {
     <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div class="w-full max-w-md rounded-xl border border-border bg-card shadow-xl">
         <div class="flex items-center justify-between px-5 py-4 border-b border-border">
-          <h3 class="font-semibold">{{ t('admin.orgs.createTitle') }}</h3>
+          <h3 class="font-semibold">{{ isEditing ? t('admin.orgs.editTitle') : t('admin.orgs.createTitle') }}</h3>
           <button class="p-1 rounded hover:bg-muted/60" @click="cancelCreate">
             <X class="w-4 h-4" />
           </button>
@@ -223,7 +260,7 @@ onMounted(async () => {
           </button>
           <button class="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50" :disabled="createLoading" @click="submitCreate">
             <Loader2 v-if="createLoading" class="w-4 h-4 animate-spin" />
-            <template v-else><Check class="w-4 h-4 inline mr-1" />{{ t('admin.common.create') }}</template>
+            <template v-else><Check class="w-4 h-4 inline mr-1" />{{ isEditing ? t('admin.common.save') : t('admin.common.create') }}</template>
           </button>
         </div>
       </div>
