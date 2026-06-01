@@ -132,6 +132,29 @@ kubectl get deploy -n <namespace> --context <context-name>
 - **自动提交**：每完成一个单元性改动后必须主动提交 commit，不等用户提醒，也不允许攒多个独立改动最后一次性提交
 - **禁止在代码中出现真人个人信息**，邮箱等占位统一使用 `@example.com`
 
+### 易踩点沉淀（来自反复出现的真实 bug）
+
+> 这些是项目特有的、不读源码看不出来的"陷阱"。每条都对应过线上 bug 和提交记录，遇到相关代码区时必须先回看本节。
+
+- **Gene 表按 slug 查询禁用 `scalar_one_or_none()`**：fork 三向架构（personal/org/public）落地后，同 slug 可在多 scope 并存，DB partial unique 是 `(slug, org_id)` 而非全局 slug。按 slug 单字段查会触发 `MultipleResultsFound` 让接口直接 500。
+  - 列表/兜底取一条：用 `.scalars().first()`
+  - 按 scope 精确定位：用 `gene_service.get_gene_by_slug_in_scope(slug, org_id, created_by)`
+  - 已踩位置：`gene_service.get_gene_by_slug` / `local_adapter.get_skill / get_manifest / get_synergies / report_install`（提交 e57b168、46242a5）
+
+- **Windows 跨平台异步子进程必须有同步 fallback**：`asyncio.create_subprocess_exec` 在 Windows SelectorEventLoop 上抛 `NotImplementedError`，`str(NotImplementedError())` 是空字符串，被通用 `except Exception` 吞了之后前端只看到「连接失败:」尾巴空白。
+  - 正确写法：单独 `except NotImplementedError:` 分支调用 `asyncio.to_thread(subprocess.run, ...)` 同步路径
+  - 已踩位置：`cluster_service._create_docker_cluster`（已修）/ `_test_docker_connection`（漏改，提交 46242a5 补）
+
+- **审核/审批类入口默认对"操作者本身有审核权"做 bypass**：admin / 平台超管自上传走 `pending_owner` 没有意义——自己审自己一点击就过，还会让审核中心多出无效条目。
+  - 派生函数（如 `resolve_target_attrs`）加 `bypass_review` 参数；调用前用 `is_user_admin_of_org(db, user_id, org_id, is_super_admin)` 判定
+  - 三个入口必须同步：`/genes/upload-folder`、`/genes/manual`、`fork_gene_to_library`
+  - 前端 toast 也要按返回的 `review_status` 切「已加载」vs「等待审核」（参考提交 f53b900）
+
+- **审核/审计/管理类列表禁裸显 UUID**：`created_by` / `user_id` / `resource_id` 这种字段对人类读者无意义，前端必须能显示姓名/邮箱。
+  - 服务层批量注入：按 ID 集合一次性 join `User` 表填 `created_by_name` / `created_by_email`，**不要 N+1**
+  - 前端展示三级回退：`name → email → UUID 截短 8 位 + …`
+  - 模板：参考 `gene_service._attach_uploader_identity` + `Approvals.vue uploaderLabel`（提交 3822f48）
+
 ### 问题排查原则
 
 - **先查再答**：不确定的事情先查证，不凭记忆或猜测下结论
