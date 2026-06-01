@@ -70,6 +70,54 @@ def _extract_docker_error(stderr_text: str) -> str:
     return stderr_text.strip()[:500]
 
 
+def _classify_docker_error(stderr_text: str) -> str | None:
+    """对 docker compose 失败的 stderr 做模式匹配，返回中文引导文案。
+
+    单纯的 _extract_docker_error 输出对用户不够友好——「TLS handshake timeout」
+    本身用户不知道下一步该做什么。这里识别几类高频部署失败场景，给出可操作建议。
+    无匹配时返回 None（调用方不附加提示）。
+    """
+    text = stderr_text.lower()
+
+    # 1) 网络/镜像仓库连不通
+    if any(kw in text for kw in (
+        "tls handshake timeout",
+        "no such host",
+        "i/o timeout",
+        "connection refused",
+        "dial tcp",
+    )):
+        return (
+            "无法连接镜像仓库。请手动 `docker pull <image>` 后重试，"
+            "或在创建实例时通过 DOCKER_IMAGE 环境变量指向已在本地的镜像。"
+        )
+
+    # 2) 镜像仓库需要登录
+    if "unauthorized" in text or "pull access denied" in text:
+        return "镜像仓库需要登录。请先 `docker login <registry>` 后重试。"
+
+    # 3) 镜像/标签不存在
+    if "manifest unknown" in text or "manifest for" in text and "not found" in text:
+        return "镜像或版本不存在。请检查 image_version 拼写，或确认该 tag 已发布到仓库。"
+
+    # 4) compose 未安装（兜底，create_instance 已有 FileNotFoundError 分支处理）
+    if "docker compose" in text and "not found" in text:
+        return "未安装 docker compose v2，请升级 Docker 或安装 docker-compose-v2。"
+
+    return None
+
+
+def _format_docker_failure(prefix: str, stderr_text: str) -> str:
+    """组合「核心错误 + 引导提示」的完整 RuntimeError 文案。
+
+    所有 docker compose ... 失败的 raise 路径统一走这里，前端 toast 既能
+    看到原始 daemon 错误，也能看到下一步该怎么做。
+    """
+    err = _extract_docker_error(stderr_text)
+    hint = _classify_docker_error(stderr_text)
+    return f"{prefix}: {err}" + (f"\n提示：{hint}" if hint else "")
+
+
 async def _run_docker(
     *args: str,
     stdout: int | None = None,
@@ -233,6 +281,10 @@ def _build_compose_yaml(config: InstanceComputeConfig) -> dict:
 
     main_service: dict = {
         "image": env.get("DOCKER_IMAGE", f"deskclaw:{config.image_version}"),
+        # 本地有镜像就直接用，不再 HEAD registry。这样用户可手动 docker pull
+        # 后离线部署，避开 TLS 握手超时 / 镜像源不通的环境问题。
+        # Compose v2.20+ 支持；老版本会忽略此字段，行为退化为默认（仍可工作）。
+        "pull_policy": "missing",
         "container_name": config.slug,
         "environment": env,
         "ports": [f"{host_port}:{config.gateway_port}"],
@@ -269,6 +321,7 @@ def _build_compose_yaml(config: InstanceComputeConfig) -> dict:
     if config.companion and config.companion.enabled:
         companion = {
             "image": config.companion.image or "deskclaw-companion:latest",
+            "pull_policy": "missing",  # 同 main_service：本地镜像优先，避开 registry 网络问题
             "container_name": f"{config.slug}-companion",
             "environment": config.companion.env_vars,
             "ports": [str(config.companion.port)],
@@ -325,7 +378,7 @@ class DockerComputeProvider:
             if rc != 0:
                 raw = stderr.decode()
                 logger.error("docker compose up failed: %s", raw)
-                raise RuntimeError(f"docker compose up 失败: {_extract_docker_error(raw)}")
+                raise RuntimeError(_format_docker_failure("docker compose up 失败", raw))
         except FileNotFoundError:
             raise RuntimeError("docker compose 未安装")
 
@@ -418,13 +471,13 @@ class DockerComputeProvider:
                 "docker", "compose", "-f", compose_path, "restart",
             )
             if rc != 0:
-                raise RuntimeError(f"docker compose restart 失败: {_extract_docker_error(stderr.decode())}")
+                raise RuntimeError(_format_docker_failure("docker compose restart 失败", stderr.decode()))
         else:
             rc, _, stderr = await _run_docker(
                 "docker", "restart", slug,
             )
             if rc != 0:
-                raise RuntimeError(f"docker restart 失败: {_extract_docker_error(stderr.decode())}")
+                raise RuntimeError(_format_docker_failure("docker restart 失败", stderr.decode()))
 
     async def scale_instance(self, handle: ComputeHandle, replicas: int) -> ComputeHandle:
         slug = handle.extra.get("slug", handle.instance_id)
@@ -435,7 +488,7 @@ class DockerComputeProvider:
                 "--scale", f"agent={replicas}",
             )
             if rc != 0:
-                raise RuntimeError(f"docker compose scale 失败: {_extract_docker_error(stderr.decode())}")
+                raise RuntimeError(_format_docker_failure("docker compose scale 失败", stderr.decode()))
         handle.extra["replicas"] = replicas
         return handle
 
@@ -482,7 +535,7 @@ class DockerComputeProvider:
         )
         if rc != 0:
             raise RuntimeError(
-                f"docker compose up 失败: {_extract_docker_error(stderr.decode())}"
+                _format_docker_failure("docker compose up 失败", stderr.decode())
             )
 
     async def health_check(self, handle: ComputeHandle) -> dict:
