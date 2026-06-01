@@ -769,18 +769,21 @@ async def fork_gene(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """从公共市场 fork 一份 gene 到个人 / 组织 library。
+    """fork 一份 gene 到个人 / 组织 / 公共 library（三向支持）。
 
     - target=personal：副本归属当前用户，无需审核
     - target=org：副本归属当前组织，pending_owner 等组织 admin 审核
+    - target=public：副本 visibility=public，归属当前组织，pending_owner 等组织 admin 审核
+
+    权限校验由 service 层按源 scope 分支处理：
+      - 个人技能仅本人可 fork；组织技能仅本组成员可 fork；公共技能任意用户可 fork
     """
-    if req.target == "org" and not current_user.current_org_id:
-        raise BadRequestError("fork 到组织 library 前需先加入组织")
+    if req.target in ("org", "public") and not current_user.current_org_id:
+        raise BadRequestError("fork 到组织 / 公共市场前需先加入组织")
 
     gene_data = await gene_service.fork_gene_to_library(
         db, gene_slug, req.target,
-        user_id=current_user.id,
-        org_id=current_user.current_org_id,
+        current_user=current_user,
     )
     return ApiResponse(data=gene_data)
 

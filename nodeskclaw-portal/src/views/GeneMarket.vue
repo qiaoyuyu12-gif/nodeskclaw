@@ -313,29 +313,68 @@ async function onDeleteGene(gene: GeneItem) {
 }
 
 /**
- * 公共市场卡片：fork 一份到个人 / 组织 library。
+ * fork 一份 gene 到个人 / 组织 / 公共 library。
+ * 权限校验在后端兜底，前端按 canForkFrom 决定按钮显示。
  * - personal：归属当前用户，无需审核
  * - org：归属当前组织，pending_owner 等组织 admin 审核
+ * - public：visibility=public 但 pending_owner，需组织 admin 审核
  */
 const forkingSlug = ref<string | null>(null)
-async function onForkGene(slug: string, target: 'personal' | 'org') {
+async function onForkGene(slug: string, target: 'personal' | 'org' | 'public') {
   forkingSlug.value = slug
   try {
     await store.forkGene(slug, target)
-    toast.success(
+    // 按 target 选择对应 i18n 成功文案
+    const successKey =
       target === 'personal'
-        ? t('geneMarket.forkToPersonalSuccess')
-        : t('geneMarket.forkToOrgSuccess'),
-    )
-    if (selectedVisibility.value === target || (target === 'org' && selectedVisibility.value === 'org_private')) {
-      await loadData()
-    }
+        ? 'geneMarket.forkToPersonalSuccess'
+        : target === 'org'
+          ? 'geneMarket.forkToOrgSuccess'
+          : 'geneMarket.forkToPublicSuccess'
+    toast.success(t(successKey))
+    // 当前正在浏览目标 scope 时刷新列表
+    const visMatches =
+      (target === 'personal' && selectedVisibility.value === 'personal') ||
+      (target === 'org' && selectedVisibility.value === 'org_private') ||
+      (target === 'public' && selectedVisibility.value === 'public')
+    if (visMatches) await loadData()
   } catch (e: unknown) {
-    // 显示后端真实错误（如"源基因不存在"/"仅可从公共市场已审核通过的基因 fork"）
-    const err = e as { response?: { data?: { message?: string } } }
-    toast.error(err?.response?.data?.message ?? t('geneMarket.forkFailed'))
+    // 统一错误解析：优先 message_key 翻译（如 fork_personal_forbidden / fork_org_forbidden）
+    toast.error(resolveApiErrorMessage(e, t('geneMarket.forkFailed')))
   } finally {
     forkingSlug.value = null
+  }
+}
+
+/**
+ * 判断当前用户能将某 gene 作为源 fork 到哪些目标。
+ * 与后端 fork_gene_to_library 的权限矩阵保持一致：
+ *   - 源 personal：仅本人可 fork（→ org / public）
+ *   - 源 org：本组成员可 fork（→ personal / public）
+ *   - 源 public：任意登录用户可 fork（→ personal / org）
+ * 同 scope 隐藏自身按钮；最终以后端 403 兜底，前端仅做显示层裁剪。
+ */
+function canForkFrom(gene: GeneItem): { personal: boolean; org: boolean; public: boolean } {
+  const me = authStore.user
+  const empty = { personal: false, org: false, public: false }
+  if (!me) return empty
+
+  const fromPersonal = gene.org_id == null && gene.created_by != null
+  const fromPublic = gene.visibility === 'public'
+  const fromOrg = !fromPersonal && !fromPublic && gene.org_id != null
+
+  const allowed =
+    me.is_super_admin ||
+    fromPublic ||
+    (fromPersonal && gene.created_by === me.id) ||
+    (fromOrg && me.current_org_id === gene.org_id)
+  if (!allowed) return empty
+
+  // 隐藏同 scope；org / public 目标都需要有 current_org_id（前端拦一道，后端兜底）
+  return {
+    personal: !fromPersonal,
+    org: !fromOrg && !!me.current_org_id,
+    public: !fromPublic && !!me.current_org_id,
   }
 }
 
@@ -574,12 +613,13 @@ function hasNativeTools(gene: GeneItem): boolean {
                   <span class="shrink-0">{{ t('geneMarket.learnCount', { count: gene.install_count ?? 0 }) }}</span>
                 </div>
 
-                <!-- 公共市场卡片：Fork 到个人 / 组织 library -->
+                <!-- fork 按钮组：根据源 scope + 当前用户权限决定显示哪些目标按钮 -->
                 <div
-                  v-if="selectedVisibility === 'public'"
+                  v-if="canForkFrom(gene).personal || canForkFrom(gene).org || canForkFrom(gene).public"
                   class="flex items-center gap-2 mt-3 pt-3 border-t border-border"
                 >
                   <button
+                    v-if="canForkFrom(gene).personal"
                     class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
                     :disabled="forkingSlug === gene.slug"
                     @click.stop="onForkGene(gene.slug, 'personal')"
@@ -589,6 +629,7 @@ function hasNativeTools(gene: GeneItem): boolean {
                     {{ t('geneMarket.forkToPersonal') }}
                   </button>
                   <button
+                    v-if="canForkFrom(gene).org"
                     class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
                     :disabled="forkingSlug === gene.slug"
                     @click.stop="onForkGene(gene.slug, 'org')"
@@ -596,6 +637,16 @@ function hasNativeTools(gene: GeneItem): boolean {
                     <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
                     <Download v-else class="w-3 h-3" />
                     {{ t('geneMarket.forkToOrg') }}
+                  </button>
+                  <button
+                    v-if="canForkFrom(gene).public"
+                    class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
+                    :disabled="forkingSlug === gene.slug"
+                    @click.stop="onForkGene(gene.slug, 'public')"
+                  >
+                    <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
+                    <Download v-else class="w-3 h-3" />
+                    {{ t('geneMarket.forkToPublic') }}
                   </button>
                 </div>
               </div>

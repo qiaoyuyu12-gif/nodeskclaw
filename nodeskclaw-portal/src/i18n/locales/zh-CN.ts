@@ -1114,8 +1114,10 @@ const zhCN = {
     scopePersonal: "个人技能",
     forkToPersonal: "加载到个人",
     forkToOrg: "加载到组织",
+    forkToPublic: "加载到公共市场",
     forkToPersonalSuccess: "已加载到个人技能 library",
     forkToOrgSuccess: "已加载到组织技能 library，等待管理员审核",
+    forkToPublicSuccess: "已提交到公共市场，等待管理员审核",
     forkFailed: "加载失败",
     visAll: "全部",
     visPublic: "公共市场",
@@ -1702,6 +1704,8 @@ const zhCN = {
     },
     gene: {
       personal_in_use_by_agent: "该个人技能正被 Agent 加载，请先在对应实例卸载后再删除",
+      fork_personal_forbidden: "仅本人可加载自己的个人技能到其他 library",
+      fork_org_forbidden: "仅本组织成员可加载该组织技能到其他 library",
     },
     billing: {
       instance_limit_exceeded: "AI 员工数量已达上限（{used}/{limit}），请升级套餐或联系管理员",

@@ -14,7 +14,7 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_nodeskclaw_webhook_base_url, settings
-from app.core.exceptions import AppException, BadRequestError, ConflictError, NotFoundError
+from app.core.exceptions import AppException, BadRequestError, ConflictError, ForbiddenError, NotFoundError
 from app.models.base import not_deleted
 from app.models.corridor import HumanHex
 from app.models.gene import (
@@ -3163,29 +3163,69 @@ async def fork_gene_to_library(
     source_slug: str,
     target: str,
     *,
-    user_id: str,
-    org_id: str | None,
+    current_user,  # app.models.user.User —— 取 id / is_super_admin / current_org_id
+    org_id: str | None = None,
 ) -> dict:
-    """从公共市场 fork 一份 gene 到个人/组织 library。
+    """从任意 scope（personal / org / public）fork 一份 gene 到 personal / org / public library。
 
-    - 源必须是 visibility=public 的 gene（在公共市场可见即可 fork）
-    - 优先查本地 DB；若本地无（来自外部注册表），通过 aggregator 拉取 manifest
-    - 复制全部内容字段；parent_gene_id 指向源 gene（外部源可能为 None）
-    - 新 slug 自动追加后缀避免与 (slug, org_id) 唯一冲突
-    - source 标记为 manual（fork 后是本地副本，便于后续编辑/再发布）
+    权限规则（current_user.is_super_admin=True 时全部放行）：
+      - 源是 personal（org_id IS NULL）：仅 gene.created_by == current_user.id 可 fork
+      - 源是 org（org_id 非空且 visibility != public）：current_user 必须是该 org 的有效成员
+      - 源是 public（visibility == public）：任意登录用户可 fork
+
+    目标 scope 的归属由 resolve_target_attrs 派生：
+      - personal：visibility=personal, org_id=None, 立即可用
+      - org：visibility=org_private, org_id=current_user.current_org_id, pending_owner 审批
+      - public：visibility=public, org_id=current_user.current_org_id, pending_owner 审批
+
+    实现要点：
+      - 优先查本地 DB；若本地无（来自外部注册表），仅当源被识别为公共时通过 aggregator 拉取
+      - 复制全部内容字段；parent_gene_id 指向源 gene（外部源可能为 None）
+      - 新 slug 在目标 org_id 下重名时追加短后缀避免唯一冲突
+      - source 标记为 manual（fork 后是本地副本，便于后续编辑/再发布）
     """
-    if target not in ("personal", "org"):
-        raise BadRequestError("fork 目标必须是 personal 或 org")
+    if target not in ("personal", "org", "public"):
+        raise BadRequestError("fork 目标必须是 personal / org / public 之一")
 
-    attrs = resolve_target_attrs(target, user_id=user_id, org_id=org_id)
+    # 目标归属：org_id 显式传入优先，否则取 current_user.current_org_id
+    effective_org_id = org_id if org_id is not None else getattr(current_user, "current_org_id", None)
+    attrs = resolve_target_attrs(target, user_id=current_user.id, org_id=effective_org_id)
 
     # ── 1. 优先本地 DB 查源 gene ──────────────────────────────────────
     source = await get_gene_by_slug(db, source_slug)
 
     if source is not None:
-        # 本地有：必须是公共可见才能 fork
-        if source.visibility != "public":
-            raise BadRequestError("仅可从公共市场的基因 fork")
+        # ── 1a. 按源 scope 校验权限 ────────────────────────────────────
+        # 源 scope 分类（与 resolve_target_attrs 落库规则严格对应）
+        is_personal_source = source.org_id is None and source.created_by is not None
+        is_public_source = source.visibility == "public"
+        # 其余情形（org_id 非空且 visibility != public）视作 org scope
+        is_org_source = (not is_personal_source) and (not is_public_source) and source.org_id is not None
+
+        if not getattr(current_user, "is_super_admin", False):
+            if is_personal_source:
+                if source.created_by != current_user.id:
+                    raise ForbiddenError(
+                        message="仅本人可 fork 自己的个人技能",
+                        message_key="errors.gene.fork_personal_forbidden",
+                    )
+            elif is_org_source:
+                # 必须是该 org 的有效成员（任意角色）
+                from app.models.org_membership import OrgMembership
+                membership = (await db.execute(
+                    select(OrgMembership).where(
+                        OrgMembership.user_id == current_user.id,
+                        OrgMembership.org_id == source.org_id,
+                        OrgMembership.deleted_at.is_(None),
+                    )
+                )).scalar_one_or_none()
+                if membership is None:
+                    raise ForbiddenError(
+                        message="仅本组织成员可 fork 该组织技能",
+                        message_key="errors.gene.fork_org_forbidden",
+                    )
+            # is_public_source：任意登录用户均可，无须额外校验
+
         source_name = source.name
         source_description = source.description
         source_short_description = source.short_description
@@ -3198,14 +3238,14 @@ async def fork_gene_to_library(
         source_synergies = source.synergies
         source_parent_id: str | None = source.id
     else:
-        # ── 2. 兜底：从聚合器（外部注册表）拉取 ────────────────────
+        # ── 2. 兜底：从聚合器（外部注册表）拉取，仅适用于公共来源 ───────
         try:
             detail = await get_aggregator().get_skill(source_slug)
         except Exception:
             detail = None
         if detail is None:
             raise NotFoundError(f"源基因不存在: {source_slug}")
-        # 外部源默认视为公共（聚合器返回的就是外部市场内容）
+        # 外部源默认视为公共（聚合器返回的就是外部市场内容），不再额外鉴权
         source_name = detail.name
         source_description = detail.description
         source_short_description = detail.short_description
@@ -3218,7 +3258,7 @@ async def fork_gene_to_library(
         source_synergies = _json_dumps(detail.synergies or [])
         source_parent_id = None  # 外部源没有本地 id 可指
 
-    # ── 3. 计算副本 slug：本地冲突则追加短后缀 ──────────────────────
+    # ── 3. 计算副本 slug：在目标 org_id 内重名时追加短后缀 ──────────
     import uuid
 
     new_slug = source_slug
@@ -3253,6 +3293,8 @@ async def fork_gene_to_library(
         created_by=attrs["created_by"],
         is_published=attrs["is_published"],
         review_status=attrs["review_status"],
+        # fork 出来的副本是本地新行；source_registry 标 local 与 create_gene 保持一致
+        source_registry="local",
     )
     db.add(fork)
     await db.commit()

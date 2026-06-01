@@ -1114,8 +1114,10 @@ const enUS = {
     scopePersonal: "My Skills",
     forkToPersonal: "Fork to Personal",
     forkToOrg: "Fork to Org",
+    forkToPublic: "Fork to Public Market",
     forkToPersonalSuccess: "Forked to personal library",
     forkToOrgSuccess: "Forked to org library, awaiting admin review",
+    forkToPublicSuccess: "Submitted to public market, awaiting admin review",
     forkFailed: "Fork failed",
     visAll: "All",
     visPublic: "Public Market",
@@ -1702,6 +1704,8 @@ const enUS = {
     },
     gene: {
       personal_in_use_by_agent: "This personal skill is loaded by one or more Agents. Please uninstall it from the instances first.",
+      fork_personal_forbidden: "Only the uploader can fork their own personal skill to another library.",
+      fork_org_forbidden: "Only members of this organization can fork this org skill to another library.",
     },
     billing: {
       instance_limit_exceeded: "AI Employee limit reached ({used}/{limit}). Please upgrade your plan or contact admin.",

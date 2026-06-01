@@ -5,7 +5,7 @@
   - resolve_target_attrs：必要参数缺失时抛 BadRequestError
   - review_gene：非组织 admin 非超管返回 403
   - review_gene：组织 admin 审核 pending_owner → approved（单步直审）
-  - fork_gene_to_library：非公共/未审核的 gene 不可 fork
+  - fork_gene_to_library：三向（personal/org/public）+ 权限矩阵
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from app.core.exceptions import BadRequestError
+from app.core.exceptions import BadRequestError, ForbiddenError
 from app.models.gene import GeneReviewStatus
 from app.services import gene_service
 
@@ -85,9 +85,16 @@ def test_resolve_target_attrs_unknown():
 
 
 class _FakeUser:
-    def __init__(self, user_id: str, is_super_admin: bool = False):
+    def __init__(
+        self,
+        user_id: str,
+        is_super_admin: bool = False,
+        current_org_id: str | None = None,
+    ):
         self.id = user_id
         self.is_super_admin = is_super_admin
+        # fork_gene_to_library 会从 current_user.current_org_id 取目标 org 上下文
+        self.current_org_id = current_org_id
 
 
 class _FakeGene:
@@ -97,6 +104,8 @@ class _FakeGene:
         org_id: str | None = "org-1",
         review_status: str = GeneReviewStatus.pending_owner,
         visibility: str = "org_private",
+        created_by: str | None = "uploader",
+        slug: str = "skill-x",
     ):
         self.id = gene_id
         self.org_id = org_id
@@ -104,6 +113,19 @@ class _FakeGene:
         self.visibility = visibility
         self.is_published = False
         self.created_by_instance_id = None
+        self.created_by = created_by
+        # fork 函数会读取一组 source_* 字段并复制
+        self.slug = slug
+        self.name = f"name-{slug}"
+        self.description = None
+        self.short_description = None
+        self.category = None
+        self.tags = None
+        self.icon = None
+        self.version = "1.0.0"
+        self.manifest = None
+        self.dependencies = None
+        self.synergies = None
 
 
 def _make_review_db(gene, membership=None) -> AsyncMock:
@@ -172,35 +194,214 @@ async def test_review_gene_org_admin_single_step_approve():
     assert result["is_published"] is True
 
 
-# ─── fork_gene_to_library 边界 ───────────────────────────────────────
+# ─── fork_gene_to_library：三向 + 权限矩阵 ───────────────────────────
+
+
+def _make_fork_db(
+    source: _FakeGene | None,
+    *,
+    membership=None,
+    has_slug_conflict: bool = False,
+) -> MagicMock:
+    """构造 fork 流程所需的 mock db。
+
+    调用顺序（取决于路径）：
+      1. select(Gene) by slug → source
+      2. （仅当非超管且源为 org scope 时）select(OrgMembership) → membership
+      3. select(Gene) for slug 冲突 → existing
+    db.add 为同步 MagicMock；db.commit / db.refresh 为 AsyncMock。
+    """
+    db = MagicMock()
+
+    side_effects: list[MagicMock] = []
+    # 1. 源 gene 查询
+    src_result = MagicMock()
+    src_result.scalar_one_or_none.return_value = source
+    side_effects.append(src_result)
+
+    # 2. OrgMembership（仅在测试构造时显式标记）
+    if membership is not None or (source is not None and getattr(source, "_expect_membership_query", False)):
+        m_result = MagicMock()
+        m_result.scalar_one_or_none.return_value = membership
+        side_effects.append(m_result)
+
+    # 3. slug 冲突查询
+    conflict_result = MagicMock()
+    conflict_result.scalar_one_or_none.return_value = MagicMock() if has_slug_conflict else None
+    side_effects.append(conflict_result)
+
+    db.execute = AsyncMock(side_effect=side_effects)
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    return db
 
 
 @pytest.mark.asyncio
-async def test_fork_rejects_non_public_source():
-    """非 visibility=public 或未审核通过的 gene 不可 fork。"""
+async def test_fork_personal_by_owner_to_org():
+    """个人技能 → 组织 library：上传者本人可 fork，落库为 pending_owner。"""
     source = _FakeGene(
-        review_status=GeneReviewStatus.pending_owner,
-        visibility="org_private",
+        gene_id="g-personal",
+        org_id=None,
+        created_by="owner-id",
+        visibility="personal",
+        review_status=None,
+        slug="my-skill",
     )
-    source.slug = "skill-x"
-    db = AsyncMock()
-    gene_result = MagicMock()
-    gene_result.scalar_one_or_none.return_value = source
-    db.execute = AsyncMock(return_value=gene_result)
+    db = _make_fork_db(source)
+    user = _FakeUser("owner-id", current_org_id="org-target")
 
-    with pytest.raises(BadRequestError):
+    result = await gene_service.fork_gene_to_library(
+        db, "my-skill", "org", current_user=user,
+    )
+
+    assert result["visibility"] == "org_private"
+    assert result["org_id"] == "org-target"
+    assert result["review_status"] == GeneReviewStatus.pending_owner
+    assert result["is_published"] is False
+    assert result["created_by"] == "owner-id"
+    assert result["parent_gene_id"] == "g-personal"
+
+
+@pytest.mark.asyncio
+async def test_fork_personal_by_non_owner_forbidden():
+    """个人技能 → 任意目标：非本人禁止 fork。"""
+    source = _FakeGene(
+        gene_id="g-personal",
+        org_id=None,
+        created_by="owner-id",
+        visibility="personal",
+        slug="my-skill",
+    )
+    db = _make_fork_db(source)
+    user = _FakeUser("other-user", current_org_id="org-target")
+
+    with pytest.raises(ForbiddenError) as exc:
         await gene_service.fork_gene_to_library(
-            db, "skill-x", "personal",
-            user_id="u-1", org_id=None,
+            db, "my-skill", "personal", current_user=user,
         )
+    assert exc.value.message_key == "errors.gene.fork_personal_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_fork_personal_to_public_by_owner():
+    """个人技能 → 公共市场：本人可 fork，pending_owner 等审。"""
+    source = _FakeGene(
+        gene_id="g-personal",
+        org_id=None,
+        created_by="owner-id",
+        visibility="personal",
+        slug="my-skill",
+    )
+    db = _make_fork_db(source)
+    user = _FakeUser("owner-id", current_org_id="org-target")
+
+    result = await gene_service.fork_gene_to_library(
+        db, "my-skill", "public", current_user=user,
+    )
+
+    assert result["visibility"] == "public"
+    assert result["org_id"] == "org-target"  # 公共发布也要挂在背书 org 下
+    assert result["review_status"] == GeneReviewStatus.pending_owner
+    assert result["is_published"] is False
+
+
+@pytest.mark.asyncio
+async def test_fork_org_by_member_to_personal():
+    """组织技能 → 个人 library：本组成员可 fork。"""
+    source = _FakeGene(
+        gene_id="g-org",
+        org_id="org-A",
+        created_by="some-uploader",
+        visibility="org_private",
+        slug="team-skill",
+    )
+    source._expect_membership_query = True
+    db = _make_fork_db(source, membership=MagicMock())  # 非 None 表示是该组成员
+    user = _FakeUser("member-id", current_org_id="org-A")
+
+    result = await gene_service.fork_gene_to_library(
+        db, "team-skill", "personal", current_user=user,
+    )
+
+    assert result["visibility"] == "personal"
+    assert result["org_id"] is None
+    assert result["created_by"] == "member-id"
+    assert result["parent_gene_id"] == "g-org"
+
+
+@pytest.mark.asyncio
+async def test_fork_org_by_non_member_forbidden():
+    """组织技能 → 任意目标：非本组成员 403。"""
+    source = _FakeGene(
+        gene_id="g-org",
+        org_id="org-A",
+        created_by="some-uploader",
+        visibility="org_private",
+        slug="team-skill",
+    )
+    source._expect_membership_query = True
+    db = _make_fork_db(source, membership=None)  # membership 缺失
+    user = _FakeUser("outsider-id", current_org_id="org-B")
+
+    with pytest.raises(ForbiddenError) as exc:
+        await gene_service.fork_gene_to_library(
+            db, "team-skill", "personal", current_user=user,
+        )
+    assert exc.value.message_key == "errors.gene.fork_org_forbidden"
+
+
+@pytest.mark.asyncio
+async def test_fork_org_to_public_by_member():
+    """组织技能 → 公共市场：本组成员可 fork，进入 pending_owner。"""
+    source = _FakeGene(
+        gene_id="g-org",
+        org_id="org-A",
+        created_by="some-uploader",
+        visibility="org_private",
+        slug="team-skill",
+    )
+    source._expect_membership_query = True
+    db = _make_fork_db(source, membership=MagicMock())
+    user = _FakeUser("member-id", current_org_id="org-A")
+
+    result = await gene_service.fork_gene_to_library(
+        db, "team-skill", "public", current_user=user,
+    )
+
+    assert result["visibility"] == "public"
+    assert result["org_id"] == "org-A"
+    assert result["review_status"] == GeneReviewStatus.pending_owner
+
+
+@pytest.mark.asyncio
+async def test_fork_public_to_personal_anyone():
+    """公共技能 → 个人 library：任意登录用户可 fork（回归原行为）。"""
+    source = _FakeGene(
+        gene_id="g-public",
+        org_id="some-org",  # 公共技能也会挂在背书 org 下
+        created_by="some-uploader",
+        visibility="public",
+        slug="popular-skill",
+    )
+    db = _make_fork_db(source)
+    # 与源不同组、非本人，仍可 fork（公共可见）
+    user = _FakeUser("any-user", current_org_id=None)
+
+    result = await gene_service.fork_gene_to_library(
+        db, "popular-skill", "personal", current_user=user,
+    )
+
+    assert result["visibility"] == "personal"
+    assert result["org_id"] is None
+    assert result["created_by"] == "any-user"
 
 
 @pytest.mark.asyncio
 async def test_fork_rejects_invalid_target():
-    """fork 目标只能是 personal / org，public 不允许。"""
-    db = AsyncMock()
+    """target 必须是 personal / org / public 之一。"""
+    db = MagicMock()
+    user = _FakeUser("u-1", current_org_id="org-1")
     with pytest.raises(BadRequestError):
         await gene_service.fork_gene_to_library(
-            db, "skill-x", "public",
-            user_id="u-1", org_id="org-1",
+            db, "skill-x", "invalid", current_user=user,
         )
