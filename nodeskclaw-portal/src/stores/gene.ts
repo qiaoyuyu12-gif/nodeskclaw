@@ -385,9 +385,12 @@ export const useGeneStore = defineStore('gene', () => {
    * - target='personal'：归属当前用户，立即可用
    * - target='org'：归属当前组织，pending_owner 等组织 admin 审核
    * - target='public'：归属当前组织，visibility=public 但 pending_owner 等审批
+   *
+   * 参数说明：geneIdentifier 应为本地 gene 的 id（UUID），外部 aggregator 来源传其 slug。
+   * 同一 slug 经三向 fork 后可能在本地多 scope 并存，按 slug 查会冲突，必须用 id 定位。
    */
-  async function forkGene(geneSlug: string, target: 'personal' | 'org' | 'public'): Promise<GeneItem> {
-    const res = await api.post(`/genes/${geneSlug}/fork`, { target })
+  async function forkGene(geneIdentifier: string, target: 'personal' | 'org' | 'public'): Promise<GeneItem> {
+    const res = await api.post(`/genes/${geneIdentifier}/fork`, { target })
     return res.data.data
   }
 

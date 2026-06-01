@@ -320,10 +320,11 @@ async function onDeleteGene(gene: GeneItem) {
  * - public：visibility=public 但 pending_owner，需组织 admin 审核
  */
 const forkingSlug = ref<string | null>(null)
-async function onForkGene(slug: string, target: 'personal' | 'org' | 'public') {
-  forkingSlug.value = slug
+async function onForkGene(gene: GeneItem, target: 'personal' | 'org' | 'public') {
+  forkingSlug.value = gene.slug
   try {
-    await store.forkGene(slug, target)
+    // 必须用 gene.id（UUID）传给后端：三向 fork 后同 slug 可在多 scope 并存，按 slug 查会冲突
+    await store.forkGene(gene.id, target)
     // 按 target 选择对应 i18n 成功文案
     const successKey =
       target === 'personal'
@@ -622,7 +623,7 @@ function hasNativeTools(gene: GeneItem): boolean {
                     v-if="canForkFrom(gene).personal"
                     class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
                     :disabled="forkingSlug === gene.slug"
-                    @click.stop="onForkGene(gene.slug, 'personal')"
+                    @click.stop="onForkGene(gene, 'personal')"
                   >
                     <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
                     <Download v-else class="w-3 h-3" />
@@ -632,7 +633,7 @@ function hasNativeTools(gene: GeneItem): boolean {
                     v-if="canForkFrom(gene).org"
                     class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
                     :disabled="forkingSlug === gene.slug"
-                    @click.stop="onForkGene(gene.slug, 'org')"
+                    @click.stop="onForkGene(gene, 'org')"
                   >
                     <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
                     <Download v-else class="w-3 h-3" />
@@ -642,7 +643,7 @@ function hasNativeTools(gene: GeneItem): boolean {
                     v-if="canForkFrom(gene).public"
                     class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
                     :disabled="forkingSlug === gene.slug"
-                    @click.stop="onForkGene(gene.slug, 'public')"
+                    @click.stop="onForkGene(gene, 'public')"
                   >
                     <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
                     <Download v-else class="w-3 h-3" />

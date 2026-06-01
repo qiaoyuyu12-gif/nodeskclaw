@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field
 # - org：visibility=org_private，归属当前组织，需组织 admin 审核
 # - public：visibility=public，归属当前组织，需组织 admin 审核后才上架
 UploadTarget = Literal["personal", "org", "public"]
-# Fork 目标库：只能 fork 到自己的个人/组织 library（不能 fork 回公共市场）
-ForkTarget = Literal["personal", "org"]
+# Fork 目标库：与 UploadTarget 同集合（三向互 fork：personal/org/public 任意组合）
+ForkTarget = Literal["personal", "org", "public"]
 
 
 # ── Gene ─────────────────────────────────────────

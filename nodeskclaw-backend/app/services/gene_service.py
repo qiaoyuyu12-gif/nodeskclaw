@@ -3160,7 +3160,7 @@ def resolve_target_attrs(
 
 async def fork_gene_to_library(
     db: AsyncSession,
-    source_slug: str,
+    source_identifier: str,
     target: str,
     *,
     current_user,  # app.models.user.User —— 取 id / is_super_admin / current_org_id
@@ -3168,21 +3168,15 @@ async def fork_gene_to_library(
 ) -> dict:
     """从任意 scope（personal / org / public）fork 一份 gene 到 personal / org / public library。
 
+    source_identifier:
+      - 本地 gene：传 gene.id（UUID）。三向 fork 后同一个 slug 可能在 DB 中并存多条
+        active 行（个人 / 组织 / 公共），按 slug 查会 MultipleResultsFound；按 id 唯一。
+      - 外部 aggregator 来源：本地 DB 找不到时回退到聚合器，identifier 当作 slug 使用。
+
     权限规则（current_user.is_super_admin=True 时全部放行）：
       - 源是 personal（org_id IS NULL）：仅 gene.created_by == current_user.id 可 fork
       - 源是 org（org_id 非空且 visibility != public）：current_user 必须是该 org 的有效成员
       - 源是 public（visibility == public）：任意登录用户可 fork
-
-    目标 scope 的归属由 resolve_target_attrs 派生：
-      - personal：visibility=personal, org_id=None, 立即可用
-      - org：visibility=org_private, org_id=current_user.current_org_id, pending_owner 审批
-      - public：visibility=public, org_id=current_user.current_org_id, pending_owner 审批
-
-    实现要点：
-      - 优先查本地 DB；若本地无（来自外部注册表），仅当源被识别为公共时通过 aggregator 拉取
-      - 复制全部内容字段；parent_gene_id 指向源 gene（外部源可能为 None）
-      - 新 slug 在目标 org_id 下重名时追加短后缀避免唯一冲突
-      - source 标记为 manual（fork 后是本地副本，便于后续编辑/再发布）
     """
     if target not in ("personal", "org", "public"):
         raise BadRequestError("fork 目标必须是 personal / org / public 之一")
@@ -3191,8 +3185,10 @@ async def fork_gene_to_library(
     effective_org_id = org_id if org_id is not None else getattr(current_user, "current_org_id", None)
     attrs = resolve_target_attrs(target, user_id=current_user.id, org_id=effective_org_id)
 
-    # ── 1. 优先本地 DB 查源 gene ──────────────────────────────────────
-    source = await get_gene_by_slug(db, source_slug)
+    # ── 1. 优先本地 DB 按 gene.id 查源（UUID 唯一） ───────────────────
+    source = (await db.execute(
+        select(Gene).where(Gene.id == source_identifier, not_deleted(Gene))
+    )).scalar_one_or_none()
 
     if source is not None:
         # ── 1a. 按源 scope 校验权限 ────────────────────────────────────
@@ -3226,6 +3222,8 @@ async def fork_gene_to_library(
                     )
             # is_public_source：任意登录用户均可，无须额外校验
 
+        # 复制内容字段，slug 沿用源 slug 作为基准（冲突时下面追后缀）
+        source_slug = source.slug
         source_name = source.name
         source_description = source.description
         source_short_description = source.short_description
@@ -3238,14 +3236,15 @@ async def fork_gene_to_library(
         source_synergies = source.synergies
         source_parent_id: str | None = source.id
     else:
-        # ── 2. 兜底：从聚合器（外部注册表）拉取，仅适用于公共来源 ───────
+        # ── 2. 兜底：本地无此 id（外部聚合器来源），把 identifier 当 slug 查 ───
         try:
-            detail = await get_aggregator().get_skill(source_slug)
+            detail = await get_aggregator().get_skill(source_identifier)
         except Exception:
             detail = None
         if detail is None:
-            raise NotFoundError(f"源基因不存在: {source_slug}")
+            raise NotFoundError(f"源基因不存在: {source_identifier}")
         # 外部源默认视为公共（聚合器返回的就是外部市场内容），不再额外鉴权
+        source_slug = source_identifier
         source_name = detail.name
         source_description = detail.description
         source_short_description = detail.short_description

@@ -762,14 +762,18 @@ async def create_manual_gene(
     return ApiResponse(data=gene_data)
 
 
-@router.post("/genes/{gene_slug}/fork")
+@router.post("/genes/{gene_identifier}/fork")
 async def fork_gene(
-    gene_slug: str,
+    gene_identifier: str,
     req: ForkGeneRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """fork 一份 gene 到个人 / 组织 / 公共 library（三向支持）。
+
+    gene_identifier:
+      - 本地 gene：传 gene.id（UUID）。三向 fork 后同一个 slug 可能多 scope 并存，按 slug 查会冲突。
+      - 外部 aggregator gene：传外部 slug，本地查不到时回退聚合器。
 
     - target=personal：副本归属当前用户，无需审核
     - target=org：副本归属当前组织，pending_owner 等组织 admin 审核
@@ -782,7 +786,7 @@ async def fork_gene(
         raise BadRequestError("fork 到组织 / 公共市场前需先加入组织")
 
     gene_data = await gene_service.fork_gene_to_library(
-        db, gene_slug, req.target,
+        db, gene_identifier, req.target,
         current_user=current_user,
     )
     return ApiResponse(data=gene_data)
