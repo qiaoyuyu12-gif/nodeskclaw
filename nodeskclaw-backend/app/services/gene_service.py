@@ -646,6 +646,9 @@ async def create_gene(
         review_status=review_status,
         created_by=user_id,
         org_id=org_id,
+        # 标记为本地创建，确保前端"删除/编辑"等仅对本地 gene 显示的入口可见
+        # （外部 registry 同步走 genehub_client，自带 registry_id；不进此路径）
+        source_registry="local",
     )
     db.add(gene)
     await db.commit()
