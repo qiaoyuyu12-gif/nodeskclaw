@@ -2864,6 +2864,25 @@ async def delete_user_gene(
             },
         )
 
+    # ── 2.5. 个人 scope 已被 Agent 加载时拒绝删除 ─────────────────────────
+    # 判定：org_id 为空且 created_by 非空（即 target=personal 的归属规则）。
+    # 若仍有 active InstanceGene 引用（deleted_at IS NULL），引导用户先在实例侧卸载，
+    # 防止"个人技能被悄悄连根抹除"的非预期数据丢失。
+    # 组织 / 公共 scope 不进入此分支，保留下方的级联软删行为。
+    is_personal_scope = gene.org_id is None and gene.created_by is not None
+    if is_personal_scope:
+        in_use_count = (await db.execute(
+            select(func.count()).select_from(InstanceGene).where(
+                InstanceGene.gene_id == gene_id,
+                InstanceGene.deleted_at.is_(None),
+            )
+        )).scalar() or 0
+        if in_use_count > 0:
+            raise ConflictError(
+                message=f"该个人技能正被 {in_use_count} 个 Agent 加载，请先在对应实例卸载后再删除",
+                message_key="errors.gene.personal_in_use_by_agent",
+            )
+
     # ── 3. 级联软删所有 active InstanceGene 引用 ─────────────────────────
     # 查询所有依赖该 gene 的 active 实例安装记录
     refs_result = await db.execute(

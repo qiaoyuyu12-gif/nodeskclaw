@@ -1700,6 +1700,9 @@ const enUS = {
     model_provider: {
       already_exists: "This provider is already configured",
     },
+    gene: {
+      personal_in_use_by_agent: "This personal skill is loaded by one or more Agents. Please uninstall it from the instances first.",
+    },
     billing: {
       instance_limit_exceeded: "AI Employee limit reached ({used}/{limit}). Please upgrade your plan or contact admin.",
       cpu_quota_exceeded: "CPU quota exceeded: used {used}, requesting {requested}, limit {limit}",

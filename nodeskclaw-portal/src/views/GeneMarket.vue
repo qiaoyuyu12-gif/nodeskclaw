@@ -39,6 +39,7 @@ import { useGeneStore } from '@/stores/gene'
 import type { GeneItem, GenomeItem, TemplateInfo } from '@/stores/gene'
 import { useToast } from '@/composables/useToast'
 import { useAuthStore } from '@/stores/auth'
+import { resolveApiErrorMessage } from '@/i18n/error'
 import CustomSelect from '@/components/shared/CustomSelect.vue'
 import { skillApi } from '@/services/skills'
 
@@ -297,7 +298,7 @@ function canDeleteGene(gene: GeneItem): boolean {
 
 /**
  * 删除 gene 的确认 + 请求逻辑。
- * 后端 409：提示用户先卸载引用实例；403：无权操作；其他：通用错误 toast。
+ * 后端 409（如个人技能已被 Agent 加载）会带 message_key，由 resolveApiErrorMessage 翻译为本地化 toast。
  */
 async function onDeleteGene(gene: GeneItem) {
   if (!confirm(t('geneMarket.deleteConfirm', { name: gene.name }))) return
@@ -306,13 +307,8 @@ async function onDeleteGene(gene: GeneItem) {
     toast.success(t('geneMarket.deleteSuccess'))
     await loadData()
   } catch (e: unknown) {
-    const err = e as { response?: { status?: number; data?: { message?: string } } }
-    if (err?.response?.status === 409) {
-      // 有实例正在引用该 gene，提示用户先卸载
-      toast.error(err.response?.data?.message ?? t('geneMarket.deleteFailed'))
-    } else {
-      toast.error(err?.response?.data?.message ?? t('geneMarket.deleteFailed'))
-    }
+    // 走统一错误解析：优先 message_key 翻译；缺失时回退为后端原文 message，再退到通用文案
+    toast.error(resolveApiErrorMessage(e, t('geneMarket.deleteFailed')))
   }
 }
 

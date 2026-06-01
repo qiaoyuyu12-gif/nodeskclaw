@@ -1700,6 +1700,9 @@ const zhCN = {
     model_provider: {
       already_exists: "该供应商已配置，不能重复添加",
     },
+    gene: {
+      personal_in_use_by_agent: "该个人技能正被 Agent 加载，请先在对应实例卸载后再删除",
+    },
     billing: {
       instance_limit_exceeded: "AI 员工数量已达上限（{used}/{limit}），请升级套餐或联系管理员",
       cpu_quota_exceeded: "CPU 配额不足：已用 {used}，本次需要 {requested}，上限 {limit}",

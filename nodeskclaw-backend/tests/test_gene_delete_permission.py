@@ -4,7 +4,9 @@
   - 非上传者、非 org admin、非超管 → 403
   - 超管 → 允许（软删成功）
   - 上传者本人 → 允许（软删成功）
-  - 有 active InstanceGene 引用时 → 级联软删，不再返回 409
+  - 个人 scope（org_id 为空）+ 仍被 Agent 加载 → 409 拒绝
+  - 个人 scope + 无引用 → 允许
+  - 组织 / 公共 scope + active 实例引用 → 级联软删（保持原行为）
 """
 
 from __future__ import annotations
@@ -55,10 +57,11 @@ class _FakeInstanceGene:
 def _make_db(gene: _FakeGene | None, instance_refs: list[_FakeInstanceGene], membership=None) -> AsyncMock:
     """构造一个 AsyncMock 的 db session，按查询顺序返回预设结果。
 
-    查询顺序：
+    查询顺序（与 gene_service.delete_user_gene 实际执行顺序一致）：
       1. select(Gene) → gene
-      2. select(OrgMembership) → membership（若 gene.org_id 非空）
-      3. select(InstanceGene) → instance_refs（InstanceGene 行对象列表）
+      2. select(OrgMembership) → membership（仅当 gene.org_id 非空时触发）
+      3. select(func.count(InstanceGene)) → 引用数（仅个人 scope 时触发）
+      4. select(InstanceGene) → instance_refs（级联软删阶段；若上一步 count>0 则不会执行到）
     """
     db = AsyncMock()
     db.commit = AsyncMock()
@@ -77,7 +80,14 @@ def _make_db(gene: _FakeGene | None, instance_refs: list[_FakeInstanceGene], mem
             membership_result.scalar_one_or_none.return_value = membership
             execute_results.append(membership_result)
 
-        # 第 3 次（若到达级联软删阶段）：InstanceGene 查询
+        # 第 3 次（仅在个人 scope 时触发）：InstanceGene 引用计数查询
+        is_personal = gene.org_id is None and gene.created_by is not None
+        if is_personal:
+            count_result = MagicMock()
+            count_result.scalar.return_value = len(instance_refs)
+            execute_results.append(count_result)
+
+        # 第 4 次（若到达级联软删阶段）：InstanceGene 查询
         refs_result = MagicMock()
         refs_result.scalars.return_value.all.return_value = instance_refs
         execute_results.append(refs_result)
@@ -107,7 +117,7 @@ async def test_delete_gene_forbidden_non_uploader_non_admin():
 
 @pytest.mark.asyncio
 async def test_delete_gene_allowed_super_admin():
-    """超管无论是否为上传者，均允许删除。"""
+    """超管无论是否为上传者，均允许删除（无引用 → 直接软删）。"""
     from app.services.gene_service import delete_user_gene
 
     gene = _FakeGene("gene-2", created_by="other-user-id", org_id=None)
@@ -122,7 +132,7 @@ async def test_delete_gene_allowed_super_admin():
 
 @pytest.mark.asyncio
 async def test_delete_gene_allowed_uploader():
-    """上传者本人可删除自己上传的 gene。"""
+    """上传者本人可删除自己的个人 gene（无引用场景）。"""
     from app.services.gene_service import delete_user_gene
 
     gene = _FakeGene("gene-3", created_by="uploader-id", org_id=None)
@@ -136,20 +146,45 @@ async def test_delete_gene_allowed_uploader():
 
 
 @pytest.mark.asyncio
-async def test_delete_gene_cascades_instance_refs():
-    """有 active 实例引用时：级联软删 InstanceGene，不再返回 409。"""
+async def test_delete_personal_gene_blocked_when_loaded_into_agent():
+    """个人 scope（org_id 为空）+ 存在 active InstanceGene 引用 → 409 ConflictError，gene 不被软删。"""
+    from app.core.exceptions import ConflictError
     from app.services.gene_service import delete_user_gene
 
-    gene = _FakeGene("gene-4", created_by="uploader-id", org_id=None)
+    gene = _FakeGene("gene-personal", created_by="uploader-id", org_id=None)
     user = _FakeUser("uploader-id", is_super_admin=False)
+    # 2 个仍在 active 状态的 InstanceGene 引用
     refs = [_FakeInstanceGene("inst-a"), _FakeInstanceGene("inst-b")]
     db = _make_db(gene, instance_refs=refs)
 
-    result = await delete_user_gene(db, "gene-4", current_user=user)
+    with pytest.raises(ConflictError) as exc_info:
+        await delete_user_gene(db, "gene-personal", current_user=user)
 
-    assert result == {"deleted": True, "id": "gene-4", "cascaded_instance_genes": 2}
+    # 状态码 409 + 标准 message_key
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.message_key == "errors.gene.personal_in_use_by_agent"
+    # gene 与 InstanceGene 都不应被软删（应留给用户先在实例端卸载）
+    assert gene._deleted is False
+    assert all(ref._deleted is False for ref in refs)
+
+
+@pytest.mark.asyncio
+async def test_delete_org_gene_cascades_instance_refs():
+    """组织 scope 的 gene 即使有 active 实例引用，也走级联软删（保持原行为，对比个人 scope）。"""
+    from app.services.gene_service import delete_user_gene
+
+    # 组织 scope：org_id 非空；当前用户是该组织的 admin
+    gene = _FakeGene("gene-org", created_by="some-uploader", org_id="org-1")
+    user = _FakeUser("admin-id", is_super_admin=False)
+    refs = [_FakeInstanceGene("inst-a"), _FakeInstanceGene("inst-b")]
+    # membership 非 None 即代表当前用户是该 org 的 admin（service 仅判断查询结果是否存在）
+    db = _make_db(gene, instance_refs=refs, membership=MagicMock())
+
+    result = await delete_user_gene(db, "gene-org", current_user=user)
+
+    assert result == {"deleted": True, "id": "gene-org", "cascaded_instance_genes": 2}
     assert gene._deleted is True
-    # 所有引用 InstanceGene 都被一起软删
+    # 组织 scope 下，所有 active InstanceGene 应被级联软删
     assert all(ref._deleted for ref in refs)
 
 
