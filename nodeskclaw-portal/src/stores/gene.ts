@@ -40,6 +40,8 @@ export interface GeneItem {
   source_registry?: string
   source_registry_name?: string
   created_by?: string  // 上传者用户 ID,用于前端判断删除权限(本人/超管)
+  created_by_name?: string | null  // 审核中心列表用：上传者真实姓名（后端 join User 注入）
+  created_by_email?: string | null  // 审核中心列表用：上传者邮箱
   org_id?: string | null  // 归属组织 ID；null = 个人 scope；public scope 也会挂在背书 org 下
   created_at?: string
 }

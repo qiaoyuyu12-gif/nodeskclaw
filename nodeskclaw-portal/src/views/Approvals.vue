@@ -79,7 +79,7 @@
                 </span>
               </td>
               <td class="px-4 py-3 text-muted-foreground">
-                {{ gene.created_by ?? '-' }}
+                {{ uploaderLabel(gene) }}
               </td>
               <td class="px-4 py-3 text-muted-foreground">
                 {{ formatDate(gene.created_at) }}
@@ -170,6 +170,14 @@ async function onReview(geneId: string, action: 'approve' | 'reject') {
   } finally {
     reviewingId.value = null
   }
+}
+
+// 上传者展示：优先 name → email → UUID 截短，避免裸显 UUID
+function uploaderLabel(gene: GeneItem): string {
+  if (gene.created_by_name) return gene.created_by_name
+  if (gene.created_by_email) return gene.created_by_email
+  if (gene.created_by) return gene.created_by.slice(0, 8) + '…'
+  return '-'
 }
 
 // 可见性 → 中文/英文标签 + 颜色样式

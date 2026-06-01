@@ -3022,6 +3022,9 @@ async def get_pending_review_genes(
       - 其他用户（包括未传 current_user）：返回空列表
 
     与 review_gene 的权限模型一致，避免列表里出现用户实际无权审核的条目。
+
+    返回的每条 dict 在 _gene_to_dict 基础上额外注入 created_by_name /
+    created_by_email，前端审核中心展示用，避免 UI 直接显示 UUID。
     """
     # 兼容旧调用：未传 current_user 时退回到"全部"以便测试场景灵活，但
     # 这条路径 API 层不会走到（API 必传 current_user）。
@@ -3037,7 +3040,9 @@ async def get_pending_review_genes(
             )
             .order_by(Gene.created_at.desc())
         )
-        return [_gene_to_dict(g) for g in result.scalars().all()]
+        return await _attach_uploader_identity(
+            db, [_gene_to_dict(g) for g in result.scalars().all()],
+        )
 
     # 超管 → 全部
     if getattr(current_user, "is_super_admin", False):
@@ -3052,7 +3057,9 @@ async def get_pending_review_genes(
             )
             .order_by(Gene.created_at.desc())
         )
-        return [_gene_to_dict(g) for g in result.scalars().all()]
+        return await _attach_uploader_identity(
+            db, [_gene_to_dict(g) for g in result.scalars().all()],
+        )
 
     # 普通用户 → 查其作为 admin 的所有 org_id
     from app.models.org_membership import OrgMembership, OrgRole
@@ -3081,7 +3088,45 @@ async def get_pending_review_genes(
         )
         .order_by(Gene.created_at.desc())
     )
-    return [_gene_to_dict(g) for g in result.scalars().all()]
+    return await _attach_uploader_identity(
+        db, [_gene_to_dict(g) for g in result.scalars().all()],
+    )
+
+
+async def _attach_uploader_identity(
+    db: AsyncSession,
+    items: list[dict],
+) -> list[dict]:
+    """给一批 gene dict 批量注入 created_by_name / created_by_email。
+
+    审核中心需要展示上传者的"人话名字"，但 _gene_to_dict 默认只回
+    created_by（UUID）。这里一次性按所有 created_by 批量拿 User，
+    避免 N+1 查询。失效用户（已删除/不存在）保持 None，前端回退到 UUID。
+    """
+    if not items:
+        return items
+
+    user_ids = {it.get("created_by") for it in items if it.get("created_by")}
+    if not user_ids:
+        return items
+
+    from app.models.user import User
+
+    rows = (await db.execute(
+        select(User.id, User.name, User.email).where(User.id.in_(user_ids))
+    )).all()
+    by_id = {row[0]: (row[1], row[2]) for row in rows}
+
+    for it in items:
+        uid = it.get("created_by")
+        if uid and uid in by_id:
+            name, email = by_id[uid]
+            it["created_by_name"] = name
+            it["created_by_email"] = email
+        else:
+            it["created_by_name"] = None
+            it["created_by_email"] = None
+    return items
 
 
 async def get_gene_activity(db: AsyncSession, limit: int = 50) -> list[dict]:

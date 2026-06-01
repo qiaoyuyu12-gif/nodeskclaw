@@ -612,3 +612,63 @@ async def test_get_gene_by_slug_returns_first_when_multiple_scopes_exist():
     result_obj.scalar_one_or_none.assert_not_called()
     # 静默引用避免 lint 警告
     assert gene_org.slug == "dup-slug"
+
+
+# ─── _attach_uploader_identity：审核中心展示用户名而非 UUID ──────────
+
+
+@pytest.mark.asyncio
+async def test_attach_uploader_identity_batch_resolves_names():
+    """审核中心列表必须把 created_by(UUID) 翻译成 name/email，前端不再裸显 UUID。
+    一次批量查 User，避免 N+1。"""
+    items = [
+        {"id": "g1", "created_by": "u-alice"},
+        {"id": "g2", "created_by": "u-bob"},
+        {"id": "g3", "created_by": "u-alice"},  # 重复 uploader，仍只 1 次查询
+        {"id": "g4", "created_by": None},        # 无上传者，跳过
+    ]
+
+    db = AsyncMock()
+    user_rows = MagicMock()
+    user_rows.all.return_value = [
+        ("u-alice", "Alice", "alice@example.com"),
+        ("u-bob", "Bob", "bob@example.com"),
+    ]
+    db.execute = AsyncMock(return_value=user_rows)
+
+    result = await gene_service._attach_uploader_identity(db, items)
+
+    assert result[0]["created_by_name"] == "Alice"
+    assert result[0]["created_by_email"] == "alice@example.com"
+    assert result[1]["created_by_name"] == "Bob"
+    assert result[2]["created_by_name"] == "Alice"  # 复用同一查询结果
+    assert result[3]["created_by_name"] is None      # 无 uploader
+    # 仅 1 次 User 表查询（即使有 4 条记录、2 个不同用户）
+    assert db.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_attach_uploader_identity_handles_missing_user():
+    """上传者用户已被软删/不存在时保持 None，前端会回退到 UUID 显示。"""
+    items = [{"id": "g1", "created_by": "u-ghost"}]
+
+    db = AsyncMock()
+    user_rows = MagicMock()
+    user_rows.all.return_value = []  # User 表查不到
+    db.execute = AsyncMock(return_value=user_rows)
+
+    result = await gene_service._attach_uploader_identity(db, items)
+    assert result[0]["created_by_name"] is None
+    assert result[0]["created_by_email"] is None
+
+
+@pytest.mark.asyncio
+async def test_attach_uploader_identity_skips_query_when_no_uploaders():
+    """所有条目 created_by 都为空时不应触发任何 SQL。"""
+    items = [{"id": "g1", "created_by": None}]
+    db = AsyncMock()
+    db.execute = AsyncMock()
+
+    result = await gene_service._attach_uploader_identity(db, items)
+    assert result == items  # 原样返回，不注入字段
+    db.execute.assert_not_called()
