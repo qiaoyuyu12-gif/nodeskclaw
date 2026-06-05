@@ -34,6 +34,7 @@ interface ModelProvider {
   is_active: boolean
   skip_ssl_verify: boolean
   allowed_models?: string[] | null
+  is_platform_managed: boolean  // true=平台超管下发，组织端锁字段且不可删
   usage_total_tokens: number
   created_by: string
 }
@@ -106,7 +107,12 @@ async function fetchProviders() {
   loading.value = true
   try {
     const res = await api.get(`/orgs/${orgId.value}/model-providers`)
-    providers.value = res.data.data ?? []
+    const list: ModelProvider[] = res.data.data ?? []
+    // 平台托管行置顶，便于用户优先看到官方下发的模型；同组内保持后端返回顺序
+    providers.value = [...list].sort((a, b) => {
+      if (a.is_platform_managed === b.is_platform_managed) return 0
+      return a.is_platform_managed ? -1 : 1
+    })
   } catch (e: any) {
     toast.error(resolveApiErrorMessage(e))
   } finally {
