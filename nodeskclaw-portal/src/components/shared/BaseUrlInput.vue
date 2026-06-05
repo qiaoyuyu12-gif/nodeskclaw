@@ -16,11 +16,13 @@ const props = withDefaults(
     placeholder?: string
     showClear?: boolean
     inputClass?: string
+    disabled?: boolean
   }>(),
   {
     placeholder: '',
     showClear: false,
     inputClass: '',
+    disabled: false,
   },
 )
 
@@ -104,7 +106,8 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentMousedown,
   <div class="flex relative" ref="containerRef">
     <button
       type="button"
-      class="flex items-center gap-0.5 px-2 py-1.5 border border-r-0 border-border bg-muted/50 rounded-l-md text-xs font-mono text-muted-foreground hover:text-foreground transition-colors shrink-0"
+      :disabled="disabled"
+      class="flex items-center gap-0.5 px-2 py-1.5 border border-r-0 border-border bg-muted/50 rounded-l-md text-xs font-mono text-muted-foreground hover:text-foreground transition-colors shrink-0 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:text-muted-foreground"
       @click="dropdownOpen = !dropdownOpen"
     >
       {{ protocol }}
@@ -134,8 +137,9 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentMousedown,
       :value="host"
       type="text"
       :placeholder="placeholder"
+      :disabled="disabled"
       :class="[showClear ? 'pr-8' : 'pr-3', inputClass]"
-      class="flex-1 min-w-0 pl-3 py-1.5 border border-border bg-background rounded-r-md text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/50"
+      class="flex-1 min-w-0 pl-3 py-1.5 border border-border bg-background rounded-r-md text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-60 disabled:cursor-not-allowed"
       @input="host = ($event.target as HTMLInputElement).value; onHostInput()"
       @paste="onPaste"
     />

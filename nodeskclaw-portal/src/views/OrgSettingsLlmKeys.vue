@@ -2,13 +2,13 @@
 import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useOrgStore } from '@/stores/org'
-import { Settings, Loader2, KeyRound, Check, X, Save, Plus, Trash2, ChevronDown, Zap, CheckCircle, XCircle } from 'lucide-vue-next'
+import { Settings, Loader2, KeyRound, Check, X, Plus, Trash2, ChevronDown, Zap, CheckCircle, XCircle, ShieldCheck } from 'lucide-vue-next'
 import BaseUrlInput from '@/components/shared/BaseUrlInput.vue'
 import api from '@/services/api'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { resolveApiErrorMessage } from '@/i18n/error'
-import { PROVIDERS, PROVIDER_LABELS, WP_PROVIDERS, ALL_KNOWN_PROVIDERS } from '@/utils/llmProviders'
+import { PROVIDERS, PROVIDER_LABELS, ALL_KNOWN_PROVIDERS } from '@/utils/llmProviders'
 import { useEdition } from '@/composables/useFeature'
 import ModelSelect from '@/components/shared/ModelSelect.vue'
 import type { ModelItem } from '@/components/shared/ModelSelect.vue'
@@ -39,16 +39,8 @@ interface ModelProvider {
   created_by: string
 }
 
-interface WpModelInfo {
-  id: string
-  name: string
-}
-
-const NON_CODEX_PROVIDERS = PROVIDERS.filter(p => p !== 'codex')
-const visibleProviders = computed(() =>
-  isEE.value ? NON_CODEX_PROVIDERS.filter(p => !WP_PROVIDERS.has(p)) : NON_CODEX_PROVIDERS,
-)
-const WP_PROVIDER_LIST = [...WP_PROVIDERS]
+// 主网格展示的内置 provider（排除 codex，codex 仅支持个人 Key）
+const visibleProviders = computed(() => PROVIDERS.filter(p => p !== 'codex'))
 
 const providers = ref<ModelProvider[]>([])
 const loading = ref(true)
@@ -68,9 +60,13 @@ const form = ref({
   system_token_limit: '',
   is_active: true,
   skip_ssl_verify: false,
+  allowed_models: [] as string[],  // 仅平台托管行使用：勾选允许 AI 员工使用的模型
 })
 
 const testModel = ref<ModelItem | null>(null)
+// 平台托管行编辑时拉取的全部可用模型清单，给 checkbox 列表用
+const platformAllowedChoices = ref<ModelItem[]>([])
+const platformChoicesLoading = ref(false)
 
 const showCustomForm = ref(false)
 const customSlug = ref('')
@@ -85,13 +81,26 @@ function isCustomProvider(providerName: string): boolean {
   return !ALL_KNOWN_PROVIDERS.has(providerName)
 }
 
+// 当前编辑对话框是否针对平台托管行（锁字段 + 显示 allowed_models 勾选）
+const lockedByPlatform = computed(() => {
+  if (!isEditing.value || !editingId.value) return false
+  const existing = providers.value.find(p => p.id === editingId.value)
+  return !!existing?.is_platform_managed
+})
+
 const customProviders = computed(() =>
   providers.value.filter(p => isCustomProvider(p.provider)),
 )
 
 function resetForm() {
-  form.value = { api_key: '', base_url: '', api_type: '', label: '', org_token_limit: '', system_token_limit: '', is_active: true, skip_ssl_verify: false }
+  form.value = {
+    api_key: '', base_url: '', api_type: '', label: '',
+    org_token_limit: '', system_token_limit: '',
+    is_active: true, skip_ssl_verify: false,
+    allowed_models: [],
+  }
   testModel.value = null
+  platformAllowedChoices.value = []
 }
 
 function configuredMap(): Record<string, ModelProvider> {
@@ -120,67 +129,28 @@ async function fetchProviders() {
   }
 }
 
-const wpModels = ref<Record<string, WpModelInfo[]>>({})
-const wpSelectedModels = ref<Record<string, Set<string>>>({})
-const wpSaving = ref<Record<string, boolean>>({})
-
-const wpConfiguredProviders = computed(() => {
-  const map = configuredMap()
-  return WP_PROVIDER_LIST.filter(p => !!map[p])
-})
-
-function initWpSelections() {
-  const map = configuredMap()
-  for (const p of WP_PROVIDER_LIST) {
-    const configured = map[p]
-    if (configured?.allowed_models?.length) {
-      wpSelectedModels.value[p] = new Set(configured.allowed_models)
-    }
-  }
-}
-
-async function fetchWpModels(provider: string) {
+// 平台托管行编辑时调用：用组织已配置的 Key 拉取该 provider 全部模型作为勾选源
+async function loadPlatformChoices(provider: string) {
   if (!orgId.value) return
+  platformChoicesLoading.value = true
   try {
     const res = await api.get(`/llm/providers/${provider}/models`, {
       params: { org_id: orgId.value },
     })
-    wpModels.value[provider] = res.data.data?.models ?? []
+    platformAllowedChoices.value = res.data.data?.models ?? []
   } catch {
-    wpModels.value[provider] = []
-  }
-}
-
-function toggleWpModel(provider: string, modelId: string) {
-  if (!wpSelectedModels.value[provider]) {
-    wpSelectedModels.value[provider] = new Set()
-  }
-  const s = wpSelectedModels.value[provider]
-  if (s.has(modelId)) {
-    s.delete(modelId)
-  } else {
-    s.add(modelId)
-  }
-}
-
-async function saveAllowedModels(provider: string) {
-  const map = configuredMap()
-  const configured = map[provider]
-  if (!configured || !orgId.value) return
-  wpSaving.value[provider] = true
-  try {
-    const selected = wpSelectedModels.value[provider]
-    const allowed = selected?.size ? [...selected] : null
-    await api.patch(`/orgs/${orgId.value}/model-providers/${configured.id}`, {
-      allowed_models: allowed,
-    })
-    toast.success(t('orgSettings.wpModelsSaved'))
-    await fetchProviders()
-    initWpSelections()
-  } catch (e: any) {
-    toast.error(resolveApiErrorMessage(e) || t('orgSettings.wpModelsSaveFailed'))
+    platformAllowedChoices.value = []
   } finally {
-    wpSaving.value[provider] = false
+    platformChoicesLoading.value = false
+  }
+}
+
+function togglePlatformAllowed(modelId: string) {
+  const idx = form.value.allowed_models.indexOf(modelId)
+  if (idx === -1) {
+    form.value.allowed_models.push(modelId)
+  } else {
+    form.value.allowed_models.splice(idx, 1)
   }
 }
 
@@ -201,10 +171,15 @@ function openConfigure(providerName: string) {
       system_token_limit: existing.system_token_limit?.toString() ?? '',
       is_active: existing.is_active,
       skip_ssl_verify: existing.skip_ssl_verify ?? false,
+      allowed_models: existing.allowed_models ? [...existing.allowed_models] : [],
     }
     const firstModel = existing.allowed_models?.[0]
     if (firstModel) {
       testModel.value = { id: firstModel, name: firstModel }
+    }
+    // 平台托管行：异步加载可用模型清单填充 checkbox
+    if (existing.is_platform_managed) {
+      loadPlatformChoices(providerName)
     }
   } else {
     isEditing.value = false
@@ -243,14 +218,19 @@ async function handleSave() {
   try {
     if (isEditing.value && editingId.value) {
       const payload: Record<string, any> = { is_active: form.value.is_active }
-      if (form.value.api_key) payload.api_key = form.value.api_key
-      payload.base_url = form.value.base_url || null
-      payload.skip_ssl_verify = form.value.skip_ssl_verify
-      payload.org_token_limit = form.value.org_token_limit ? Number(form.value.org_token_limit) : null
-      payload.system_token_limit = form.value.system_token_limit ? Number(form.value.system_token_limit) : null
-      if (isCustomProvider(dialogProvider.value)) {
-        payload.api_type = form.value.api_type || null
-        payload.label = form.value.label || null
+      if (lockedByPlatform.value) {
+        // 平台托管行：仅同步 is_active + allowed_models，其他字段后端会 403
+        payload.allowed_models = form.value.allowed_models.length ? form.value.allowed_models : null
+      } else {
+        if (form.value.api_key) payload.api_key = form.value.api_key
+        payload.base_url = form.value.base_url || null
+        payload.skip_ssl_verify = form.value.skip_ssl_verify
+        payload.org_token_limit = form.value.org_token_limit ? Number(form.value.org_token_limit) : null
+        payload.system_token_limit = form.value.system_token_limit ? Number(form.value.system_token_limit) : null
+        if (isCustomProvider(dialogProvider.value)) {
+          payload.api_type = form.value.api_type || null
+          payload.label = form.value.label || null
+        }
       }
       await api.patch(`/orgs/${orgId.value}/model-providers/${editingId.value}`, payload)
       toast.success(t('orgSettings.llmKeysUpdated'))
@@ -282,6 +262,10 @@ async function handleSave() {
 async function handleDelete(providerName: string) {
   const existing = configuredMap()[providerName]
   if (!existing) return
+  if (existing.is_platform_managed) {
+    toast.error(t('orgSettings.llmKeysPlatformNoDelete'))
+    return
+  }
   const ok = await confirm({
     title: t('common.delete'),
     description: t('orgSettings.llmKeysDeleteConfirm'),
@@ -322,14 +306,15 @@ const canSave = computed(() => {
   return true
 })
 
-const testing = ref(false)
-const testResult = ref<{ ok: boolean; message: string; tested_model?: string | null; latency_ms?: number | null; error_detail?: string | null } | null>(null)
-
 const canTest = computed(() => {
+  if (lockedByPlatform.value && orgId.value) return true  // 平台托管行测连用 org_id 解析 Key
   if (!isEditing.value && !form.value.api_key) return false
   if (isEditing.value && !form.value.api_key && !orgId.value) return false
   return true
 })
+
+const testing = ref(false)
+const testResult = ref<{ ok: boolean; message: string; tested_model?: string | null; latency_ms?: number | null; error_detail?: string | null } | null>(null)
 
 async function handleTest() {
   testing.value = true
@@ -377,88 +362,12 @@ async function handleFetchModels(
 onMounted(async () => {
   if (!orgStore.currentOrg) await orgStore.fetchMyOrg()
   await fetchProviders()
-  if (isEE.value) {
-    initWpSelections()
-    await Promise.all(wpConfiguredProviders.value.map(p => fetchWpModels(p)))
-  }
 })
 </script>
 
 <template>
   <div class="space-y-8">
-    <!-- Working Plan section (EE only) -->
-    <div v-if="isEE" class="space-y-4">
-      <div>
-        <h2 class="text-lg font-semibold flex items-center gap-2">
-          {{ t('orgSettings.wpTitle') }}
-        </h2>
-        <p class="text-sm text-muted-foreground mt-1">{{ t('orgSettings.wpDescription') }}</p>
-      </div>
-
-      <div v-if="loading" class="flex items-center justify-center py-8">
-        <Loader2 class="w-5 h-5 animate-spin text-muted-foreground" />
-      </div>
-
-      <div v-else class="space-y-3">
-        <div
-          v-for="wp in WP_PROVIDER_LIST"
-          :key="wp"
-          class="rounded-lg border border-border bg-card p-4"
-        >
-          <div class="flex items-center justify-between mb-3">
-            <span class="font-medium text-sm">{{ PROVIDER_LABELS[wp] || wp }}</span>
-            <span
-              v-if="configuredMap()[wp]"
-              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-500/10 text-green-500"
-            >
-              <Check class="w-3 h-3" />
-              {{ t('orgSettings.llmKeysConfigured') }}
-            </span>
-            <span v-else class="text-xs text-muted-foreground">
-              {{ t('orgSettings.llmKeysNotConfigured') }}
-            </span>
-          </div>
-
-          <template v-if="configuredMap()[wp]">
-            <div v-if="wpModels[wp]?.length" class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
-              <label
-                v-for="model in wpModels[wp]"
-                :key="model.id"
-                class="flex items-center gap-2 px-3 py-2 rounded-md border border-border hover:bg-muted/50 transition-colors cursor-pointer text-sm"
-              >
-                <input
-                  type="checkbox"
-                  :checked="wpSelectedModels[wp]?.has(model.id)"
-                  class="accent-primary"
-                  @change="toggleWpModel(wp, model.id)"
-                />
-                {{ model.name }}
-              </label>
-            </div>
-            <div v-else class="flex items-center justify-center py-4">
-              <Loader2 class="w-4 h-4 animate-spin text-muted-foreground" />
-            </div>
-            <div class="flex justify-end">
-              <button
-                class="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                :disabled="wpSaving[wp]"
-                @click="saveAllowedModels(wp)"
-              >
-                <Loader2 v-if="wpSaving[wp]" class="w-3.5 h-3.5 animate-spin" />
-                <Save v-else class="w-3.5 h-3.5" />
-                {{ t('common.save') }}
-              </button>
-            </div>
-          </template>
-
-          <template v-else>
-            <p class="text-xs text-muted-foreground/60">{{ t('orgSettings.wpNotConfigured') }}</p>
-          </template>
-        </div>
-      </div>
-    </div>
-
-    <!-- CE Model Providers section -->
+    <!-- Model Providers (BYOK + 平台托管统一网格) -->
     <div class="space-y-4">
       <div>
         <h2 class="text-lg font-semibold flex items-center gap-2">
@@ -466,7 +375,7 @@ onMounted(async () => {
           {{ t('orgSettings.llmKeysTitle') }}
         </h2>
         <p class="text-sm text-muted-foreground mt-1">
-          {{ isEE ? t('orgSettings.llmKeysCeDescription') : t('orgSettings.llmKeysDescription') }}
+          {{ t('orgSettings.llmKeysDescription') }}
         </p>
       </div>
 
@@ -480,19 +389,30 @@ onMounted(async () => {
           :key="providerName"
         class="rounded-lg border border-border bg-card p-4 hover:border-primary/30 transition-colors"
       >
-        <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center justify-between mb-3 gap-2">
           <span class="font-medium text-sm">{{ PROVIDER_LABELS[providerName] || providerName }}</span>
-          <span
-            v-if="configuredMap()[providerName]"
-            class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium"
-            :class="configuredMap()[providerName].is_active
-              ? 'bg-green-500/10 text-green-500'
-              : 'bg-muted text-muted-foreground'"
-          >
-            <Check v-if="configuredMap()[providerName].is_active" class="w-3 h-3" />
-            <X v-else class="w-3 h-3" />
-            {{ configuredMap()[providerName].is_active ? t('orgSettings.llmKeysConfigured') : t('orgSettings.llmKeysDisabled') }}
-          </span>
+          <div class="flex items-center gap-1.5">
+            <!-- 平台托管徽章：紫色，区别于绿色"已配置" -->
+            <span
+              v-if="configuredMap()[providerName]?.is_platform_managed"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-violet-500/10 text-violet-500"
+              :title="t('orgSettings.llmKeysPlatformNoEdit')"
+            >
+              <ShieldCheck class="w-3 h-3" />
+              {{ t('orgSettings.llmKeysPlatformManaged') }}
+            </span>
+            <span
+              v-if="configuredMap()[providerName]"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium"
+              :class="configuredMap()[providerName].is_active
+                ? 'bg-green-500/10 text-green-500'
+                : 'bg-muted text-muted-foreground'"
+            >
+              <Check v-if="configuredMap()[providerName].is_active" class="w-3 h-3" />
+              <X v-else class="w-3 h-3" />
+              {{ configuredMap()[providerName].is_active ? t('orgSettings.llmKeysConfigured') : t('orgSettings.llmKeysDisabled') }}
+            </span>
+          </div>
         </div>
 
         <template v-if="configuredMap()[providerName]">
@@ -517,7 +437,9 @@ onMounted(async () => {
               <Settings class="w-3.5 h-3.5" />
               {{ t('orgSettings.llmKeysSettings') }}
             </button>
+            <!-- 平台托管行不可删除，仅 BYOK 行显示删除按钮 -->
             <button
+              v-if="!configuredMap()[providerName].is_platform_managed"
               class="px-3 py-1.5 rounded-md text-sm text-destructive hover:bg-destructive/10 transition-colors"
               @click="handleDelete(providerName)"
             >
@@ -643,12 +565,19 @@ onMounted(async () => {
           </div>
 
           <div class="px-6 space-y-4">
+            <!-- 平台托管行：弹窗顶部提示锁定原因 -->
+            <div v-if="lockedByPlatform" class="px-3 py-2 rounded-md text-xs bg-violet-500/10 text-violet-600 dark:text-violet-400 flex items-start gap-1.5">
+              <ShieldCheck class="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>{{ t('orgSettings.llmKeysPlatformNoEdit') }}</span>
+            </div>
+
             <template v-if="isCustomProvider(dialogProvider)">
               <div class="space-y-1.5">
                 <label class="text-sm font-medium">{{ t('orgSettings.customProviderLabel') }}</label>
                 <input
                   v-model="form.label"
-                  class="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  :disabled="lockedByPlatform"
+                  class="w-full px-3 py-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-60 disabled:cursor-not-allowed"
                   :placeholder="t('orgSettings.customProviderLabelPlaceholder')"
                 />
               </div>
@@ -657,7 +586,8 @@ onMounted(async () => {
                 <div class="relative">
                   <select
                     v-model="form.api_type"
-                    class="w-full appearance-none px-3 py-2 pr-8 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    :disabled="lockedByPlatform"
+                    class="w-full appearance-none px-3 py-2 pr-8 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <option v-for="opt in API_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                   </select>
@@ -671,35 +601,62 @@ onMounted(async () => {
               <input
                 v-model="form.api_key"
                 type="password"
-                class="w-full px-3 py-2 rounded-md border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/50"
-                :placeholder="isEditing ? t('orgSettings.llmKeysApiKeyEditHint') : t('orgSettings.llmKeysApiKeyPlaceholder')"
+                :disabled="lockedByPlatform"
+                class="w-full px-3 py-2 rounded-md border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-60 disabled:cursor-not-allowed"
+                :placeholder="lockedByPlatform ? t('orgSettings.llmKeysPlatformNoEdit') : (isEditing ? t('orgSettings.llmKeysApiKeyEditHint') : t('orgSettings.llmKeysApiKeyPlaceholder'))"
               />
             </div>
 
             <div class="space-y-1.5">
               <label class="text-sm font-medium">
                 {{ t('orgSettings.llmKeysBaseUrl') }}
-                <span v-if="isCustomProvider(dialogProvider)" class="text-destructive ml-0.5">*</span>
+                <span v-if="isCustomProvider(dialogProvider) && !lockedByPlatform" class="text-destructive ml-0.5">*</span>
               </label>
               <BaseUrlInput
                 v-model="form.base_url"
+                :disabled="lockedByPlatform"
                 :placeholder="isCustomProvider(dialogProvider) ? t('orgSettings.customProviderBaseUrlRequired') : t('orgSettings.llmKeysBaseUrlPlaceholder')"
               />
-              <label v-if="form.base_url" class="flex items-center gap-2 mt-1.5 cursor-pointer">
+              <label v-if="form.base_url && !lockedByPlatform" class="flex items-center gap-2 mt-1.5 cursor-pointer">
                 <input type="checkbox" v-model="form.skip_ssl_verify" class="accent-primary" />
                 <span class="text-sm">{{ t('orgSettings.llmKeysSkipSslVerify') }}</span>
                 <span class="text-xs text-muted-foreground">{{ t('orgSettings.llmKeysSkipSslVerifyHint') }}</span>
               </label>
             </div>
 
+            <!-- 平台托管行：勾选允许 AI 员工使用的模型 -->
+            <div v-if="lockedByPlatform" class="space-y-2">
+              <label class="text-sm font-medium">{{ t('orgSettings.llmKeysAllowedModels') }}</label>
+              <div v-if="platformChoicesLoading" class="flex items-center justify-center py-4">
+                <Loader2 class="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+              <div v-else-if="platformAllowedChoices.length" class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                <label
+                  v-for="m in platformAllowedChoices"
+                  :key="m.id"
+                  class="flex items-center gap-2 px-2 py-1.5 rounded-md border border-border hover:bg-muted/50 cursor-pointer text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="form.allowed_models.includes(m.id)"
+                    class="accent-primary"
+                    @change="togglePlatformAllowed(m.id)"
+                  />
+                  <span class="truncate">{{ m.name || m.id }}</span>
+                </label>
+              </div>
+              <p v-else class="text-xs text-muted-foreground">{{ t('orgSettings.llmKeysAllowedModelsEmpty') }}</p>
+            </div>
+
             <ModelSelect
+              v-if="!lockedByPlatform"
               :provider="dialogProvider"
               v-model="testModel"
               allow-manual-input
               @fetch-models="handleFetchModels"
             />
 
-            <div class="grid gap-3" :class="isEE ? 'grid-cols-2' : 'grid-cols-1'">
+            <div v-if="!lockedByPlatform" class="grid gap-3" :class="isEE ? 'grid-cols-2' : 'grid-cols-1'">
               <div v-if="isEE" class="space-y-1.5">
                 <label class="text-sm font-medium">{{ t('orgSettings.llmKeysOrgTokenLimit') }}</label>
                 <input
