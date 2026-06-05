@@ -68,6 +68,7 @@ class OrgModelProviderInfo(BaseModel):
     is_active: bool
     skip_ssl_verify: bool = False
     allowed_models: list[str] | None = None
+    is_platform_managed: bool = False  # true=平台超管下发，组织端锁字段
     usage_total_tokens: int = 0
     created_by: str
 
@@ -166,6 +167,7 @@ class AvailableModelProvider(BaseModel):
     api_type: str | None = None
     base_url: str | None = None
     skip_ssl_verify: bool = False
+    is_platform_managed: bool = False
 
 
 AvailableLlmKey = AvailableModelProvider

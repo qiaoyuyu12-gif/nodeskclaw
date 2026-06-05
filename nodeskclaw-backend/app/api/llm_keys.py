@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import hooks
 from app.core.deps import get_current_org, get_db, require_feature, require_org_admin, require_org_member, require_org_member_role
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.core.security import get_current_user
 from app.models.base import not_deleted
 from app.models.instance import Instance
@@ -44,6 +44,39 @@ from app.services.codex_provider import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# 组织端 PATCH 平台托管 Key 时禁止修改的字段（仅 allowed_models / is_active 允许）
+_PLATFORM_MANAGED_LOCKED_FIELDS = frozenset({
+    "api_key", "base_url", "api_type", "label",
+    "org_token_limit", "system_token_limit", "skip_ssl_verify",
+})
+
+
+def assert_platform_managed_update_allowed(key: OrgModelProvider, payload_keys: set[str]) -> None:
+    """守卫：平台托管 Key 在组织端只允许改 allowed_models / is_active。
+
+    :param key: 目标 OrgModelProvider 行
+    :param payload_keys: PATCH 请求中实际被设置的字段名集合（model_dump(exclude_unset=True).keys()）
+    :raises ForbiddenError: 当 key.is_platform_managed=True 且 payload 触碰受锁字段时
+    """
+    if not key.is_platform_managed:
+        return
+    touched = payload_keys & _PLATFORM_MANAGED_LOCKED_FIELDS
+    if touched:
+        raise ForbiddenError(
+            f"平台托管 Key 不可修改字段：{sorted(touched)}",
+            "errors.model_provider.platform_managed_locked",
+        )
+
+
+def assert_platform_managed_delete_allowed(key: OrgModelProvider) -> None:
+    """守卫：平台托管 Key 不允许组织端删除，统一由 EE admin 路由维护。"""
+    if key.is_platform_managed:
+        raise ForbiddenError(
+            "平台托管 Key 不可删除，请联系平台管理员",
+            "errors.model_provider.platform_managed_no_delete",
+        )
 
 
 def _mask_key(key: str, provider: str = "") -> str:
@@ -108,7 +141,9 @@ async def list_model_providers(
             org_token_limit=k.org_token_limit,
             system_token_limit=k.system_token_limit,
             is_active=k.is_active,
+            skip_ssl_verify=k.skip_ssl_verify,
             allowed_models=k.allowed_models,
+            is_platform_managed=k.is_platform_managed,
             usage_total_tokens=usage_map.get(k.id, 0),
             created_by=k.created_by,
         )
@@ -150,6 +185,8 @@ async def create_model_provider(
         api_type=body.api_type,
         org_token_limit=body.org_token_limit,
         system_token_limit=body.system_token_limit,
+        skip_ssl_verify=body.skip_ssl_verify,
+        is_platform_managed=False,  # 组织端创建恒为 BYOK；平台托管由 EE admin 路由下发
         created_by=user.id,
     )
     db.add(key)
@@ -162,7 +199,10 @@ async def create_model_provider(
         api_key_masked=_mask_key(key.api_key, key.provider), base_url=key.base_url,
         api_type=key.api_type, org_token_limit=key.org_token_limit,
         system_token_limit=key.system_token_limit,
-        is_active=key.is_active, created_by=key.created_by,
+        is_active=key.is_active,
+        skip_ssl_verify=key.skip_ssl_verify,
+        is_platform_managed=key.is_platform_managed,
+        created_by=key.created_by,
     ))
 
 
@@ -185,7 +225,11 @@ async def update_model_provider(
     if is_codex_provider(key.provider):
         raise BadRequestError("Codex 仅支持个人配置，不支持 Working Plan")
 
-    for field, val in body.model_dump(exclude_unset=True).items():
+    payload = body.model_dump(exclude_unset=True)
+    # 守卫：平台托管 Key 在组织端只允许改 allowed_models / is_active；敏感连接信息由平台维护
+    assert_platform_managed_update_allowed(key, set(payload))
+
+    for field, val in payload.items():
         setattr(key, field, val)
     await db.commit()
     await db.refresh(key)
@@ -195,7 +239,11 @@ async def update_model_provider(
         api_key_masked=_mask_key(key.api_key, key.provider), base_url=key.base_url,
         api_type=key.api_type, org_token_limit=key.org_token_limit,
         system_token_limit=key.system_token_limit,
-        is_active=key.is_active, allowed_models=key.allowed_models, created_by=key.created_by,
+        is_active=key.is_active,
+        skip_ssl_verify=key.skip_ssl_verify,
+        allowed_models=key.allowed_models,
+        is_platform_managed=key.is_platform_managed,
+        created_by=key.created_by,
     ))
 
 
@@ -214,6 +262,8 @@ async def delete_model_provider(
     key = result.scalar_one_or_none()
     if key is None:
         raise NotFoundError("模型供应商不存在")
+    # 守卫：平台托管 Key 不允许组织端删除
+    assert_platform_managed_delete_allowed(key)
 
     key.soft_delete()
     await db.commit()
@@ -243,6 +293,7 @@ async def list_available_model_providers(
             allowed_models=k.allowed_models,
             api_type=k.api_type, base_url=k.base_url,
             skip_ssl_verify=k.skip_ssl_verify,
+            is_platform_managed=k.is_platform_managed,
         )
         for k in keys
     ])
