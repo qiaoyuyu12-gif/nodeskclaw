@@ -153,6 +153,8 @@ async def me(
     """获取当前用户信息（含管理平台角色和组织成员角色）。"""
     from app.models.admin_membership import AdminMembership
     from app.models.org_membership import OrgMembership
+    from app.schemas.auth import RbacContext
+    from app.services.rbac_context_service import get_login_rbac
 
     info = UserInfo.model_validate(current_user)
     info.has_password = bool(current_user.password_hash)
@@ -174,6 +176,14 @@ async def me(
             )
         )
         info.portal_org_role = result.scalar_one_or_none()
+
+    # 第一期 RBAC 增量字段：聚合该用户所有 role_keys / perms / app_codes 返回前端
+    # 前端可暂不消费；第二期动态菜单 / 按钮权限切换时直接读
+    rbac_payload = await get_login_rbac(
+        db, subject_type="user", subject_id=current_user.id,
+    )
+    info.rbac = RbacContext(**rbac_payload)
+
     return ApiResponse(data=info)
 
 
