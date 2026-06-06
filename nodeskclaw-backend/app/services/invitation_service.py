@@ -408,6 +408,14 @@ async def accept_invitation(
             org_id=invitation.org_id,
             role=invitation.role,
         ))
+        # RBAC 双写：org_{role} grant 到 subject_roles
+        from app.services.rbac_sync import grant_role
+        await grant_role(
+            db, subject_type="user", subject_id=user.id,
+            role_key=f"org_{invitation.role}",
+            scope_type="org", scope_id=invitation.org_id,
+            granted_reason="accept_invitation",
+        )
 
     if not user.current_org_id:
         user.current_org_id = invitation.org_id

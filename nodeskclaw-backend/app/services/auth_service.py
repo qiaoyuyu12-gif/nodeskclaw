@@ -569,6 +569,14 @@ async def register_user(
             org_id=default_org.id,
             role=OrgRole.member,
         ))
+        # RBAC 双写：org_member grant 到 subject_roles
+        from app.services.rbac_sync import grant_role
+        await grant_role(
+            db, subject_type="user", subject_id=user.id,
+            role_key="org_member",
+            scope_type="org", scope_id=default_org.id,
+            granted_reason="register_auto_join",
+        )
 
     await db.commit()
     await db.refresh(user)

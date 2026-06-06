@@ -301,7 +301,16 @@ async def update_staff(
 
     if is_super_admin is not None:
         user.is_super_admin = is_super_admin
+        # RBAC 双写：platform_super 角色随 is_super_admin 字段切换
+        from app.services.rbac_sync import grant_role, revoke_role
         if is_super_admin:
+            await grant_role(
+                db, subject_type="user", subject_id=user.id,
+                role_key="platform_super",
+                scope_type="platform", scope_id=None,
+                granted_by=current_user.id,
+                granted_reason="staff_update_grant_super",
+            )
             existing_am = await db.execute(
                 select(AdminMembership).where(
                     AdminMembership.user_id == user.id,
@@ -314,6 +323,21 @@ async def update_staff(
                     org_id=current_user.current_org_id,
                     role="admin",
                 ))
+                # RBAC 双写：platform_admin grant（scope=org）
+                await grant_role(
+                    db, subject_type="user", subject_id=user.id,
+                    role_key="platform_admin",
+                    scope_type="org", scope_id=current_user.current_org_id,
+                    granted_by=current_user.id,
+                    granted_reason="staff_update_grant_admin",
+                )
+        else:
+            # 撤销 platform_super；不动 AdminMembership（保留运维身份）
+            await revoke_role(
+                db, subject_type="user", subject_id=user.id,
+                role_key="platform_super",
+                scope_type="platform", scope_id=None,
+            )
     if is_active is not None:
         user.is_active = is_active
 
