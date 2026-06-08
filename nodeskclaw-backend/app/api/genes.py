@@ -167,10 +167,18 @@ async def upload_gene_folder(
     skill_raw = skill_content.decode("utf-8") if skill_content else ""
 
     # 根据 target 派生 visibility / org_id / created_by / is_published / review_status
+    # 操作者若是目标 org 的 admin 或平台超管 → bypass 待审，直接 approved + published
+    bypass_review = await gene_service.is_user_admin_of_org(
+        db,
+        user_id=current_user.id,
+        org_id=current_user.current_org_id,
+        is_super_admin=getattr(current_user, "is_super_admin", False),
+    )
     attrs = gene_service.resolve_target_attrs(
         target,
         user_id=current_user.id,
         org_id=current_user.current_org_id,
+        bypass_review=bypass_review,
     )
 
     gene_req = GeneCreateRequest(
@@ -206,8 +214,10 @@ async def upload_gene_folder(
 async def get_gene(
     gene_slug: str,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    # 跨组织隔离：禁止用户通过 slug 直接拉取其他组织的 org_private gene 详情
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     gene = await gene_service.get_gene(db, gene_slug)
     return ApiResponse(data=gene)
 
@@ -216,8 +226,9 @@ async def get_gene(
 async def gene_variants(
     gene_slug: str,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     variants = await gene_service.get_gene_variants(db, gene_slug)
     return ApiResponse(data=variants)
 
@@ -226,8 +237,9 @@ async def gene_variants(
 async def gene_synergies(
     gene_slug: str,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     synergies = await gene_service.get_gene_synergies(db, gene_slug)
     return ApiResponse(data=synergies)
 
@@ -236,8 +248,9 @@ async def gene_synergies(
 async def gene_genomes(
     gene_slug: str,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     data = await gene_service.get_gene_genomes(db, gene_slug)
     return ApiResponse(data=data)
 
@@ -246,8 +259,9 @@ async def gene_genomes(
 async def gene_installed_instances(
     gene_slug: str,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     ids = await gene_service.get_gene_installed_instance_ids(db, gene_slug)
     return ApiResponse(data=ids)
 
@@ -566,9 +580,10 @@ async def admin_gene_stats(
 @router.get("/admin/genes/pending-review")
 async def admin_pending_review_genes(
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
-    genes = await gene_service.get_pending_review_genes(db)
+    # 列表内容按权限过滤：超管全部 / 组织 admin 仅本组织 / 其他用户空列表
+    genes = await gene_service.get_pending_review_genes(db, current_user=current_user)
     return ApiResponse(data=genes)
 
 
@@ -732,10 +747,18 @@ async def create_manual_gene(
     if req.target != "personal" and not current_user.current_org_id:
         raise BadRequestError("上传到组织或公共市场前需先加入组织")
 
+    # 操作者若是目标 org 的 admin 或平台超管 → bypass 待审，直接 approved + published
+    bypass_review = await gene_service.is_user_admin_of_org(
+        db,
+        user_id=current_user.id,
+        org_id=current_user.current_org_id,
+        is_super_admin=getattr(current_user, "is_super_admin", False),
+    )
     attrs = gene_service.resolve_target_attrs(
         req.target,
         user_id=current_user.id,
         org_id=current_user.current_org_id,
+        bypass_review=bypass_review,
     )
 
     gene_req = GeneCreateRequest(

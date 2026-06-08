@@ -23,7 +23,6 @@ export const PROVIDER_DEFAULT_URLS: Record<string, string> = {
 }
 
 export const BUILTIN_PROVIDERS = new Set(['codex', 'openai', 'anthropic', 'gemini', 'openrouter'])
-export const WP_PROVIDERS = new Set(['minimax-openai', 'minimax-anthropic'])
 export const ALL_KNOWN_PROVIDERS: Set<string> = new Set([...PROVIDERS])
 
 export const isCodexProvider = (provider: string) => provider === 'codex'

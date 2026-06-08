@@ -45,6 +45,8 @@ from app.models.org_smtp_config import OrgSmtpConfig  # noqa: F401
 from app.models.oauth_connection import UserOAuthConnection  # noqa: F401
 from app.models.operation_audit_log import OperationAuditLog  # noqa: F401
 from app.models.organization_feature_override import OrganizationFeatureOverride  # noqa: F401
+from app.models.org_join_request import OrgJoinRequest  # noqa: F401
+from app.models.org_leave_request import OrgLeaveRequest  # noqa: F401
 from app.models.org_membership import OrgMembership  # noqa: F401
 from app.models.org_oauth_binding import OrgOAuthBinding  # noqa: F401
 from app.models.organization import Organization  # noqa: F401

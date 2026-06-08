@@ -587,6 +587,55 @@ async def list_genes(
     return items, result.total
 
 
+async def _assert_user_can_view_gene_by_slug(
+    db: AsyncSession,
+    slug: str,
+    current_user,
+) -> None:
+    """跨组织可见性守卫：按 slug 查 DB 中是否存在 org_private / personal 命中条目，
+    如果有且不属于当前用户/组织，抛 403。
+
+    可见性规则：
+      - personal：仅作者本人 + 平台超管可见
+      - org_private：仅 org 成员 + 平台超管可见（用 current_user.current_org_id 判定）
+      - public（含 aggregator 远程仓库）：任何登录用户可见
+      - DB 完全不存在该 slug（纯远程公共仓库的 skill）：放行
+
+    若同 slug 在多个 scope 并存（fork 三向架构允许），任一 scope 命中用户 → 放行。
+    所有 scope 均不可见 → 403。
+    """
+    # super_admin 直接放行：审核 / 故障排查需要全域可见
+    if getattr(current_user, "is_super_admin", False):
+        return
+
+    # 列出 DB 中所有同 slug 未删除条目
+    rows = (await db.execute(
+        select(Gene).where(Gene.slug == slug, not_deleted(Gene))
+    )).scalars().all()
+
+    if not rows:
+        # DB 中无此 slug → 视为远程公共仓库 skill，放行
+        return
+
+    user_id = current_user.id
+    user_org_id = getattr(current_user, "current_org_id", None)
+
+    for gene in rows:
+        vis = gene.visibility
+        if vis == "public":
+            return
+        if vis == "personal" and gene.created_by == user_id:
+            return
+        if vis == "org_private" and user_org_id and gene.org_id == user_org_id:
+            return
+
+    # 所有同 slug 条目都不属于当前用户/组织
+    raise ForbiddenError(
+        "您无权查看该技能基因",
+        message_key="errors.gene.cross_org_forbidden",
+    )
+
+
 async def get_gene(db: AsyncSession, slug: str) -> dict:
     aggregator = get_aggregator()
     detail = await aggregator.get_skill(slug)
@@ -604,10 +653,42 @@ async def get_gene(db: AsyncSession, slug: str) -> dict:
 
 
 async def get_gene_by_slug(db: AsyncSession, slug: str) -> Gene | None:
+    """按 slug 返回任意一条未删除 gene。
+
+    注意：在 fork 三向架构（personal/org/public）下，同一个 slug 可以在
+    多个 scope 下并存（DB unique index 是 partial `(slug, org_id)`），
+    所以这里只能用 `.first()` 取"任一条"。需要按 scope 精确定位时，
+    请使用 get_gene_by_slug_in_scope。
+    """
     result = await db.execute(
         select(Gene).where(Gene.slug == slug, not_deleted(Gene))
     )
-    return result.scalar_one_or_none()
+    return result.scalars().first()
+
+
+async def get_gene_by_slug_in_scope(
+    db: AsyncSession,
+    slug: str,
+    *,
+    org_id: str | None,
+    created_by: str | None = None,
+) -> Gene | None:
+    """按 (slug, org_id) 精确定位一条未删除 gene，与 partial unique index 语义一致。
+
+    - org_id 不为 None：组织或公共 scope，按 `slug + org_id + not_deleted` 唯一定位
+    - org_id 为 None：personal scope。由于 unique index 在 org_id IS NULL 时
+      不做唯一性约束（多个用户的同 slug personal 可并存），所以这里要按
+      `created_by` 进一步限定为"该用户的 personal 同 slug"
+    """
+    stmt = select(Gene).where(Gene.slug == slug, not_deleted(Gene))
+    if org_id is None:
+        stmt = stmt.where(Gene.org_id.is_(None))
+        if created_by is not None:
+            stmt = stmt.where(Gene.created_by == created_by)
+    else:
+        stmt = stmt.where(Gene.org_id == org_id)
+    result = await db.execute(stmt)
+    return result.scalars().first()
 
 
 async def create_gene(
@@ -615,10 +696,15 @@ async def create_gene(
     visibility: str | None = None,
     review_status: str | None = None,
 ) -> dict:
-    existing = await get_gene_by_slug(db, req.slug)
+    # 冲突判定按 (slug, org_id) 进行，对齐 partial unique index `uq_genes_slug_org_active`。
+    # personal scope（org_id IS NULL）下，索引允许多个用户共用同 slug，因此用 created_by
+    # 进一步限定到"当前用户的 personal 同 slug"，避免误报。
+    existing = await get_gene_by_slug_in_scope(
+        db, req.slug, org_id=org_id, created_by=user_id,
+    )
     if existing:
         if req.overwrite:
-            # 覆盖模式：软删除旧基因，创建新基因
+            # 覆盖模式：软删除该 scope 内的旧基因，再创建新基因
             existing.soft_delete()
             await db.commit()
         else:
@@ -2973,17 +3059,123 @@ async def get_gene_stats(db: AsyncSession) -> GeneStatsResponse:
     )
 
 
-async def get_pending_review_genes(db: AsyncSession) -> list[dict]:
+async def get_pending_review_genes(
+    db: AsyncSession,
+    current_user=None,
+) -> list[dict]:
+    """获取当前用户可审核的待审 gene 列表。
+
+    权限范围：
+      - 平台超管：返回所有 pending_owner / pending_admin
+      - 任意组织 admin：仅返回其作为 admin 的 org 下的待审 gene
+      - 其他用户（包括未传 current_user）：返回空列表
+
+    与 review_gene 的权限模型一致，避免列表里出现用户实际无权审核的条目。
+
+    返回的每条 dict 在 _gene_to_dict 基础上额外注入 created_by_name /
+    created_by_email，前端审核中心展示用，避免 UI 直接显示 UUID。
+    """
+    # 兼容旧调用：未传 current_user 时退回到"全部"以便测试场景灵活，但
+    # 这条路径 API 层不会走到（API 必传 current_user）。
+    if current_user is None:
+        result = await db.execute(
+            select(Gene)
+            .where(
+                Gene.review_status.in_([
+                    GeneReviewStatus.pending_owner,
+                    GeneReviewStatus.pending_admin,
+                ]),
+                not_deleted(Gene),
+            )
+            .order_by(Gene.created_at.desc())
+        )
+        return await _attach_uploader_identity(
+            db, [_gene_to_dict(g) for g in result.scalars().all()],
+        )
+
+    # 超管 → 全部
+    if getattr(current_user, "is_super_admin", False):
+        result = await db.execute(
+            select(Gene)
+            .where(
+                Gene.review_status.in_([
+                    GeneReviewStatus.pending_owner,
+                    GeneReviewStatus.pending_admin,
+                ]),
+                not_deleted(Gene),
+            )
+            .order_by(Gene.created_at.desc())
+        )
+        return await _attach_uploader_identity(
+            db, [_gene_to_dict(g) for g in result.scalars().all()],
+        )
+
+    # 普通用户 → 查其作为 admin 的所有 org_id
+    from app.models.org_membership import OrgMembership, OrgRole
+
+    admin_orgs_result = await db.execute(
+        select(OrgMembership.org_id).where(
+            OrgMembership.user_id == current_user.id,
+            OrgMembership.role == OrgRole.admin,
+            OrgMembership.deleted_at.is_(None),
+        )
+    )
+    admin_org_ids = [row[0] for row in admin_orgs_result.all()]
+    if not admin_org_ids:
+        # 既不是超管也不是任何 org admin → 无可见待审项
+        return []
+
     result = await db.execute(
         select(Gene)
         .where(
-            Gene.review_status.in_([GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin]),
+            Gene.review_status.in_([
+                GeneReviewStatus.pending_owner,
+                GeneReviewStatus.pending_admin,
+            ]),
+            Gene.org_id.in_(admin_org_ids),
             not_deleted(Gene),
         )
         .order_by(Gene.created_at.desc())
     )
-    genes = result.scalars().all()
-    return [_gene_to_dict(g) for g in genes]
+    return await _attach_uploader_identity(
+        db, [_gene_to_dict(g) for g in result.scalars().all()],
+    )
+
+
+async def _attach_uploader_identity(
+    db: AsyncSession,
+    items: list[dict],
+) -> list[dict]:
+    """给一批 gene dict 批量注入 created_by_name / created_by_email。
+
+    审核中心需要展示上传者的"人话名字"，但 _gene_to_dict 默认只回
+    created_by（UUID）。这里一次性按所有 created_by 批量拿 User，
+    避免 N+1 查询。失效用户（已删除/不存在）保持 None，前端回退到 UUID。
+    """
+    if not items:
+        return items
+
+    user_ids = {it.get("created_by") for it in items if it.get("created_by")}
+    if not user_ids:
+        return items
+
+    from app.models.user import User
+
+    rows = (await db.execute(
+        select(User.id, User.name, User.email).where(User.id.in_(user_ids))
+    )).all()
+    by_id = {row[0]: (row[1], row[2]) for row in rows}
+
+    for it in items:
+        uid = it.get("created_by")
+        if uid and uid in by_id:
+            name, email = by_id[uid]
+            it["created_by_name"] = name
+            it["created_by_email"] = email
+        else:
+            it["created_by_name"] = None
+            it["created_by_email"] = None
+    return items
 
 
 async def get_gene_activity(db: AsyncSession, limit: int = 50) -> list[dict]:
@@ -3117,6 +3309,7 @@ def resolve_target_attrs(
     *,
     user_id: str | None,
     org_id: str | None,
+    bypass_review: bool = False,
 ) -> dict:
     """根据上传/Fork 目标 (personal/org/public) 派生 gene 行的归属字段。
 
@@ -3124,6 +3317,10 @@ def resolve_target_attrs(
       - personal：归属个人，无需审核，立即可用
       - org：归属组织，pending_owner 等组织 admin 审核
       - public：归属上传者所在组织（用于追溯背书方），pending_owner 等组织 admin 审核
+
+    bypass_review=True 时跳过 org/public 的待审环节，直接落 approved + is_published=True。
+    用于操作者本身是目标 org 的 admin 或平台超管的场景 —— 自己审自己没有意义，
+    与 review_gene 的权限模型保持一致（admin 反正能 approve）。
     """
     if target == "personal":
         if not user_id:
@@ -3142,8 +3339,8 @@ def resolve_target_attrs(
             "visibility": "org_private",
             "org_id": org_id,
             "created_by": user_id,
-            "is_published": False,
-            "review_status": GeneReviewStatus.pending_owner,
+            "is_published": bypass_review,
+            "review_status": GeneReviewStatus.approved if bypass_review else GeneReviewStatus.pending_owner,
         }
     if target == "public":
         if not org_id or not user_id:
@@ -3152,10 +3349,43 @@ def resolve_target_attrs(
             "visibility": "public",
             "org_id": org_id,
             "created_by": user_id,
-            "is_published": False,
-            "review_status": GeneReviewStatus.pending_owner,
+            "is_published": bypass_review,
+            "review_status": GeneReviewStatus.approved if bypass_review else GeneReviewStatus.pending_owner,
         }
     raise BadRequestError(f"未知上传目标: {target}")
+
+
+async def is_user_admin_of_org(
+    db: AsyncSession,
+    *,
+    user_id: str | None,
+    org_id: str | None,
+    is_super_admin: bool = False,
+) -> bool:
+    """判断用户对目标 org 是否拥有 admin 权限（含平台超管捷径）。
+
+    用途：上传/fork 入口决定是否 bypass 审核流程。
+    - 平台超管：对任意 org（含 None）一律 True
+    - 否则：必须传 user_id + org_id，并存在未删除的 OrgMembership.role=admin
+    - personal scope（org_id=None 且非超管）：返回 False —— 个人 scope 本身就免审，
+      不需要也无法计算"是否 admin"。
+    """
+    if is_super_admin:
+        return True
+    if not user_id or not org_id:
+        return False
+
+    from app.models.org_membership import OrgMembership, OrgRole
+
+    membership = (await db.execute(
+        select(OrgMembership).where(
+            OrgMembership.user_id == user_id,
+            OrgMembership.org_id == org_id,
+            OrgMembership.role == OrgRole.admin,
+            OrgMembership.deleted_at.is_(None),
+        )
+    )).scalar_one_or_none()
+    return membership is not None
 
 
 async def fork_gene_to_library(
@@ -3183,7 +3413,20 @@ async def fork_gene_to_library(
 
     # 目标归属：org_id 显式传入优先，否则取 current_user.current_org_id
     effective_org_id = org_id if org_id is not None else getattr(current_user, "current_org_id", None)
-    attrs = resolve_target_attrs(target, user_id=current_user.id, org_id=effective_org_id)
+
+    # 操作者若是目标 org 的 admin 或平台超管 → bypass 待审环节
+    bypass_review = await is_user_admin_of_org(
+        db,
+        user_id=current_user.id,
+        org_id=effective_org_id,
+        is_super_admin=getattr(current_user, "is_super_admin", False),
+    )
+    attrs = resolve_target_attrs(
+        target,
+        user_id=current_user.id,
+        org_id=effective_org_id,
+        bypass_review=bypass_review,
+    )
 
     # ── 1. 优先本地 DB 按 gene.id 查源（UUID 唯一） ───────────────────
     source = (await db.execute(

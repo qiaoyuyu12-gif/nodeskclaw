@@ -81,6 +81,38 @@ def test_resolve_target_attrs_unknown():
         gene_service.resolve_target_attrs("invalid", user_id="u-1", org_id="org-1")
 
 
+# ─── resolve_target_attrs：bypass_review（admin/超管 自上传免审） ──────
+
+
+def test_resolve_target_attrs_org_bypass_review():
+    """org 目标 + bypass_review=True → 直接 approved + is_published=True。"""
+    attrs = gene_service.resolve_target_attrs(
+        "org", user_id="u-1", org_id="org-1", bypass_review=True,
+    )
+    assert attrs["visibility"] == "org_private"
+    assert attrs["review_status"] == GeneReviewStatus.approved
+    assert attrs["is_published"] is True
+
+
+def test_resolve_target_attrs_public_bypass_review():
+    """public 目标 + bypass_review=True → 直接 approved + 公共可见。"""
+    attrs = gene_service.resolve_target_attrs(
+        "public", user_id="u-1", org_id="org-1", bypass_review=True,
+    )
+    assert attrs["visibility"] == "public"
+    assert attrs["review_status"] == GeneReviewStatus.approved
+    assert attrs["is_published"] is True
+
+
+def test_resolve_target_attrs_personal_ignores_bypass():
+    """personal 本身就免审，bypass_review 不影响其语义。"""
+    attrs = gene_service.resolve_target_attrs(
+        "personal", user_id="u-1", org_id=None, bypass_review=True,
+    )
+    assert attrs["review_status"] is None
+    assert attrs["is_published"] is True
+
+
 # ─── review_gene 权限矩阵 ────────────────────────────────────────────
 
 
@@ -202,11 +234,15 @@ def _make_fork_db(
     *,
     membership=None,
     has_slug_conflict: bool = False,
+    is_target_admin: bool = False,
+    has_target_org: bool = True,
 ) -> MagicMock:
     """构造 fork 流程所需的 mock db。
 
     调用顺序（取决于路径）：
-      1. select(Gene) by slug → source
+      0. is_user_admin_of_org → OrgMembership(user, target_org, role=admin)
+         仅当非超管且 effective_org_id 不为 None 时才会真的 SQL 查询
+      1. select(Gene) by id → source
       2. （仅当非超管且源为 org scope 时）select(OrgMembership) → membership
       3. select(Gene) for slug 冲突 → existing
     db.add 为同步 MagicMock；db.commit / db.refresh 为 AsyncMock。
@@ -214,6 +250,13 @@ def _make_fork_db(
     db = MagicMock()
 
     side_effects: list[MagicMock] = []
+
+    # 0. is_user_admin_of_org 查询（target_org 存在 + 非超管才走到 SQL）
+    if has_target_org:
+        admin_result = MagicMock()
+        admin_result.scalar_one_or_none.return_value = MagicMock() if is_target_admin else None
+        side_effects.append(admin_result)
+
     # 1. 源 gene 查询
     src_result = MagicMock()
     src_result.scalar_one_or_none.return_value = source
@@ -383,7 +426,7 @@ async def test_fork_public_to_personal_anyone():
         visibility="public",
         slug="popular-skill",
     )
-    db = _make_fork_db(source)
+    db = _make_fork_db(source, has_target_org=False)
     # 与源不同组、非本人，仍可 fork（公共可见）
     user = _FakeUser("any-user", current_org_id=None)
 
@@ -405,3 +448,227 @@ async def test_fork_rejects_invalid_target():
         await gene_service.fork_gene_to_library(
             db, "skill-x", "invalid", current_user=user,
         )
+
+
+@pytest.mark.asyncio
+async def test_fork_org_admin_bypasses_review_to_org():
+    """目标 org 的 admin fork 到该 org → 直接 approved + is_published=True。"""
+    source = _FakeGene(
+        gene_id="g-public",
+        org_id="org-source",
+        created_by="some-uploader",
+        visibility="public",
+        slug="popular",
+    )
+    db = _make_fork_db(source, is_target_admin=True)  # 当前用户是 org-target 的 admin
+    user = _FakeUser("admin-id", current_org_id="org-target")
+
+    result = await gene_service.fork_gene_to_library(
+        db, "popular", "org", current_user=user,
+    )
+
+    assert result["visibility"] == "org_private"
+    assert result["org_id"] == "org-target"
+    assert result["review_status"] == GeneReviewStatus.approved
+    assert result["is_published"] is True
+
+
+@pytest.mark.asyncio
+async def test_fork_super_admin_bypasses_review_to_public():
+    """平台超管 fork 到 public → 免审，直接 approved。"""
+    source = _FakeGene(
+        gene_id="g-org",
+        org_id="org-A",
+        created_by="some-uploader",
+        visibility="org_private",
+        slug="team-skill",
+    )
+    # 超管路径：is_user_admin_of_org 在最前直接返回 True，不走 SQL；
+    # 但仍会触发后续源查询、（org 源）成员查询、冲突查询。超管路径下源
+    # 校验也直接放行（不查 OrgMembership）。
+    db = MagicMock()
+
+    src_result = MagicMock()
+    src_result.scalar_one_or_none.return_value = source
+    conflict_result = MagicMock()
+    conflict_result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(side_effect=[src_result, conflict_result])
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+
+    user = _FakeUser("u-super", is_super_admin=True, current_org_id="org-target")
+
+    result = await gene_service.fork_gene_to_library(
+        db, "team-skill", "public", current_user=user,
+    )
+
+    assert result["visibility"] == "public"
+    assert result["review_status"] == GeneReviewStatus.approved
+    assert result["is_published"] is True
+
+
+# ─── get_pending_review_genes 权限过滤 ────────────────────────────────
+
+
+@pytest.fixture
+def _stub_gene_to_dict(monkeypatch):
+    """避免 _FakeGene 缺少 ORM 列字段：把序列化函数替换成只取 id/org_id。"""
+    monkeypatch.setattr(
+        gene_service,
+        "_gene_to_dict",
+        lambda g: {"id": g.id, "org_id": g.org_id},
+    )
+
+
+def _make_pending_db(genes_to_return, *, admin_org_ids=None):
+    """构造 mock db：
+    - 超管路径：仅 1 次 execute（gene 列表）
+    - 普通用户路径：第 1 次 execute 返回 admin org_id 列表，第 2 次返回 gene 列表
+    admin_org_ids 不为 None 时启用普通用户路径。
+    """
+    db = AsyncMock()
+    gene_result = MagicMock()
+    gene_scalars = MagicMock()
+    gene_scalars.all.return_value = genes_to_return
+    gene_result.scalars.return_value = gene_scalars
+
+    if admin_org_ids is None:
+        # 超管路径
+        db.execute = AsyncMock(return_value=gene_result)
+    else:
+        # 普通用户路径：先查 org_id 列表
+        org_result = MagicMock()
+        org_result.all.return_value = [(oid,) for oid in admin_org_ids]
+        db.execute = AsyncMock(side_effect=[org_result, gene_result])
+    return db
+
+
+@pytest.mark.asyncio
+async def test_pending_review_super_admin_sees_all(_stub_gene_to_dict):
+    """超管：返回所有待审 gene，不查 OrgMembership。"""
+    gene_a = _FakeGene(gene_id="g-a", org_id="org-1")
+    gene_b = _FakeGene(gene_id="g-b", org_id="org-2")
+    db = _make_pending_db([gene_a, gene_b])
+    user = _FakeUser("u-super", is_super_admin=True)
+
+    result = await gene_service.get_pending_review_genes(db, current_user=user)
+    assert len(result) == 2
+    # 超管只有 1 次 execute（无 OrgMembership 查询）
+    assert db.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_review_org_admin_only_sees_own_org(_stub_gene_to_dict):
+    """组织 admin：只返回作为 admin 的 org 下待审 gene。"""
+    gene_in_scope = _FakeGene(gene_id="g-a", org_id="org-A")
+    db = _make_pending_db([gene_in_scope], admin_org_ids=["org-A"])
+    user = _FakeUser("u-admin", is_super_admin=False)
+
+    result = await gene_service.get_pending_review_genes(db, current_user=user)
+    assert len(result) == 1
+    assert result[0]["id"] == "g-a"
+    # 应有 2 次 execute：先查 admin org_id，再查 gene
+    assert db.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_pending_review_normal_user_returns_empty(_stub_gene_to_dict):
+    """非超管、非任何 org admin：返回空列表，不查 gene 表。"""
+    db = _make_pending_db([], admin_org_ids=[])  # 空 admin org 列表
+    user = _FakeUser("u-normal", is_super_admin=False)
+
+    result = await gene_service.get_pending_review_genes(db, current_user=user)
+    assert result == []
+    # 仅 1 次 execute（查 admin org_id，发现为空就提前返回）
+    assert db.execute.await_count == 1
+
+
+# ─── get_gene_by_slug：多 scope 并存时不再 MultipleResultsFound ────────
+
+
+@pytest.mark.asyncio
+async def test_get_gene_by_slug_returns_first_when_multiple_scopes_exist():
+    """fork 三向落库后，同 slug 多条 gene 共存：旧实现的 scalar_one_or_none 会
+    抛 MultipleResultsFound 让 upload-folder 500。修复后必须用 .first() 兜底。"""
+    gene_personal = _FakeGene(gene_id="g-p", org_id=None, slug="dup-slug")
+    gene_org = _FakeGene(gene_id="g-o", org_id="org-A", slug="dup-slug")
+
+    db = AsyncMock()
+    result_obj = MagicMock()
+    scalars = MagicMock()
+    scalars.first.return_value = gene_personal  # 任取首条
+    # 防御：万一新实现误用 scalar_one_or_none 会直接抛 MultipleResultsFound
+    from sqlalchemy.exc import MultipleResultsFound
+    result_obj.scalar_one_or_none.side_effect = MultipleResultsFound(
+        "should not be called",
+    )
+    result_obj.scalars.return_value = scalars
+    db.execute = AsyncMock(return_value=result_obj)
+
+    got = await gene_service.get_gene_by_slug(db, "dup-slug")
+    assert got is gene_personal
+    # 确认走的是 scalars().first() 路径
+    scalars.first.assert_called_once()
+    result_obj.scalar_one_or_none.assert_not_called()
+    # 静默引用避免 lint 警告
+    assert gene_org.slug == "dup-slug"
+
+
+# ─── _attach_uploader_identity：审核中心展示用户名而非 UUID ──────────
+
+
+@pytest.mark.asyncio
+async def test_attach_uploader_identity_batch_resolves_names():
+    """审核中心列表必须把 created_by(UUID) 翻译成 name/email，前端不再裸显 UUID。
+    一次批量查 User，避免 N+1。"""
+    items = [
+        {"id": "g1", "created_by": "u-alice"},
+        {"id": "g2", "created_by": "u-bob"},
+        {"id": "g3", "created_by": "u-alice"},  # 重复 uploader，仍只 1 次查询
+        {"id": "g4", "created_by": None},        # 无上传者，跳过
+    ]
+
+    db = AsyncMock()
+    user_rows = MagicMock()
+    user_rows.all.return_value = [
+        ("u-alice", "Alice", "alice@example.com"),
+        ("u-bob", "Bob", "bob@example.com"),
+    ]
+    db.execute = AsyncMock(return_value=user_rows)
+
+    result = await gene_service._attach_uploader_identity(db, items)
+
+    assert result[0]["created_by_name"] == "Alice"
+    assert result[0]["created_by_email"] == "alice@example.com"
+    assert result[1]["created_by_name"] == "Bob"
+    assert result[2]["created_by_name"] == "Alice"  # 复用同一查询结果
+    assert result[3]["created_by_name"] is None      # 无 uploader
+    # 仅 1 次 User 表查询（即使有 4 条记录、2 个不同用户）
+    assert db.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_attach_uploader_identity_handles_missing_user():
+    """上传者用户已被软删/不存在时保持 None，前端会回退到 UUID 显示。"""
+    items = [{"id": "g1", "created_by": "u-ghost"}]
+
+    db = AsyncMock()
+    user_rows = MagicMock()
+    user_rows.all.return_value = []  # User 表查不到
+    db.execute = AsyncMock(return_value=user_rows)
+
+    result = await gene_service._attach_uploader_identity(db, items)
+    assert result[0]["created_by_name"] is None
+    assert result[0]["created_by_email"] is None
+
+
+@pytest.mark.asyncio
+async def test_attach_uploader_identity_skips_query_when_no_uploaders():
+    """所有条目 created_by 都为空时不应触发任何 SQL。"""
+    items = [{"id": "g1", "created_by": None}]
+    db = AsyncMock()
+    db.execute = AsyncMock()
+
+    result = await gene_service._attach_uploader_identity(db, items)
+    assert result == items  # 原样返回，不注入字段
+    db.execute.assert_not_called()

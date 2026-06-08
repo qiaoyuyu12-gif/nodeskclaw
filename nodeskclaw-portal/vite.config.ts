@@ -5,6 +5,18 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
+// 把本机回环地址追加到 NO_PROXY，避免开发机上的 Clash/V2Ray 等本地代理
+// （HTTP_PROXY/HTTPS_PROXY 指向 127.0.0.1:7897 之类）把 Vite -> backend 的
+// localhost 请求 RST 掉，导致 /api/* 出现 ECONNRESET。
+const LOCAL_BYPASS = ['localhost', '127.0.0.1', '::1']
+const existingNoProxy = (process.env.NO_PROXY ?? process.env.no_proxy ?? '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean)
+const mergedNoProxy = Array.from(new Set([...existingNoProxy, ...LOCAL_BYPASS])).join(',')
+process.env.NO_PROXY = mergedNoProxy
+process.env.no_proxy = mergedNoProxy
+
 const apiTarget = process.env.API_PROXY_TARGET || 'http://localhost:4510'
 
 const projectRoot = path.resolve(__dirname, '..')

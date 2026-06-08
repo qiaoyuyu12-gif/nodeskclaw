@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import secrets
 
 from sqlalchemy import func, select, update
@@ -11,6 +12,30 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _derive_default_org_naming(account: str) -> tuple[str, str]:
+    """从 INIT_ADMIN_ACCOUNT 派生默认组织的 name / slug。
+
+    避免直接展示 "Default Organization / default" 这种无意义占位。
+    - account 为空 / 派生失败时回退到旧的硬编码值，保持向后兼容
+    - slug 仅保留 [a-z0-9-]，截掉 @ 之前部分，全空时回退到 "default"
+    - name 默认拼接 "的工作组织"，admin 默认值 → "Admin 的工作组织"
+    """
+    raw = (account or "").strip()
+    if not raw:
+        return "Default Organization", "default"
+
+    # slug：只保留 ASCII 小写字母/数字/连字符，取 @ 之前的本地部分
+    local_part = raw.split("@", 1)[0]
+    slug = re.sub(r"[^a-z0-9-]+", "-", local_part.lower()).strip("-")
+    if not slug:
+        slug = "default"
+
+    # name：首字母大写后拼接中文 "的工作组织"，保持视觉与原英文 "Default Organization" 类似
+    display = local_part[:1].upper() + local_part[1:] if local_part else "Admin"
+    name = f"{display} 的工作组织"
+    return name, slug
 
 
 async def run_seed(
@@ -23,6 +48,7 @@ async def run_seed(
     ee_creds = None
     if is_ee:
         ee_creds = await _seed_ee_platform_admin(session_factory)
+    await _fix_user_current_org_consistency(session_factory)
     await _ensure_workspace_schedules(session_factory)
     # RBAC 第一期：apps/roles/menus/role_menus/role_apps + legacy 回填
     # 放在所有 legacy 数据（org/membership/admin_membership/workspace_member）
@@ -165,6 +191,11 @@ async def _seed_default_org_and_templates(
         from app.models.organization import Organization
         from app.models.user import User
 
+        # 按 INIT_ADMIN_ACCOUNT 派生有意义的默认组织名/slug，避免直接显示 "Default Organization"
+        default_name, default_slug = _derive_default_org_naming(
+            settings.INIT_ADMIN_ACCOUNT,
+        )
+
         org_result = await db.execute(
             select(Organization).where(Organization.deleted_at.is_(None))
         )
@@ -175,8 +206,8 @@ async def _seed_default_org_and_templates(
             default_org_id = str(uuid.uuid4())
             default_org = Organization(
                 id=default_org_id,
-                name="Default Organization",
-                slug="default",
+                name=default_name,
+                slug=default_slug,
                 plan="pro",
                 max_instances=50,
                 max_cpu_total="200",
@@ -209,7 +240,37 @@ async def _seed_default_org_and_templates(
                 inst.org_id = default_org.id
 
             await db.commit()
-            logger.info("种子数据：已创建默认组织并迁移现有数据")
+            logger.info(
+                "种子数据：已创建默认组织 [name=%s, slug=%s] 并迁移现有数据",
+                default_name, default_slug,
+            )
+        else:
+            # 幂等迁移：仅当现有组织仍为旧硬编码默认值（用户未改过）时 rename，
+            # 让升级后的实例自动获得有意义的组织名/slug。
+            # 一旦 admin 通过 UI 改过名字或 slug，则跳过。
+            if (
+                default_org.name == "Default Organization"
+                and default_org.slug == "default"
+                and (default_name != "Default Organization" or default_slug != "default")
+            ):
+                # slug 冲突保护：可能此前已有同 slug 的另一条 row，跳过 slug 改写
+                slug_clash = (await db.execute(
+                    select(Organization).where(
+                        Organization.slug == default_slug,
+                        Organization.id != default_org.id,
+                        Organization.deleted_at.is_(None),
+                    )
+                )).scalar_one_or_none()
+
+                default_org.name = default_name
+                if slug_clash is None:
+                    default_org.slug = default_slug
+                await db.commit()
+                logger.info(
+                    "种子数据：已将硬编码默认组织 rename 为 [name=%s, slug=%s]"
+                    "（slug_clash=%s）",
+                    default_org.name, default_org.slug, slug_clash is not None,
+                )
 
         if is_ee:
             try:
@@ -441,6 +502,61 @@ async def seed_default_required_genes(
             )
         else:
             logger.info("默认工作基因检查完成，所有组织已有配置")
+
+
+async def _fix_user_current_org_consistency(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """幂等修复历史脏数据：user.current_org_id 指向用户不再是成员的组织。
+
+    历史 bug：CE/EE 旧版 SingleOrgProvider 仅按 Organization.id 解析 current_org_id，
+    没有校验 OrgMembership。当 admin / 用户被换到别的 org 后，旧的 current_org_id 仍残留，
+    导致前端组织信息卡片错位、成员列表 403。
+
+    修复策略：
+      - 若 user.current_org_id 在 OrgMembership 中找不到对应行（已不是成员或软删）→ 重置为
+        该用户在 OrgMembership 中实际归属的最早一条 org（按 created_at 升序）
+      - 若用户根本没有 OrgMembership：保留原值（CE 兜底交给 SingleOrgProvider 处理）
+      - 该函数本身幂等：已一致的 user 不会被改动
+    """
+    from app.models.base import not_deleted
+    from app.models.org_membership import OrgMembership
+    from app.models.user import User
+
+    async with session_factory() as db:
+        users = (await db.execute(
+            select(User).where(User.deleted_at.is_(None))
+        )).scalars().all()
+
+        fixed = 0
+        for user in users:
+            # 用户实际归属的所有 org_id 集合
+            membership_rows = (await db.execute(
+                select(OrgMembership.org_id, OrgMembership.created_at)
+                .where(
+                    OrgMembership.user_id == user.id,
+                    not_deleted(OrgMembership),
+                )
+                .order_by(OrgMembership.created_at.asc())
+            )).all()
+            org_ids = [row[0] for row in membership_rows]
+
+            if not org_ids:
+                continue  # 无 membership：交给 provider 兜底，不动 current_org_id
+
+            # current_org_id 已一致或可接受 → 跳过
+            if user.current_org_id in org_ids:
+                continue
+
+            # 不一致：重置为实际归属的最早一条
+            user.current_org_id = org_ids[0]
+            fixed += 1
+
+        if fixed:
+            await db.commit()
+            logger.info(
+                "种子数据：已修复 %d 个用户的 current_org_id 与 OrgMembership 不一致", fixed,
+            )
 
 
 async def _ensure_workspace_schedules(session_factory: async_sessionmaker[AsyncSession]) -> None:

@@ -70,6 +70,97 @@ def _extract_docker_error(stderr_text: str) -> str:
     return stderr_text.strip()[:500]
 
 
+def _classify_docker_error(stderr_text: str) -> str | None:
+    """对 docker compose 失败的 stderr 做模式匹配，返回中文引导文案。
+
+    单纯的 _extract_docker_error 输出对用户不够友好——「TLS handshake timeout」
+    本身用户不知道下一步该做什么。这里识别几类高频部署失败场景，给出可操作建议。
+    无匹配时返回 None（调用方不附加提示）。
+    """
+    text = stderr_text.lower()
+
+    # 1) 网络/镜像仓库连不通
+    if any(kw in text for kw in (
+        "tls handshake timeout",
+        "no such host",
+        "i/o timeout",
+        "connection refused",
+        "dial tcp",
+    )):
+        return (
+            "无法连接镜像仓库。请手动 `docker pull <image>` 后重试，"
+            "或在创建实例时通过 DOCKER_IMAGE 环境变量指向已在本地的镜像。"
+        )
+
+    # 2) 镜像仓库需要登录
+    if "unauthorized" in text or "pull access denied" in text:
+        return "镜像仓库需要登录。请先 `docker login <registry>` 后重试。"
+
+    # 3) 镜像/标签不存在
+    if "manifest unknown" in text or "manifest for" in text and "not found" in text:
+        return "镜像或版本不存在。请检查 image_version 拼写，或确认该 tag 已发布到仓库。"
+
+    # 4) compose 未安装（兜底，create_instance 已有 FileNotFoundError 分支处理）
+    if "docker compose" in text and "not found" in text:
+        return "未安装 docker compose v2，请升级 Docker 或安装 docker-compose-v2。"
+
+    return None
+
+
+def _format_docker_failure(prefix: str, stderr_text: str) -> str:
+    """组合「核心错误 + 引导提示」的完整 RuntimeError 文案。
+
+    所有 docker compose ... 失败的 raise 路径统一走这里，前端 toast 既能
+    看到原始 daemon 错误，也能看到下一步该怎么做。
+    """
+    err = _extract_docker_error(stderr_text)
+    hint = _classify_docker_error(stderr_text)
+    return f"{prefix}: {err}" + (f"\n提示：{hint}" if hint else "")
+
+
+async def _run_docker(
+    *args: str,
+    stdout: int | None = None,
+    stderr: int | None = None,
+    timeout: float | None = None,
+) -> tuple[int, bytes, bytes]:
+    """跨平台 docker 子进程调用。
+
+    Windows SelectorEventLoop 上 asyncio.create_subprocess_exec 会抛
+    NotImplementedError（参见 CLAUDE.md 易踩点 #2），导致整个 docker 部署
+    链路炸掉。本 helper 在 NotImplementedError 时自动回退到线程池里的
+    同步 subprocess.run，把跨平台问题收敛在一个地方。
+
+    返回 (returncode, stdout_bytes, stderr_bytes)；rc=0 表示成功。
+    stdout / stderr 默认为 PIPE；显式传 subprocess.DEVNULL 可丢弃输出。
+    """
+    out_pipe = stdout if stdout is not None else asyncio.subprocess.PIPE
+    err_pipe = stderr if stderr is not None else asyncio.subprocess.PIPE
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args, stdout=out_pipe, stderr=err_pipe,
+        )
+        if timeout is not None:
+            so, se = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        else:
+            so, se = await proc.communicate()
+        return proc.returncode or 0, so or b"", se or b""
+    except NotImplementedError:
+        # Windows SelectorEventLoop 不支持 asyncio subprocess → 走同步路径
+        import subprocess
+
+        def _run() -> tuple[int, bytes, bytes]:
+            r = subprocess.run(
+                list(args),
+                stdout=subprocess.PIPE if out_pipe == asyncio.subprocess.PIPE else out_pipe,
+                stderr=subprocess.PIPE if err_pipe == asyncio.subprocess.PIPE else err_pipe,
+                timeout=timeout,
+            )
+            return r.returncode, r.stdout or b"", r.stderr or b""
+
+        return await asyncio.to_thread(_run)
+
+
 def _is_windows_path(path: str) -> bool:
     return bool(_WINDOWS_HOST_PATH_RE.match(path))
 
@@ -144,13 +235,10 @@ async def _seed_template_from_image(config: InstanceComputeConfig, data_dir: Pat
     tmp_container = f"tmpl-seed-{config.slug}-{uuid.uuid4().hex[:8]}"
 
     try:
-        proc = await asyncio.create_subprocess_exec(
+        rc, stdout, stderr = await _run_docker(
             "docker", "create", "--platform", "linux/amd64", "--name", tmp_container, image,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
+        if rc != 0:
             logger.warning("seed_template: docker create failed: %s", stderr.decode().strip()[:300])
             return
         container_id = stdout.decode().strip()
@@ -159,25 +247,21 @@ async def _seed_template_from_image(config: InstanceComputeConfig, data_dir: Pat
             return
 
         try:
-            proc = await asyncio.create_subprocess_exec(
+            rc, _, cp_stderr = await _run_docker(
                 "docker", "cp",
                 f"{container_id}:{container_data_dir}/{template_rel}",
                 str(host_template),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
             )
-            _, cp_stderr = await proc.communicate()
-            if proc.returncode != 0:
+            if rc != 0:
                 logger.warning("seed_template: docker cp failed: %s", cp_stderr.decode().strip()[:300])
                 return
             logger.info("seed_template: copied %s from %s to %s", template_rel, image, host_template)
         finally:
-            rm_proc = await asyncio.create_subprocess_exec(
+            import subprocess as _subprocess
+            await _run_docker(
                 "docker", "rm", container_id,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
             )
-            await rm_proc.wait()
     except Exception:
         logger.warning("seed_template: unexpected error for %s", config.slug, exc_info=True)
 
@@ -197,6 +281,10 @@ def _build_compose_yaml(config: InstanceComputeConfig) -> dict:
 
     main_service: dict = {
         "image": env.get("DOCKER_IMAGE", f"deskclaw:{config.image_version}"),
+        # 本地有镜像就直接用，不再 HEAD registry。这样用户可手动 docker pull
+        # 后离线部署，避开 TLS 握手超时 / 镜像源不通的环境问题。
+        # Compose v2.20+ 支持；老版本会忽略此字段，行为退化为默认（仍可工作）。
+        "pull_policy": "missing",
         "container_name": config.slug,
         "environment": env,
         "ports": [f"{host_port}:{config.gateway_port}"],
@@ -233,6 +321,7 @@ def _build_compose_yaml(config: InstanceComputeConfig) -> dict:
     if config.companion and config.companion.enabled:
         companion = {
             "image": config.companion.image or "deskclaw-companion:latest",
+            "pull_policy": "missing",  # 同 main_service：本地镜像优先，避开 registry 网络问题
             "container_name": f"{config.slug}-companion",
             "environment": config.companion.env_vars,
             "ports": [str(config.companion.port)],
@@ -283,16 +372,13 @@ class DockerComputeProvider:
                 json.dump(compose, f, indent=2)
 
         try:
-            proc = await asyncio.create_subprocess_exec(
+            rc, _, stderr = await _run_docker(
                 "docker", "compose", "-f", compose_path, "up", "-d",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await proc.communicate()
-            if proc.returncode != 0:
+            if rc != 0:
                 raw = stderr.decode()
                 logger.error("docker compose up failed: %s", raw)
-                raise RuntimeError(f"docker compose up 失败: {_extract_docker_error(raw)}")
+                raise RuntimeError(_format_docker_failure("docker compose up 失败", raw))
         except FileNotFoundError:
             raise RuntimeError("docker compose 未安装")
 
@@ -313,13 +399,10 @@ class DockerComputeProvider:
         compose_path = _resolve_compose_path(slug, handle.extra.get("compose_path", ""))
         if compose_path and os.path.exists(compose_path):
             try:
-                proc = await asyncio.create_subprocess_exec(
+                rc, _, stderr = await _run_docker(
                     "docker", "compose", "-f", compose_path, "down", "-v",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
                 )
-                _, stderr = await proc.communicate()
-                if proc.returncode == 0:
+                if rc == 0:
                     return
                 logger.warning("docker compose down failed: %s", stderr.decode().strip()[:300])
             except Exception as e:
@@ -327,25 +410,19 @@ class DockerComputeProvider:
 
         for container_name in (f"{slug}-companion", slug):
             try:
-                proc = await asyncio.create_subprocess_exec(
+                rc, _, stderr = await _run_docker(
                     "docker", "rm", "-f", container_name,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
                 )
-                _, stderr = await proc.communicate()
-                if proc.returncode != 0 and "No such container" not in stderr.decode():
+                if rc != 0 and "No such container" not in stderr.decode():
                     logger.warning("docker rm failed for %s: %s", container_name, stderr.decode().strip()[:300])
             except Exception as e:
                 logger.warning("docker rm failed for %s: %s", container_name, e)
 
         try:
-            proc = await asyncio.create_subprocess_exec(
+            rc, _, stderr = await _run_docker(
                 "docker", "network", "rm", f"{slug}-net",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await proc.communicate()
-            if proc.returncode != 0 and "No such network" not in stderr.decode():
+            if rc != 0 and "No such network" not in stderr.decode():
                 logger.warning("docker network rm failed for %s-net: %s", slug, stderr.decode().strip()[:300])
         except Exception as e:
             logger.warning("docker network rm failed for %s-net: %s", slug, e)
@@ -353,13 +430,10 @@ class DockerComputeProvider:
     async def get_status(self, handle: ComputeHandle) -> str:
         slug = handle.extra.get("slug", handle.instance_id)
         try:
-            proc = await asyncio.create_subprocess_exec(
+            rc, stdout, _ = await _run_docker(
                 "docker", "inspect", "--format", "{{.State.Status}}", slug,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await proc.communicate()
-            if proc.returncode == 0:
+            if rc == 0:
                 status = stdout.decode().strip()
                 status_map = {"running": "running", "exited": "stopped", "paused": "stopped"}
                 return status_map.get(status, status)
@@ -373,12 +447,11 @@ class DockerComputeProvider:
     async def get_logs(self, handle: ComputeHandle, *, tail: int = 50) -> str:
         slug = handle.extra.get("slug", handle.instance_id)
         try:
-            proc = await asyncio.create_subprocess_exec(
+            # docker logs 把 stderr 合并到 stdout（保留原行为）
+            _, stdout, _ = await _run_docker(
                 "docker", "logs", "--tail", str(tail), slug,
-                stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
-            stdout, _ = await proc.communicate()
             return stdout.decode() if stdout else ""
         except Exception:
             return ""
@@ -394,37 +467,28 @@ class DockerComputeProvider:
         slug = handle.extra.get("slug", handle.instance_id)
         compose_path = _resolve_compose_path(slug, handle.extra.get("compose_path", ""))
         if compose_path and os.path.exists(compose_path):
-            proc = await asyncio.create_subprocess_exec(
+            rc, _, stderr = await _run_docker(
                 "docker", "compose", "-f", compose_path, "restart",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                raise RuntimeError(f"docker compose restart 失败: {_extract_docker_error(stderr.decode())}")
+            if rc != 0:
+                raise RuntimeError(_format_docker_failure("docker compose restart 失败", stderr.decode()))
         else:
-            proc = await asyncio.create_subprocess_exec(
+            rc, _, stderr = await _run_docker(
                 "docker", "restart", slug,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                raise RuntimeError(f"docker restart 失败: {_extract_docker_error(stderr.decode())}")
+            if rc != 0:
+                raise RuntimeError(_format_docker_failure("docker restart 失败", stderr.decode()))
 
     async def scale_instance(self, handle: ComputeHandle, replicas: int) -> ComputeHandle:
         slug = handle.extra.get("slug", handle.instance_id)
         compose_path = _resolve_compose_path(slug, handle.extra.get("compose_path", ""))
         if compose_path and os.path.exists(compose_path):
-            proc = await asyncio.create_subprocess_exec(
+            rc, _, stderr = await _run_docker(
                 "docker", "compose", "-f", compose_path, "up", "-d",
                 "--scale", f"agent={replicas}",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                raise RuntimeError(f"docker compose scale 失败: {_extract_docker_error(stderr.decode())}")
+            if rc != 0:
+                raise RuntimeError(_format_docker_failure("docker compose scale 失败", stderr.decode()))
         handle.extra["replicas"] = replicas
         return handle
 
@@ -466,15 +530,12 @@ class DockerComputeProvider:
         except Exception as exc:
             raise RuntimeError(f"无法写入 docker-compose.yml: {compose_path}: {exc}") from exc
 
-        proc = await asyncio.create_subprocess_exec(
+        rc, _, stderr = await _run_docker(
             "docker", "compose", "-f", compose_path, "up", "-d",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
+        if rc != 0:
             raise RuntimeError(
-                f"docker compose up 失败: {_extract_docker_error(stderr.decode())}"
+                _format_docker_failure("docker compose up 失败", stderr.decode())
             )
 
     async def health_check(self, handle: ComputeHandle) -> dict:

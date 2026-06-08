@@ -464,11 +464,35 @@ async def _test_docker_connection(
         cluster.health_status = "unhealthy"
         await db.commit()
         return ConnectionTestResult(ok=False, message=f"Docker 环境检查超时，{_docker_env_hint()}")
+    except NotImplementedError as exc:
+        # 与 _create_docker_cluster 对齐：Windows + SelectorEventLoop 下
+        # asyncio.create_subprocess_exec 不支持，回退到线程池里跑同步 subprocess。
+        # 否则会被下面通用 except Exception 吞成 message=""，前端 toast 显示
+        # "连接失败:" 这种空尾巴。
+        logger.warning(
+            "asyncio subprocess not supported on this loop in test (platform=%s, err=%s); 回退到同步 subprocess",
+            sys.platform, exc,
+        )
+        try:
+            await _probe_docker_sync()
+        except BadRequestError as be:
+            cluster.status = ClusterStatus.disconnected
+            cluster.health_status = "unhealthy"
+            await db.commit()
+            return ConnectionTestResult(ok=False, message=be.message)
+        # 同步探测成功 → docker compose 可用
+        cluster.status = ClusterStatus.connected
+        cluster.health_status = "healthy"
+        await db.commit()
+        return ConnectionTestResult(ok=True, version="docker compose available")
     except Exception as e:
+        # 兜底：保留 traceback 便于排查，message 用 repr 至少给出异常类型，
+        # 避免像 NotImplementedError() 那样 str() 后是空字符串。
+        logger.exception("Docker 环境检查异常 in test (platform=%s)", sys.platform)
         cluster.status = ClusterStatus.disconnected
         cluster.health_status = "unhealthy"
         await db.commit()
-        return ConnectionTestResult(ok=False, message=str(e))
+        return ConnectionTestResult(ok=False, message=str(e) or repr(e))
 
 
 def _parse_kubeconfig_meta(kubeconfig: str) -> tuple[str, str]:

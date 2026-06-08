@@ -30,6 +30,10 @@ class OrgModelProvider(BaseModel):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     skip_ssl_verify: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     allowed_models: Mapped[list | None] = mapped_column(JSON, nullable=True, default=None)
+    # 是否为平台托管 Key：true=平台超管下发，组织端只读 api_key/base_url 等敏感字段；false=组织 BYOK 自带 Key
+    is_platform_managed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     created_by: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=False
     )

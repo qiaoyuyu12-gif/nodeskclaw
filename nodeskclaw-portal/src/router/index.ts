@@ -173,6 +173,20 @@ const ceRoutes: RouteRecordRaw[] = [
     component: () => import('@/views/AcceptInvite.vue'),
     meta: { requiresAuth: false },
   },
+  {
+    // 申请审核中心：先做技能上传/加载审核 Tab，未来扩展账号/功能开放申请
+    path: '/approvals',
+    name: 'Approvals',
+    component: () => import('@/views/Approvals.vue'),
+    meta: { requiresAuth: true, requireAdminOrSuper: true },
+  },
+  {
+    // 申请加入组织：受 multi_org feature gate 保护，CE 模式访问会被路由守卫拦截到首页
+    path: '/join-organization',
+    name: 'JoinOrganization',
+    component: () => import('@/views/JoinOrganization.vue'),
+    meta: { requiresAuth: true, allowNoOrg: true, requireFeature: 'multi_org' },
+  },
 ]
 
 const routes: RouteRecordRaw[] = [...ceRoutes, ...eePortalRoutes]
@@ -230,6 +244,15 @@ router.beforeEach(async (to, _from, next) => {
 
     // 超管路由守卫
     if (to.meta.requireSuperAdmin && !authStore.user?.is_super_admin) {
+      return next('/')
+    }
+
+    // 申请审核中心守卫：超管或任意组织 admin 可进
+    if (
+      to.meta.requireAdminOrSuper &&
+      !authStore.user?.is_super_admin &&
+      authStore.user?.portal_org_role !== 'admin'
+    ) {
       return next('/')
     }
   }

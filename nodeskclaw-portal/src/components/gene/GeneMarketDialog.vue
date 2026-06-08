@@ -266,11 +266,13 @@ const forking = ref<string | null>(null)
 async function handleForkGene(slug: string, target: 'personal' | 'org') {
   forking.value = slug
   try {
-    await store.forkGene(slug, target)
+    const forked = await store.forkGene(slug, target)
+    // admin/超管自上传时后端直接 approved，提示语区分免审 vs 待审
+    const isApproved = forked?.review_status === 'approved'
     toast.success(
       target === 'personal'
         ? t('geneMarket.forkToPersonalSuccess')
-        : t('geneMarket.forkToOrgSuccess'),
+        : t(isApproved ? 'geneMarket.forkToOrgImmediate' : 'geneMarket.forkToOrgSuccess'),
     )
   } catch {
     toast.error(t('geneMarket.forkFailed'))

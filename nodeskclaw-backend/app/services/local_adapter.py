@@ -158,9 +158,13 @@ class LocalAdapter(RegistryAdapter):
 
     async def get_skill(self, slug: str) -> RegistrySkillDetail | None:
         async with self._session_factory() as db:
+            # fork 三向后同 slug 可在 personal/org/public 多 scope 并存
+            # （DB partial unique index 是 `(slug, org_id)`）。这里只用于
+            # 详情页"按 slug 拿任一条"的 fallback，所以用 .first() 兜底，
+            # 避免 MultipleResultsFound 把 aggregator 整条链路吞成 None。
             stmt = select(Gene).where(not_deleted(Gene), Gene.slug == slug)
             result = await db.execute(stmt)
-            gene = result.scalar_one_or_none()
+            gene = result.scalars().first()
             if not gene:
                 return None
             item = _gene_to_item(gene)
@@ -168,9 +172,10 @@ class LocalAdapter(RegistryAdapter):
 
     async def get_manifest(self, slug: str, version: str | None = None) -> dict | None:
         async with self._session_factory() as db:
+            # 同上：多 scope 同 slug 时取首条 manifest，避免 MultipleResultsFound
             stmt = select(Gene.manifest).where(not_deleted(Gene), Gene.slug == slug)
             result = await db.execute(stmt)
-            raw = result.scalar_one_or_none()
+            raw = result.scalars().first()
             return _json_loads(raw) if raw else None
 
     async def get_featured(self, limit: int = 10) -> list[RegistrySkillItem] | None:
@@ -206,7 +211,8 @@ class LocalAdapter(RegistryAdapter):
         async with self._session_factory() as db:
             stmt = select(Gene.synergies).where(not_deleted(Gene), Gene.slug == slug)
             result = await db.execute(stmt)
-            raw = result.scalar_one_or_none()
+            # 多 scope 同 slug 并存时取首条，避免 MultipleResultsFound
+            raw = result.scalars().first()
             parsed = _json_loads(raw) if raw else None
             return parsed if isinstance(parsed, list) else None
 
@@ -217,7 +223,8 @@ class LocalAdapter(RegistryAdapter):
         async with self._session_factory() as db:
             stmt = select(Gene).where(not_deleted(Gene), Gene.slug == slug)
             result = await db.execute(stmt)
-            gene = result.scalar_one_or_none()
+            # 多 scope 同 slug 并存时给首条记账即可（install_count 是聚合量）
+            gene = result.scalars().first()
             if gene:
                 gene.install_count = (gene.install_count or 0) + 1
                 await db.commit()

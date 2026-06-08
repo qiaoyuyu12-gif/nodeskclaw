@@ -47,6 +47,8 @@ from app.api.engine_versions import (
     engine_version_write_router,
 )
 from app.api.invitations import invite_router, invite_public_router
+from app.api.org_join_requests import router as org_join_request_router
+from app.api.org_leave_requests import router as org_leave_request_router
 from app.api.portal.instances import router as portal_instance_router
 from app.api.portal.instance_members import router as portal_instance_members_router
 from app.api.portal.deploy import router as portal_deploy_router
@@ -147,6 +149,8 @@ api_router.include_router(engine_version_write_router, prefix="/engine-versions"
     dependencies=[Depends(require_org_admin)])
 api_router.include_router(invite_router, prefix="/orgs", tags=["邀请"])
 api_router.include_router(invite_public_router, prefix="/invite", tags=["邀请（公开）"])
+api_router.include_router(org_join_request_router, tags=["组织加入申请"])
+api_router.include_router(org_leave_request_router, tags=["组织退出申请"])
 api_router.include_router(security_ws_router, tags=["安全评估"])
 api_router.include_router(tunnel_router, tags=["Agent Tunnel"])
 api_router.include_router(kb_router, prefix="/knowledge-bases", tags=["知识库管理"])

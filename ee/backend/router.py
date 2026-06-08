@@ -29,6 +29,7 @@ def _register_ee_admin_routes():
             from ee.backend.api.admin.audit import router as ee_audit_router
             from ee.backend.api.admin.features import router as ee_features_router
             from ee.backend.api.admin.organizations import router as ee_org_router
+            from ee.backend.api.admin.platform_providers import router as ee_platform_provider_router
             from ee.backend.api.admin.plans import router as ee_plans_router
             from ee.backend.api.admin.users import router as ee_users_router
 
@@ -69,6 +70,13 @@ def _register_ee_admin_routes():
                 ee_audit_router,
                 prefix="",
                 tags=["EE - 超管审计"],
+                dependencies=admin_deps,
+            )
+            # 平台托管 Key 下发：路由内已含完整路径 /orgs/{org_id}/platform-providers
+            ee_admin_router.include_router(
+                ee_platform_provider_router,
+                prefix="",
+                tags=["EE - 超管平台模型 Key"],
                 dependencies=admin_deps,
             )
             logger.info("EE 超管路由已注册到 ee_admin_router")
