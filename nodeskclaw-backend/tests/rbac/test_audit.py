@@ -40,8 +40,13 @@ async def test_audit_disabled_does_not_write(require_test_db, monkeypatch):
 async def test_audit_enabled_writes_record(require_test_db, monkeypatch):
     """RBAC_AUDIT_ENABLED=True 时写入一条 permission_audit_log。"""
     from app.core.config import settings as app_settings
+    from app.core.rbac import audit as audit_mod
+    from tests.rbac.conftest import TestSessionLocal
 
     monkeypatch.setattr(app_settings, "RBAC_AUDIT_ENABLED", True)
+    # log_decision_async 内部默认用 app.core.deps.async_session_factory（指向应用主库），
+    # 测试时改用 rbac fixture 的测试库 session_factory，避免连错库
+    monkeypatch.setattr(audit_mod, "async_session_factory", TestSessionLocal)
 
     await log_decision_async(
         subject_type="user", subject_id="user-audit-2",
