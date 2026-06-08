@@ -100,7 +100,21 @@ def _classify_docker_error(stderr_text: str) -> str | None:
     if "manifest unknown" in text or "manifest for" in text and "not found" in text:
         return "镜像或版本不存在。请检查 image_version 拼写，或确认该 tag 已发布到仓库。"
 
-    # 4) compose 未安装（兜底，create_instance 已有 FileNotFoundError 分支处理）
+    # 4) 端口绑定失败 / 容器网络建立失败
+    if any(kw in text for kw in (
+        "failed to set up container networking",
+        "driver failed programming external connectivity",
+        "address already in use",
+        "bind: address already in use",
+        "port is already allocated",
+    )):
+        return (
+            "宿主机端口被占用，Docker 无法完成端口绑定。"
+            "请删除本实例后重新创建（系统会自动分配空闲端口），"
+            "或手动执行 `docker ps` 找到占用该端口的容器并停止后重试。"
+        )
+
+    # 5) compose 未安装（兜底，create_instance 已有 FileNotFoundError 分支处理）
     if "docker compose" in text and "not found" in text:
         return "未安装 docker compose v2，请升级 Docker 或安装 docker-compose-v2。"
 
@@ -378,6 +392,8 @@ class DockerComputeProvider:
             if rc != 0:
                 raw = stderr.decode()
                 logger.error("docker compose up failed: %s", raw)
+                # 清理残留容器/网络，避免下次重建因"name already in use"再次失败
+                await self._cleanup_on_failure(config.slug, compose_path)
                 raise RuntimeError(_format_docker_failure("docker compose up 失败", raw))
         except FileNotFoundError:
             raise RuntimeError("docker compose 未安装")
@@ -392,6 +408,35 @@ class DockerComputeProvider:
             status="running",
             extra={"compose_path": compose_path, "slug": config.slug, "runtime": config.runtime},
         )
+
+    async def _cleanup_on_failure(self, slug: str, compose_path: str) -> None:
+        """创建失败时清理残留容器和网络，防止下次重建被「name already in use」卡住。"""
+        import subprocess as _subprocess
+        if compose_path and os.path.exists(compose_path):
+            try:
+                await _run_docker(
+                    "docker", "compose", "-f", compose_path, "down", "--remove-orphans",
+                    stderr=_subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+        # 兜底：直接 rm 容器和网络（compose down 失败时的保底清理）
+        for name in (f"{slug}-companion", slug):
+            try:
+                await _run_docker(
+                    "docker", "rm", "-f", name,
+                    stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+        try:
+            await _run_docker(
+                "docker", "network", "rm", f"{slug}-net",
+                stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+        logger.info("create_instance cleanup done for slug=%s", slug)
 
     async def destroy_instance(self, handle: ComputeHandle, **kwargs) -> None:
         logger.info("DockerComputeProvider.destroy_instance: %s", handle.instance_id)
