@@ -31,7 +31,11 @@ jobs:
         working-directory: nodeskclaw-backend
         run: uv sync --group dev
 
-      - name: Ruff
+      - name: Ruff Fix
+        working-directory: nodeskclaw-backend
+        run: uv run ruff check --fix app tests
+
+      - name: Ruff Check
         working-directory: nodeskclaw-backend
         run: uv run ruff check app tests
 
