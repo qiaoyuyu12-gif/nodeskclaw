@@ -73,6 +73,27 @@ async def list_my_organizations(
     return ApiResponse(data=data)
 
 
+@router.get("/directory",
+            dependencies=[Depends(require_feature("multi_org"))])
+async def list_org_directory(
+    db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
+):
+    """列出所有组织的公开基本信息（id / name / slug），供用户申请加入时选择。
+
+    仅暴露最小字段，任意已登录用户可访问。受 multi_org feature gate 保护。
+    """
+    result = await db.execute(
+        select(Organization.id, Organization.name, Organization.slug)
+        .where(not_deleted(Organization))
+        .order_by(Organization.name)
+    )
+    return ApiResponse(data=[
+        {"id": row[0], "name": row[1], "slug": row[2]}
+        for row in result.all()
+    ])
+
+
 async def _enrich_org_info(org: Organization, db: AsyncSession) -> OrgInfo:
     """补充 cluster_name 和 member_count。"""
     cluster_name = None

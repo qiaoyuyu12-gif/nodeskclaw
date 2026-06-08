@@ -3,7 +3,7 @@
   ----------
   - 仅 multi_org feature 启用时可访问（route meta 检查 + 后端二次校验）
   - 已加入组织的用户也能从其他入口进来申请加入"其他组织"
-  - 表单：组织标识 (slug) + 申请理由（可选）
+  - 表单：组织标识（可搜索下拉，列出所有已注册组织）+ 申请理由（可选）
   - 提交成功后展示状态卡片 + 列出我的全部申请历史
 -->
 <template>
@@ -19,14 +19,69 @@
 
     <!-- 申请表单 -->
     <div class="border rounded-lg p-5 space-y-4 bg-card">
-      <div class="space-y-1">
+      <!-- 组织选择下拉（可搜索） -->
+      <div class="space-y-1" ref="orgPickerRef">
         <label class="text-sm font-medium">{{ t('joinOrg.slugLabel') }}</label>
-        <input
-          v-model.trim="form.slug"
-          :placeholder="t('joinOrg.slugPlaceholder')"
-          :disabled="submitting"
-          class="w-full border rounded px-3 py-2 text-sm bg-background"
-        />
+        <div class="relative">
+          <!-- 搜索输入框 -->
+          <input
+            ref="orgInputRef"
+            v-model="orgSearch"
+            :placeholder="selectedOrg ? `${selectedOrg.name} (${selectedOrg.slug})` : t('joinOrg.slugPlaceholder')"
+            :disabled="submitting || loadingOrgs"
+            class="w-full border rounded px-3 py-2 text-sm bg-background pr-8"
+            autocomplete="off"
+            @focus="openPicker"
+            @input="openPicker"
+            @keydown.escape="closePicker"
+            @keydown.enter.prevent="selectHighlighted"
+            @keydown.arrow-down.prevent="moveHighlight(1)"
+            @keydown.arrow-up.prevent="moveHighlight(-1)"
+          />
+          <!-- 清除按钮 -->
+          <button
+            v-if="selectedOrg"
+            class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            tabindex="-1"
+            @mousedown.prevent="clearSelection"
+          >
+            <X class="w-3.5 h-3.5" />
+          </button>
+          <!-- 加载指示 -->
+          <Loader2
+            v-else-if="loadingOrgs"
+            class="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin text-muted-foreground"
+          />
+
+          <!-- 下拉面板 -->
+          <div
+            v-if="pickerOpen && !loadingOrgs"
+            class="absolute z-50 left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto rounded-md border border-border bg-card shadow-lg"
+          >
+            <div
+              v-if="filteredOrgs.length === 0"
+              class="px-3 py-2 text-xs text-muted-foreground"
+            >
+              {{ t('joinOrg.slugNoMatch') }}
+            </div>
+            <button
+              v-for="(org, idx) in filteredOrgs"
+              :key="org.id"
+              type="button"
+              :class="[
+                'w-full text-left px-3 py-2 text-sm flex items-center justify-between gap-2 transition-colors',
+                idx === highlightIdx
+                  ? 'bg-primary/10 text-primary'
+                  : 'hover:bg-muted/50',
+              ]"
+              @mouseenter="highlightIdx = idx"
+              @mousedown.prevent="selectOrg(org)"
+            >
+              <span class="font-medium truncate">{{ org.name }}</span>
+              <span class="shrink-0 text-xs text-muted-foreground font-mono">{{ org.slug }}</span>
+            </button>
+          </div>
+        </div>
         <p class="text-xs text-muted-foreground">{{ t('joinOrg.slugHint') }}</p>
       </div>
 
@@ -94,34 +149,104 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { UserPlus, Loader2 } from 'lucide-vue-next'
+import { UserPlus, Loader2, X } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { resolveApiErrorMessage } from '@/i18n/error'
 import {
   submitJoinRequest,
   listMyJoinRequests,
   cancelMyJoinRequest,
+  listOrgDirectory,
   type JoinRequestInfo,
   type JoinRequestStatus,
+  type OrgDirectoryItem,
 } from '@/services/orgJoinApi'
 
 const { t, locale } = useI18n()
 const toast = useToast()
 
-// 表单状态
+// ── 组织下拉选择 ────────────────────────────────────────────
+
+const orgPickerRef = ref<HTMLElement | null>(null)
+const orgInputRef = ref<HTMLInputElement | null>(null)
+const allOrgs = ref<OrgDirectoryItem[]>([])
+const loadingOrgs = ref(false)
+const orgSearch = ref('')
+const selectedOrg = ref<OrgDirectoryItem | null>(null)
+const pickerOpen = ref(false)
+const highlightIdx = ref(0)
+
+// 按搜索词过滤：匹配 name 或 slug（忽略大小写）
+const filteredOrgs = computed(() => {
+  const q = orgSearch.value.trim().toLowerCase()
+  if (!q) return allOrgs.value
+  return allOrgs.value.filter(
+    o => o.name.toLowerCase().includes(q) || o.slug.toLowerCase().includes(q),
+  )
+})
+
+async function loadOrgs() {
+  loadingOrgs.value = true
+  try {
+    allOrgs.value = await listOrgDirectory()
+  } catch {
+    toast.error(t('joinOrg.slugLoadFailed'))
+  } finally {
+    loadingOrgs.value = false
+  }
+}
+
+function openPicker() {
+  pickerOpen.value = true
+  highlightIdx.value = 0
+}
+
+function closePicker() {
+  pickerOpen.value = false
+  // 关闭时若没有有效选中，清空搜索框以还原 placeholder 显示
+  if (!selectedOrg.value) orgSearch.value = ''
+}
+
+function selectOrg(org: OrgDirectoryItem) {
+  selectedOrg.value = org
+  orgSearch.value = ''   // 清空搜索词，让 placeholder 显示选中组织
+  form.slug = org.slug
+  pickerOpen.value = false
+}
+
+function clearSelection() {
+  selectedOrg.value = null
+  form.slug = ''
+  orgSearch.value = ''
+  orgInputRef.value?.focus()
+}
+
+function selectHighlighted() {
+  if (!pickerOpen.value) return
+  const org = filteredOrgs.value[highlightIdx.value]
+  if (org) selectOrg(org)
+}
+
+function moveHighlight(dir: 1 | -1) {
+  const max = filteredOrgs.value.length - 1
+  highlightIdx.value = Math.max(0, Math.min(max, highlightIdx.value + dir))
+}
+
+// 点击组件外部关闭下拉
+function onDocClick(e: MouseEvent) {
+  if (pickerOpen.value && orgPickerRef.value && !orgPickerRef.value.contains(e.target as Node)) {
+    closePicker()
+  }
+}
+
+// ── 表单状态 ────────────────────────────────────────────────
+
 const form = reactive({ slug: '', reason: '' })
 const submitting = ref(false)
-
-// 我的申请历史
-const myRequests = ref<JoinRequestInfo[]>([])
-const loadingHistory = ref(false)
-const cancellingId = ref<string | null>(null)
-
 const canSubmit = computed(() => form.slug.trim().length > 0)
 
-// 提交申请：成功后清空表单 + 刷新列表
 async function onSubmit() {
   if (!canSubmit.value) return
   submitting.value = true
@@ -130,6 +255,8 @@ async function onSubmit() {
     toast.success(t('joinOrg.submitted'))
     form.slug = ''
     form.reason = ''
+    selectedOrg.value = null
+    orgSearch.value = ''
     await loadHistory()
   } catch (e: unknown) {
     toast.error(resolveApiErrorMessage(e, t('joinOrg.submitFailed')))
@@ -138,7 +265,12 @@ async function onSubmit() {
   }
 }
 
-// 拉取我提交的全部申请（含历史终态）
+// ── 我的申请历史 ────────────────────────────────────────────
+
+const myRequests = ref<JoinRequestInfo[]>([])
+const loadingHistory = ref(false)
+const cancellingId = ref<string | null>(null)
+
 async function loadHistory() {
   loadingHistory.value = true
   try {
@@ -150,7 +282,6 @@ async function loadHistory() {
   }
 }
 
-// 撤回 pending 申请：成功后从列表中移除
 async function onCancel(id: string) {
   cancellingId.value = id
   try {
@@ -164,12 +295,10 @@ async function onCancel(id: string) {
   }
 }
 
-// 状态文案：复用 approvals 已有词条 + 新增 cancelled
 function statusLabel(s: JoinRequestStatus): string {
   return t(`joinOrg.status.${s}`)
 }
 
-// 时间格式化：跟随当前语言
 function formatDate(iso?: string): string {
   if (!iso) return '-'
   const d = new Date(iso)
@@ -179,5 +308,12 @@ function formatDate(iso?: string): string {
   })
 }
 
-onMounted(loadHistory)
+onMounted(async () => {
+  document.addEventListener('click', onDocClick, true)
+  await Promise.all([loadOrgs(), loadHistory()])
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', onDocClick, true)
+})
 </script>

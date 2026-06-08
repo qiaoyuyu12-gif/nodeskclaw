@@ -1216,10 +1216,12 @@ const zhCN = {
   // 申请加入组织：用户主动提交申请、查看历史、撤回
   joinOrg: {
     title: "申请加入组织",
-    subtitle: "输入目标组织的标识，提交申请后由该组织管理员审核。",
-    slugLabel: "组织标识",
-    slugPlaceholder: "如：team-alpha",
-    slugHint: "向目标组织管理员索要组织标识（slug）",
+    subtitle: "选择目标组织，提交申请后由该组织管理员审核。",
+    slugLabel: "选择组织",
+    slugPlaceholder: "搜索组织名称或标识...",
+    slugHint: "从下拉列表中选择目标组织",
+    slugLoadFailed: "加载组织列表失败",
+    slugNoMatch: "无匹配组织",
     reasonLabel: "申请理由（可选）",
     reasonPlaceholder: "简要说明加入的目的或身份，便于管理员判断",
     submit: "提交申请",

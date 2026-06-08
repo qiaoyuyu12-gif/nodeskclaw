@@ -31,6 +31,13 @@ export interface JoinRequestInfo {
   org_slug: string | null
 }
 
+// 组织目录条目：供申请加入时选择用，仅含最小公开字段
+export interface OrgDirectoryItem {
+  id: string
+  name: string
+  slug: string
+}
+
 // 提交申请：用 org_slug 而不是 org_id，避免暴露组织 UUID
 export async function submitJoinRequest(orgSlug: string, reason?: string): Promise<JoinRequestInfo> {
   const res = await api.post('/org-join-requests', { org_slug: orgSlug, reason })
@@ -46,6 +53,12 @@ export async function listMyJoinRequests(): Promise<JoinRequestInfo[]> {
 // 撤回自己提交的 pending 申请
 export async function cancelMyJoinRequest(requestId: string): Promise<void> {
   await api.delete(`/org-join-requests/${requestId}`)
+}
+
+// 获取所有组织的公开目录（id/name/slug），供用户申请加入时下拉选择
+export async function listOrgDirectory(): Promise<OrgDirectoryItem[]> {
+  const res = await api.get('/orgs/directory')
+  return res.data.data ?? []
 }
 
 // 审核中心待审列表：超管全部 / 组织 admin 本组织 / 普通用户空
