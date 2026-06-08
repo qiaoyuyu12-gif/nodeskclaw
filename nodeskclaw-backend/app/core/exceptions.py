@@ -39,6 +39,21 @@ class ForbiddenError(AppException):
         super().__init__(code=40300, message=message, status_code=403, message_key=message_key)
 
 
+class PermissionDeniedError(ForbiddenError):
+    """RBAC 权限决策被拒绝（参考 docs/rfcs/0001-rbac-phase1.md）。
+
+    通常由 require_perms FastAPI 依赖在 has_perms 返回 False 时抛出；业务代码
+    也可直接 raise 以模拟一次拒绝。继承 ForbiddenError 以复用 status_code=403
+    和已有的全局 exception handler。
+    """
+
+    def __init__(self, perms_code: str):
+        super().__init__(
+            message=f"缺少权限 {perms_code}",
+            message_key="errors.rbac.permission_denied",
+        )
+
+
 class BadRequestError(AppException):
     def __init__(
         self,

@@ -153,6 +153,8 @@ async def me(
     """获取当前用户信息（含管理平台角色和组织成员角色）。"""
     from app.models.admin_membership import AdminMembership
     from app.models.org_membership import OrgMembership
+    from app.schemas.auth import RbacContext
+    from app.services.rbac_context_service import get_login_rbac
 
     info = UserInfo.model_validate(current_user)
     info.has_password = bool(current_user.password_hash)
@@ -174,6 +176,14 @@ async def me(
             )
         )
         info.portal_org_role = result.scalar_one_or_none()
+
+    # 第一期 RBAC 增量字段：聚合该用户所有 role_keys / perms / app_codes 返回前端
+    # 前端可暂不消费；第二期动态菜单 / 按钮权限切换时直接读
+    rbac_payload = await get_login_rbac(
+        db, subject_type="user", subject_id=current_user.id,
+    )
+    info.rbac = RbacContext(**rbac_payload)
+
     return ApiResponse(data=info)
 
 
@@ -291,7 +301,16 @@ async def update_staff(
 
     if is_super_admin is not None:
         user.is_super_admin = is_super_admin
+        # RBAC 双写：platform_super 角色随 is_super_admin 字段切换
+        from app.services.rbac_sync import grant_role, revoke_role
         if is_super_admin:
+            await grant_role(
+                db, subject_type="user", subject_id=user.id,
+                role_key="platform_super",
+                scope_type="platform", scope_id=None,
+                granted_by=current_user.id,
+                granted_reason="staff_update_grant_super",
+            )
             existing_am = await db.execute(
                 select(AdminMembership).where(
                     AdminMembership.user_id == user.id,
@@ -304,6 +323,21 @@ async def update_staff(
                     org_id=current_user.current_org_id,
                     role="admin",
                 ))
+                # RBAC 双写：platform_admin grant（scope=org）
+                await grant_role(
+                    db, subject_type="user", subject_id=user.id,
+                    role_key="platform_admin",
+                    scope_type="org", scope_id=current_user.current_org_id,
+                    granted_by=current_user.id,
+                    granted_reason="staff_update_grant_admin",
+                )
+        else:
+            # 撤销 platform_super；不动 AdminMembership（保留运维身份）
+            await revoke_role(
+                db, subject_type="user", subject_id=user.id,
+                role_key="platform_super",
+                scope_type="platform", scope_id=None,
+            )
     if is_active is not None:
         user.is_active = is_active
 

@@ -45,6 +45,20 @@ class OAuthConnectionInfo(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RbacContext(BaseModel):
+    """RBAC 上下文（参考 docs/rfcs/0001-rbac-phase1.md §10）。
+
+    第一期纯增量返回，前端可暂不消费；字段就绪后第二期动态菜单 / 按钮权限可直接读。
+    """
+
+    # 该用户被授予的全部角色 key（去重 + 字母序）
+    role_keys: list[str] = []
+    # 该用户全部 perms 集合（去重 + 字母序），格式 module:resource:action
+    perms: list[str] = []
+    # 该用户可访问的应用入口列表（去重 + 字母序）
+    app_codes: list[str] = []
+
+
 class UserInfo(BaseModel):
     id: str
     name: str
@@ -62,6 +76,8 @@ class UserInfo(BaseModel):
     portal_org_role: str | None = None
     last_login_at: datetime | None = None
     oauth_connections: list[OAuthConnectionInfo] = []
+    # 第一期 RBAC 增量字段：前端可读但暂不强制使用
+    rbac: RbacContext | None = None
 
     model_config = {"from_attributes": True}
 

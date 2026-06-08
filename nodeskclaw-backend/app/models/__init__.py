@@ -66,3 +66,17 @@ from app.models.workspace_template import WorkspaceTemplate  # noqa: F401
 from app.models.knowledge_base import KnowledgeBase  # noqa: F401
 from app.models.skill_definition import SkillDefinition  # noqa: F401
 from app.models.agent_skill_binding import AgentSkillBinding  # noqa: F401
+
+# RBAC 第一期模型（roles / menus / apps / subject_roles / role_menus / role_apps / permission_audit_logs）
+from app.models.rbac import (  # noqa: F401
+    App,
+    Menu,
+    MenuType,
+    PermissionAuditLog,
+    Role,
+    RoleApp,
+    RoleMenu,
+    RoleScope,
+    SubjectRole,
+    SubjectType,
+)

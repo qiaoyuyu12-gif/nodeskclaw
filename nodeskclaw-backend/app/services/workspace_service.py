@@ -137,6 +137,14 @@ async def create_workspace(db: AsyncSession, org_id: str, user_id: str, data: Wo
 
     member = WorkspaceMember(workspace_id=ws.id, user_id=user_id, role=WorkspaceRole.owner, is_admin=True)
     db.add(member)
+    # RBAC 双写：workspace_owner grant 到 subject_roles
+    from app.services.rbac_sync import grant_role
+    await grant_role(
+        db, subject_type="user", subject_id=user_id,
+        role_key="workspace_owner",
+        scope_type="workspace", scope_id=ws.id,
+        granted_reason="workspace_create",
+    )
 
     schedule = WorkspaceSchedule(
         workspace_id=ws.id,
@@ -1482,6 +1490,14 @@ async def add_workspace_member(
         permissions=perms,
     )
     db.add(wm)
+    # RBAC 双写：workspace_editor grant 到 subject_roles
+    from app.services.rbac_sync import grant_role
+    await grant_role(
+        db, subject_type="user", subject_id=user_id,
+        role_key="workspace_editor",
+        scope_type="workspace", scope_id=workspace_id,
+        granted_reason="workspace_add_member",
+    )
     await db.commit()
 
     user_result = await db.execute(

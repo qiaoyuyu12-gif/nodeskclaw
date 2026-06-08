@@ -24,6 +24,11 @@ async def run_seed(
     if is_ee:
         ee_creds = await _seed_ee_platform_admin(session_factory)
     await _ensure_workspace_schedules(session_factory)
+    # RBAC 第一期：apps/roles/menus/role_menus/role_apps + legacy 回填
+    # 放在所有 legacy 数据（org/membership/admin_membership/workspace_member）
+    # seed 完成之后执行，确保 backfill 看到的是已经一致的状态
+    from app.startup.seed_rbac import seed_rbac
+    await seed_rbac(session_factory)
     return {"ce_admin": ce_creds, "ee_admin": ee_creds}
 
 

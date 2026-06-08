@@ -61,6 +61,13 @@ class SingleOrgProvider(OrgProvider):
             db.add(OrgMembership(
                 user_id=user.id, org_id=org.id, role=OrgRole.admin,
             ))
+            # RBAC 双写：org_admin grant 到 subject_roles
+            from app.services.rbac_sync import grant_role
+            await grant_role(
+                db, subject_type="user", subject_id=user.id,
+                role_key="org_admin", scope_type="org", scope_id=org.id,
+                granted_reason="single_org_auto_join",
+            )
             logger.info("CE 模式：自动将用户 %s 加入默认组织", user.id)
 
         user.current_org_id = org.id

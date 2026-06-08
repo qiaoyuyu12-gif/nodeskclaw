@@ -25,6 +25,7 @@ from app.api.channel_configs import router as channel_config_router
 from app.api.observability import router as observability_router
 from app.api.runtime_admin import router as runtime_admin_router
 from app.api.mcp import router as mcp_router
+from app.api.rbac_debug import router as rbac_debug_router
 from app.api.trust import router as trust_router
 from app.api.webhooks import router as webhook_router
 from app.api.blackboard import router as blackboard_router
@@ -217,3 +218,7 @@ admin_router.include_router(engine_version_write_router, prefix="/engine-version
     dependencies=[Depends(require_org_role("admin"))])
 admin_router.include_router(tunnel_router, tags=["Admin - Agent Tunnel"],
     dependencies=[Depends(require_org_role("admin"))])
+
+# RBAC Debug API（仅平台超管）
+admin_router.include_router(rbac_debug_router, prefix="/rbac",
+    tags=["Admin - RBAC Debug"])

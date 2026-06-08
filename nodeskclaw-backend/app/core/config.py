@@ -157,6 +157,16 @@ class Settings(BaseSettings):
     # ── CORS ─────────────────────────────────────────────
     CORS_ORIGINS: list[str] = ["http://localhost:4517", "http://localhost:4518"]
 
+    # ── RBAC（第一期，参考 docs/rfcs/0001-rbac-phase1.md）──────
+    # 是否启用权限决策审计写入 permission_audit_logs；默认关闭避免写放大，
+    # 生产建议上线后灰度 1-2 周再打开
+    RBAC_AUDIT_ENABLED: bool = False
+    # RBAC 主体 → 角色授权 在 resolver LRU 缓存里的 TTL（秒），grant/revoke 时主动失效
+    RBAC_CACHE_TTL_SECONDS: int = 60
+    # 紧急逃生开关：跳过 seed 阶段的 _backfill_subject_roles_from_legacy 全量回填
+    # 仅排障 / 大表慢启动场景使用，正常运行务必保持 False 以保证 subject_roles 数据一致
+    SKIP_RBAC_BACKFILL: bool = False
+
 
 settings = Settings()
 
