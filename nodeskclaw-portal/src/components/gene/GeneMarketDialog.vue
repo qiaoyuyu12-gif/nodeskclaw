@@ -262,11 +262,13 @@ async function handleApplyGenome(genomeId: string) {
 }
 
 // 公共市场卡片：fork 到个人 / 组织 library（不影响 agent 实例安装）
+// 必须用 gene.id（UUID）而非 slug：三向 fork 后同 slug 可在多 scope 并存，
+// 后端按 id 查 DB；外部聚合器 gene 的 id 等于 slug，两者均兼容。
 const forking = ref<string | null>(null)
-async function handleForkGene(slug: string, target: 'personal' | 'org') {
-  forking.value = slug
+async function handleForkGene(id: string, target: 'personal' | 'org') {
+  forking.value = id
   try {
-    const forked = await store.forkGene(slug, target)
+    const forked = await store.forkGene(id, target)
     // admin/超管自上传时后端直接 approved，提示语区分免审 vs 待审
     const isApproved = forked?.review_status === 'approved'
     toast.success(
@@ -624,19 +626,19 @@ onUnmounted(() => {
                       <div v-if="scopeMode === 'public'" class="flex items-center gap-2 mt-3 pt-3 border-t border-border">
                         <button
                           class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                          :disabled="forking === gene.slug"
-                          @click.stop="handleForkGene(gene.slug, 'personal')"
+                          :disabled="forking === gene.id"
+                          @click.stop="handleForkGene(gene.id, 'personal')"
                         >
-                          <Loader2 v-if="forking === gene.slug" class="w-3 h-3 animate-spin" />
+                          <Loader2 v-if="forking === gene.id" class="w-3 h-3 animate-spin" />
                           <Download v-else class="w-3 h-3" />
                           {{ t('geneMarket.forkToPersonal') }}
                         </button>
                         <button
                           class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                          :disabled="forking === gene.slug"
-                          @click.stop="handleForkGene(gene.slug, 'org')"
+                          :disabled="forking === gene.id"
+                          @click.stop="handleForkGene(gene.id, 'org')"
                         >
-                          <Loader2 v-if="forking === gene.slug" class="w-3 h-3 animate-spin" />
+                          <Loader2 v-if="forking === gene.id" class="w-3 h-3 animate-spin" />
                           <Download v-else class="w-3 h-3" />
                           {{ t('geneMarket.forkToOrg') }}
                         </button>
