@@ -57,6 +57,11 @@ const ceRoutes: RouteRecordRaw[] = [
     component: () => import('@/views/DeployProgress.vue'),
   },
   {
+    path: '/instances/:id/chat',
+    name: 'InstanceChat',
+    component: () => import('@/views/InstanceChat.vue'),
+  },
+  {
     path: '/instances/:id',
     component: () => import('@/views/InstanceLayout.vue'),
     children: [

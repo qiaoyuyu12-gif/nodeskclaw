@@ -909,6 +909,19 @@ const enUS = {
     goSetupCluster: "Go to Cluster Settings",
     alreadySetup: "Already configured?",
   },
+  instanceCard: {
+    detail: "Details",
+  },
+  instanceChat: {
+    loadFailed: "Failed to load AI employee info",
+    noWorkspaceTitle: "This AI employee hasn't joined any workspace",
+    noWorkspaceDesc: "Add this AI employee to a workspace first before chatting with it",
+    goToWorkspaces: "Go to Workspaces",
+    you: "Me",
+    startHint: "Say hi to {name}",
+    placeholder: "Message {name}…",
+    workspaceHint: "Communicating via workspace \"{name}\"",
+  },
   createInstance: {
     pageTitle: "Create AI Employee",
     pageSubtitle: "Deploy your AI employee in a few steps",

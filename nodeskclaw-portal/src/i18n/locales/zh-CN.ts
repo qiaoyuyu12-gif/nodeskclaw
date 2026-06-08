@@ -909,6 +909,19 @@ const zhCN = {
     goSetupCluster: "前往配置集群",
     alreadySetup: "已配置集群？",
   },
+  instanceCard: {
+    detail: "详情",
+  },
+  instanceChat: {
+    loadFailed: "加载 AI 员工信息失败",
+    noWorkspaceTitle: "该 AI 员工尚未加入任何工作空间",
+    noWorkspaceDesc: "需要先将 AI 员工添加到一个工作空间，才能与它对话",
+    goToWorkspaces: "前往工作空间",
+    you: "我",
+    startHint: "和 {name} 打个招呼吧",
+    placeholder: "给 {name} 发送消息…",
+    workspaceHint: "通过工作空间「{name}」与该 AI 员工通信",
+  },
   createInstance: {
     pageTitle: "创建 AI 员工",
     pageSubtitle: "只需几步即可部署你的 AI 员工",
