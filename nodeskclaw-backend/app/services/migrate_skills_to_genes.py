@@ -61,6 +61,7 @@ async def run_migration():
         # 迁移所有未删除的 SkillDefinition
         result = await db.execute(
             select(SkillDefinition).where(SkillDefinition.deleted_at.is_(None))
+        )
         skills = result.scalars().all()
 
         logger.info("开始迁移 %d 个 SkillDefinition 到 genes 表", len(skills))
@@ -79,6 +80,7 @@ async def run_migration():
         # 迁移 AgentSkillBinding 到 InstanceGene
         result = await db.execute(
             select(AgentSkillBinding).where(AgentSkillBinding.deleted_at.is_(None))
+        )
         bindings = result.scalars().all()
 
         logger.info("开始迁移 %d 个 AgentSkillBinding 到 instance_genes 表", len(bindings))
