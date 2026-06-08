@@ -28,11 +28,11 @@ async function remove(id: string) {
   <div class="max-w-5xl mx-auto px-6 py-8">
     <div class="flex items-center justify-between mb-6">
       <div class="flex items-center gap-3">
-        <BookOpen class="w-6 h-6 text-blue-500" />
-        <h1 class="text-xl font-semibold text-gray-900">知识库管理</h1>
+        <BookOpen class="w-6 h-6 text-primary" />
+        <h1 class="text-xl font-semibold text-foreground">知识库管理</h1>
       </div>
       <button
-        class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
         @click="router.push('/admin/knowledge-bases/new')"
       >
         <Plus class="w-4 h-4" />
@@ -40,11 +40,11 @@ async function remove(id: string) {
       </button>
     </div>
 
-    <div v-if="skillStore.loading" class="text-sm text-gray-400 text-center py-16">加载中...</div>
+    <div v-if="skillStore.loading" class="text-sm text-muted-foreground text-center py-16">加载中...</div>
 
     <div
       v-else-if="skillStore.knowledgeBases.length === 0"
-      class="text-sm text-gray-400 text-center py-16"
+      class="text-sm text-muted-foreground text-center py-16"
     >
       还没有知识库，点击「新建知识库」开始
     </div>
@@ -53,25 +53,25 @@ async function remove(id: string) {
       <div
         v-for="kb in skillStore.knowledgeBases"
         :key="kb.id"
-        class="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-5 py-4"
+        class="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4"
       >
         <div class="flex items-center gap-4">
-          <BookOpen class="w-5 h-5 text-gray-400 shrink-0" />
+          <BookOpen class="w-5 h-5 text-muted-foreground shrink-0" />
           <div>
-            <p class="font-medium text-gray-900 text-sm">{{ kb.name }}</p>
-            <p class="text-xs text-gray-400 mt-0.5">{{ kb.ragflow_endpoint }}</p>
+            <p class="font-medium text-foreground text-sm">{{ kb.name }}</p>
+            <p class="text-xs text-muted-foreground mt-0.5">{{ kb.ragflow_endpoint }}</p>
           </div>
           <KbSyncStatus :source-type="kb.source_type" />
         </div>
         <div class="flex items-center gap-2">
           <button
-            class="p-2 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50"
+            class="p-2 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10"
             @click="router.push(`/admin/knowledge-bases/${kb.id}/edit`)"
           >
             <Pencil class="w-4 h-4" />
           </button>
           <button
-            class="p-2 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"
+            class="p-2 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-40"
             :disabled="deleting === kb.id"
             @click="remove(kb.id)"
           >
