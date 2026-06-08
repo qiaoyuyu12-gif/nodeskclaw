@@ -214,8 +214,10 @@ async def upload_gene_folder(
 async def get_gene(
     gene_slug: str,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    # 跨组织隔离：禁止用户通过 slug 直接拉取其他组织的 org_private gene 详情
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     gene = await gene_service.get_gene(db, gene_slug)
     return ApiResponse(data=gene)
 
@@ -224,8 +226,9 @@ async def get_gene(
 async def gene_variants(
     gene_slug: str,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     variants = await gene_service.get_gene_variants(db, gene_slug)
     return ApiResponse(data=variants)
 
@@ -234,8 +237,9 @@ async def gene_variants(
 async def gene_synergies(
     gene_slug: str,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     synergies = await gene_service.get_gene_synergies(db, gene_slug)
     return ApiResponse(data=synergies)
 
@@ -244,8 +248,9 @@ async def gene_synergies(
 async def gene_genomes(
     gene_slug: str,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     data = await gene_service.get_gene_genomes(db, gene_slug)
     return ApiResponse(data=data)
 
@@ -254,8 +259,9 @@ async def gene_genomes(
 async def gene_installed_instances(
     gene_slug: str,
     db: AsyncSession = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     ids = await gene_service.get_gene_installed_instance_ids(db, gene_slug)
     return ApiResponse(data=ids)
 

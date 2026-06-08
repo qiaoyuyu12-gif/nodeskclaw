@@ -180,6 +180,13 @@ const ceRoutes: RouteRecordRaw[] = [
     component: () => import('@/views/Approvals.vue'),
     meta: { requiresAuth: true, requireAdminOrSuper: true },
   },
+  {
+    // 申请加入组织：受 multi_org feature gate 保护，CE 模式访问会被路由守卫拦截到首页
+    path: '/join-organization',
+    name: 'JoinOrganization',
+    component: () => import('@/views/JoinOrganization.vue'),
+    meta: { requiresAuth: true, allowNoOrg: true, requireFeature: 'multi_org' },
+  },
 ]
 
 const routes: RouteRecordRaw[] = [...ceRoutes, ...eePortalRoutes]

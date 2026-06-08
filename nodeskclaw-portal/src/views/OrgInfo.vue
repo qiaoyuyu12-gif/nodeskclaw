@@ -173,16 +173,19 @@ onMounted(async () => {
     <Loader2 class="w-5 h-5 animate-spin text-muted-foreground" />
   </div>
 
-  <div v-else-if="orgStore.currentOrg" class="space-y-6">
-    <!-- 基本信息 -->
+  <div v-else class="space-y-6">
+    <!-- 基本信息：即使无组织也展示卡片，name / slug 用「无组织」兜底 -->
     <section class="rounded-xl border border-border bg-card p-5">
       <h2 class="text-sm font-semibold text-muted-foreground mb-4">{{ t('orgSettings.basicInfo') }}</h2>
       <div class="grid grid-cols-[140px_1fr] gap-y-4 items-center text-sm">
         <span class="text-muted-foreground">{{ t('orgSettings.orgName') }}</span>
         <div class="flex items-center gap-2">
           <template v-if="!editing">
-            <span class="font-medium">{{ orgStore.currentOrg.name }}</span>
+            <span class="font-medium" :class="{ 'text-muted-foreground/70 italic': !orgStore.currentOrg?.name }">
+              {{ orgStore.currentOrg?.name || t('orgSettings.noOrgFallback') }}
+            </span>
             <button
+              v-if="orgStore.currentOrg"
               class="p-1 rounded hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors"
               :title="t('orgSettings.editName')"
               @click="startEdit"
@@ -217,13 +220,24 @@ onMounted(async () => {
         </div>
 
         <span class="text-muted-foreground">{{ t('orgSettings.orgSlug') }}</span>
-        <span class="font-mono text-xs bg-muted/50 px-2 py-1 rounded w-fit">{{ orgStore.currentOrg.slug }}</span>
+        <span
+          :class="orgStore.currentOrg?.slug
+            ? 'font-mono text-xs bg-muted/50 px-2 py-1 rounded w-fit'
+            : 'text-muted-foreground/70 italic'"
+        >
+          {{ orgStore.currentOrg?.slug || t('orgSettings.noOrgFallback') }}
+        </span>
 
-        <span class="text-muted-foreground">{{ t('orgSettings.createdAt') }}</span>
-        <span>{{ formatDate(orgStore.currentOrg.created_at) }}</span>
+        <!-- 创建日期：仅在有组织时显示，避免无组织时显示 "-" 占位无意义行 -->
+        <template v-if="orgStore.currentOrg">
+          <span class="text-muted-foreground">{{ t('orgSettings.createdAt') }}</span>
+          <span>{{ formatDate(orgStore.currentOrg.created_at) }}</span>
+        </template>
       </div>
     </section>
 
+    <!-- 以下卡片均依赖具体组织数据，无组织时整体隐藏 -->
+    <template v-if="orgStore.currentOrg">
     <!-- 关联信息 -->
     <section class="rounded-xl border border-border bg-card p-5">
       <h2 class="text-sm font-semibold text-muted-foreground mb-4">{{ t('orgSettings.relatedInfo') }}</h2>
@@ -365,5 +379,6 @@ onMounted(async () => {
         </div>
       </div>
     </section>
+    </template>
   </div>
 </template>

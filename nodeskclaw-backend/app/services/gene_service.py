@@ -587,6 +587,55 @@ async def list_genes(
     return items, result.total
 
 
+async def _assert_user_can_view_gene_by_slug(
+    db: AsyncSession,
+    slug: str,
+    current_user,
+) -> None:
+    """跨组织可见性守卫：按 slug 查 DB 中是否存在 org_private / personal 命中条目，
+    如果有且不属于当前用户/组织，抛 403。
+
+    可见性规则：
+      - personal：仅作者本人 + 平台超管可见
+      - org_private：仅 org 成员 + 平台超管可见（用 current_user.current_org_id 判定）
+      - public（含 aggregator 远程仓库）：任何登录用户可见
+      - DB 完全不存在该 slug（纯远程公共仓库的 skill）：放行
+
+    若同 slug 在多个 scope 并存（fork 三向架构允许），任一 scope 命中用户 → 放行。
+    所有 scope 均不可见 → 403。
+    """
+    # super_admin 直接放行：审核 / 故障排查需要全域可见
+    if getattr(current_user, "is_super_admin", False):
+        return
+
+    # 列出 DB 中所有同 slug 未删除条目
+    rows = (await db.execute(
+        select(Gene).where(Gene.slug == slug, not_deleted(Gene))
+    )).scalars().all()
+
+    if not rows:
+        # DB 中无此 slug → 视为远程公共仓库 skill，放行
+        return
+
+    user_id = current_user.id
+    user_org_id = getattr(current_user, "current_org_id", None)
+
+    for gene in rows:
+        vis = gene.visibility
+        if vis == "public":
+            return
+        if vis == "personal" and gene.created_by == user_id:
+            return
+        if vis == "org_private" and user_org_id and gene.org_id == user_org_id:
+            return
+
+    # 所有同 slug 条目都不属于当前用户/组织
+    raise ForbiddenError(
+        "您无权查看该技能基因",
+        message_key="errors.gene.cross_org_forbidden",
+    )
+
+
 async def get_gene(db: AsyncSession, slug: str) -> dict:
     aggregator = get_aggregator()
     detail = await aggregator.get_skill(slug)

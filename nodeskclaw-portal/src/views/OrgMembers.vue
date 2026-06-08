@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useOrgStore, type MemberInfo } from '@/stores/org'
 import { useAuthStore } from '@/stores/auth'
+import { useFeature } from '@/composables/useFeature'
 import {
   Users,
   UserPlus,
@@ -20,6 +22,7 @@ import {
   Clock,
   Plus,
   Send,
+  LogOut,
 } from 'lucide-vue-next'
 import api from '@/services/api'
 import { resolveApiErrorMessage } from '@/i18n/error'
@@ -27,12 +30,15 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { copyToClipboard } from '@/utils/clipboard'
 import CustomSelect from '@/components/shared/CustomSelect.vue'
+import { submitLeaveRequest, listMyLeaveRequests } from '@/services/orgLeaveApi'
 
 const orgStore = useOrgStore()
 const authStore = useAuthStore()
+const router = useRouter()
 const { t, locale } = useI18n()
 const toast = useToast()
 const { confirm } = useConfirm()
+const { isEnabled: hasMultiOrg } = useFeature('multi_org')
 
 const loading = ref(true)
 const searchQuery = ref('')
@@ -97,6 +103,7 @@ onMounted(async () => {
       orgStore.fetchMembers(),
       fetchRoles(),
       fetchPendingInvitations(),
+      refreshMyLeavePending(),
     ])
   }
   loading.value = false
@@ -295,6 +302,50 @@ async function copyPassword() {
     toast.error(t('common.copyFailed'))
   }
 }
+
+// ── 退出当前组织：提交申请 + 显示我的 pending 状态 ──────────────────
+const hasPendingLeave = ref(false)
+const submittingLeave = ref(false)
+
+async function refreshMyLeavePending() {
+  // 不带 feature gate 时直接跳过，避免 CE 模式无谓 403
+  if (!hasMultiOrg.value || !orgStore.currentOrgId) return
+  try {
+    const all = await listMyLeaveRequests()
+    hasPendingLeave.value = all.some(
+      r => r.org_id === orgStore.currentOrgId && r.status === 'pending',
+    )
+  } catch {
+    // 静默：仅用来控制按钮显示，加载失败不影响主流程
+  }
+}
+
+async function handleLeaveOrg() {
+  if (!orgStore.currentOrgId) return
+  const ok = await confirm({
+    title: t('orgMembers.leaveOrgTitle'),
+    description: t('orgMembers.leaveOrgConfirm', {
+      orgName: orgStore.currentOrg?.name || '',
+    }),
+    variant: 'danger',
+  })
+  if (!ok) return
+  submittingLeave.value = true
+  try {
+    await submitLeaveRequest(orgStore.currentOrgId)
+    toast.success(t('orgMembers.leaveOrgSubmitted'))
+    hasPendingLeave.value = true
+  } catch (e: unknown) {
+    toast.error(resolveApiErrorMessage(e, t('orgMembers.leaveOrgFailed')))
+  } finally {
+    submittingLeave.value = false
+  }
+}
+
+// 跳转到「申请加入其他组织」页面
+function goJoinOrganization() {
+  router.push('/join-organization')
+}
 </script>
 
 <template>
@@ -306,14 +357,37 @@ async function copyPassword() {
           {{ t('orgMembers.subtitle', { orgName: orgStore.currentOrg?.name || t('orgMembers.orgFallback') }) }}
         </p>
       </div>
-      <button
-        v-if="isOrgAdmin"
-        class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
-        @click="showInviteDialog = true"
-      >
-        <UserPlus class="w-4 h-4" />
-        {{ t('orgMembers.inviteMember') }}
-      </button>
+      <div class="flex items-center gap-2">
+        <!-- 申请加入其他组织：仅 multi_org 启用时显示，跳转到 /join-organization -->
+        <button
+          v-if="hasMultiOrg"
+          class="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border bg-card text-sm font-medium hover:bg-muted/60 transition-colors"
+          @click="goJoinOrganization"
+        >
+          <UserPlus class="w-4 h-4" />
+          {{ t('orgMembers.joinOtherOrg') }}
+        </button>
+        <!-- 申请退出本组织：仅 multi_org 启用 + 当前在组织内时可见；有 pending 时禁用并提示 -->
+        <button
+          v-if="hasMultiOrg && orgStore.currentOrg"
+          class="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-500/40 text-red-500 text-sm font-medium hover:bg-red-500/10 transition-colors disabled:opacity-50"
+          :disabled="submittingLeave || hasPendingLeave"
+          :title="hasPendingLeave ? t('orgMembers.leavePending') : ''"
+          @click="handleLeaveOrg"
+        >
+          <Loader2 v-if="submittingLeave" class="w-4 h-4 animate-spin" />
+          <LogOut v-else class="w-4 h-4" />
+          {{ hasPendingLeave ? t('orgMembers.leavePending') : t('orgMembers.leaveOrg') }}
+        </button>
+        <button
+          v-if="isOrgAdmin"
+          class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+          @click="showInviteDialog = true"
+        >
+          <UserPlus class="w-4 h-4" />
+          {{ t('orgMembers.inviteMember') }}
+        </button>
+      </div>
     </div>
 
     <!-- Loading -->
