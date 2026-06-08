@@ -945,14 +945,23 @@ if feature_gate.is_ee:
         app.include_router(ee_api_router, prefix="/api/v1")
         app.include_router(ee_admin_router, prefix="/api/v1/admin")
 
-        from ee.backend.hooks.topology_audit import register_hooks as _register_audit_hooks
-        _register_audit_hooks()
+        try:
+            from ee.backend.hooks.topology_audit import register_hooks as _register_audit_hooks
+            _register_audit_hooks()
+        except ImportError:
+            logging.getLogger(__name__).warning("EE topology_audit hooks unavailable")
 
-        from ee.backend.hooks.operation_audit import register_hooks as _register_op_audit_hooks
-        _register_op_audit_hooks()
+        try:
+            from ee.backend.hooks.operation_audit import register_hooks as _register_op_audit_hooks
+            _register_op_audit_hooks()
+        except ImportError:
+            logging.getLogger(__name__).warning("EE operation_audit hooks unavailable")
 
-        from ee.backend.middleware.audit_middleware import AuditMiddleware
-        app.add_middleware(AuditMiddleware)
+        try:
+            from ee.backend.middleware.audit_middleware import AuditMiddleware
+            app.add_middleware(AuditMiddleware)
+        except ImportError:
+            logging.getLogger(__name__).warning("EE audit middleware unavailable")
 
         try:
             from ee.backend.hooks.member_hook import EEMemberHookProvider
