@@ -339,6 +339,15 @@ async def precheck(req: DeployRequest, db: AsyncSession) -> PrecheckResult:
         except asyncio.TimeoutError:
             items.append(PrecheckItem(name="Docker", status="fail", message="Docker 环境检查超时"))
             return PrecheckResult(passed=False, items=items)
+        except NotImplementedError:
+            # Windows SelectorEventLoop 不支持 asyncio subprocess，回退同步探测
+            try:
+                from app.services.cluster_service import _probe_docker_sync
+                await _probe_docker_sync()
+                items.append(PrecheckItem(name="Docker", status="pass", message="docker compose 可用"))
+            except Exception as probe_err:
+                items.append(PrecheckItem(name="Docker", status="fail", message=str(probe_err) or "Docker 环境检查失败"))
+                return PrecheckResult(passed=False, items=items)
         except Exception:
             items.append(PrecheckItem(name="Docker", status="fail", message="Docker 环境检查失败"))
             return PrecheckResult(passed=False, items=items)
