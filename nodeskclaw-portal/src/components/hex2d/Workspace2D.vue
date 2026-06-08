@@ -174,6 +174,22 @@ function getAgentColor(agent: AgentBrief): string {
   return agent.theme_color || statusColors[agent.status] || '#a78bfa'
 }
 
+// 活跃/运行中的状态：tunnel 断开时显示"连接中"而非"失联"
+const _ACTIVE_STATUSES = new Set([
+  'running', 'active', 'restarting', 'deploying', 'updating', 'creating', 'learning',
+])
+function isAgentConnecting(agent: AgentBrief): boolean {
+  return !agent.sse_connected && _ACTIVE_STATUSES.has(agent.status)
+}
+function agentStatusText(agent: AgentBrief): string {
+  if (agent.sse_connected) return agent.status
+  return isAgentConnecting(agent) ? 'connecting' : 'disconnected'
+}
+function agentStatusColor(agent: AgentBrief): string {
+  if (agent.sse_connected) return getAgentColor(agent)
+  return isAgentConnecting(agent) ? '#60a5fa' : '#6b7280'
+}
+
 function isNodeSelected(q: number, r: number): boolean {
   if (!props.selectable || !props.selectedKeys) return true
   return props.selectedKeys.has(`${q},${r}`)
@@ -545,14 +561,15 @@ const emptyHexes = computed(() => {
         />
         <polygon
           :points="hexPoints(0, 0)"
-          :fill="selectable ? (getAgentColor(agent) + '22') : (agent.sse_connected ? getAgentColor(agent) + '22' : '#55556622')"
-          :stroke="selectable ? getAgentColor(agent) : (agent.sse_connected ? getAgentColor(agent) : '#555566')"
+          :fill="selectable ? (getAgentColor(agent) + '22') : (agent.sse_connected ? getAgentColor(agent) + '22' : (isAgentConnecting(agent) ? '#1e3a5f44' : '#55556622'))"
+          :stroke="selectable ? getAgentColor(agent) : agentStatusColor(agent)"
           stroke-width="2"
           :stroke-dasharray="selectable ? 'none' : (agent.sse_connected ? 'none' : '6,4')"
-          :opacity="selectable ? 1 : (agent.sse_connected ? 1 : 0.6)"
+          :opacity="selectable ? 1 : (agent.sse_connected ? 1 : (isAgentConnecting(agent) ? 0.75 : 0.6))"
           :class="{
             'animate-pulse': !selectable && agent.sse_connected && (agent.status === 'running' || agent.status === 'active'),
             'animate-hex-thinking': !selectable && agent.sse_connected && (agent.status === 'thinking' || agent.status === 'pending' || agent.status === 'learning'),
+            'animate-pulse': !selectable && isAgentConnecting(agent),
           }"
         />
         <!-- Red strikethrough for deselected agents -->
@@ -580,15 +597,15 @@ const emptyHexes = computed(() => {
           text-anchor="middle"
           dominant-baseline="middle"
           dy="5"
-          :fill="agent.sse_connected ? getAgentColor(agent) : '#6b7280'"
+          :fill="agentStatusColor(agent)"
           font-size="7"
         >
-          {{ agent.sse_connected ? agent.status : 'disconnected' }}
+          {{ agentStatusText(agent) }}
         </text>
         <text
           :y="agent.label && !selectable ? -4 : 0"
           text-anchor="middle"
-          :fill="selectable ? 'white' : (agent.sse_connected ? 'white' : '#9ca3af')"
+          :fill="selectable ? 'white' : (agent.sse_connected ? 'white' : (isAgentConnecting(agent) ? '#93c5fd' : '#9ca3af'))"
           font-size="11"
           font-weight="500"
         >

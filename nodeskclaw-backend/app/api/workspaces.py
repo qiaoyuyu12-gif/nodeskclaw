@@ -187,6 +187,13 @@ async def add_agent(
     await conversation_service.sync_conversations_from_topology(workspace_id, db)
     await db.commit()
     await hooks.emit("operation_audit", action="workspace.agent_added", target_type="workspace", target_id=workspace_id, actor_id=user.id, details={"instance_id": data.instance_id})
+
+    # 加入后立即推一次快照，让前端获得最新 sse_connected 状态，
+    # 避免因 channel plugin 重启导致短暂失联被误判为永久断开
+    snapshot = await _build_agent_status_snapshot(workspace_id, db)
+    if snapshot:
+        broadcast_event(workspace_id, "agent:status_snapshot", snapshot)
+
     return _ok(agent.model_dump(mode="json"))
 
 

@@ -82,10 +82,15 @@ const STATUS_ACCENT: Record<string, number> = {
 const DISCONNECTED_ACCENT = 0x555566
 const DEFAULT_ACCENT = 0x67e8f9
 
-type AnimState = 'idle' | 'working' | 'thinking' | 'error' | 'disconnected'
+type AnimState = 'idle' | 'working' | 'thinking' | 'error' | 'disconnected' | 'connecting'
+
+// 活跃/运行中状态：tunnel 断开时显示"连接中"而非"失联"，避免重启瞬间误判
+const _ACTIVE_STATUSES = new Set([
+  'running', 'active', 'restarting', 'deploying', 'updating', 'creating', 'learning',
+])
 
 function resolveAnimState(status: string, sseConnected: boolean): AnimState {
-  if (!sseConnected) return 'disconnected'
+  if (!sseConnected) return _ACTIVE_STATUSES.has(status) ? 'connecting' : 'disconnected'
   switch (status) {
     case 'running': case 'active': case 'learning':
     case 'restarting': case 'deploying': case 'updating': case 'creating':
@@ -505,6 +510,14 @@ export function animateGrabby(
       parts.rightArmGroup.rotation.x *= 0.92
       parts.rightArmGroup.rotation.z *= 0.92
       parts.headGroup.rotation.z *= 0.92
+      fadeThoughtBubbles(parts, false, time)
+      break
+
+    case 'connecting':
+      // 慢速呼吸效果，表示正在尝试重连
+      parts.statusRingMat.opacity = 0.15 + Math.sin(time * 2) * 0.15
+      parts.screenMat.opacity = 0.05 + Math.sin(time * 2) * 0.05
+      fadeThoughtBubbles(parts, false, time)
       fadeThoughtBubbles(parts, false, time)
       break
   }
