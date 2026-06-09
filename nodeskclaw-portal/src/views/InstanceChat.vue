@@ -67,7 +67,22 @@ interface SkillItem {
 }
 
 const skills = ref<SkillItem[]>([])
-const selectedSkill = ref<string | null>(null)
+
+// ── 斜杠命令下拉框 ────────────────────────────
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const showSkillDropdown = ref(false)
+const skillFilter = ref('')
+const slashPosition = ref(-1)
+const dropdownIndex = ref(0)
+
+const filteredSkills = computed(() => {
+  const q = skillFilter.value.toLowerCase()
+  return skills.value.filter(
+    (s) =>
+      s.skill_name.toLowerCase().includes(q) ||
+      s.name.toLowerCase().includes(q),
+  )
+})
 
 // ── 输入框 ───────────────────────────────────
 const inputText = ref('')
@@ -252,9 +267,7 @@ function onSSEEvent(event: string, data: Record<string, unknown>) {
 async function sendMessage() {
   if (!inputText.value.trim() || sending.value || !workspace.value || !activeSessionId.value) return
 
-  const rawText = inputText.value.trim()
-  // 若选择了技能，在消息前追加 slash command 前缀
-  const text = selectedSkill.value ? `/${selectedSkill.value}\n${rawText}` : rawText
+  const text = inputText.value.trim()
   inputText.value = ''
   sending.value = true
 
@@ -264,7 +277,7 @@ async function sendMessage() {
     sender_type: 'user',
     sender_id: authStore.user?.id || 'me',
     sender_name: authStore.user?.name || t('instanceChat.you'),
-    content: rawText, // 展示原始文本，不含前缀
+    content: text,
     created_at: new Date().toISOString(),
   })
   await scrollToBottom()
@@ -273,7 +286,7 @@ async function sendMessage() {
   const session = sessions.value.find((s) => s.id === activeSessionId.value)
   if (session) {
     session.last_message_at = new Date().toISOString()
-    session.last_message_preview = rawText.slice(0, 60)
+    session.last_message_preview = text.slice(0, 60)
   }
 
   try {
@@ -292,8 +305,84 @@ async function sendMessage() {
   }
 }
 
-// 按 Enter 发送（Shift+Enter 换行）
+// 检测 textarea 中的斜杠命令，触发技能下拉框
+function handleInput() {
+  const ta = textareaRef.value
+  if (!ta || skills.value.length === 0) return
+
+  const cursor = ta.selectionStart ?? 0
+  const text = ta.value
+
+  // 从光标向前扫描，找到最近的 / 命令起始位置
+  let slashIdx = -1
+  for (let i = cursor - 1; i >= 0; i--) {
+    if (text[i] === '/') {
+      // / 需位于行首或空白之后
+      if (i === 0 || /[\s\n]/.test(text[i - 1])) {
+        slashIdx = i
+      }
+      break
+    } else if (/[\s\n]/.test(text[i])) {
+      break
+    }
+  }
+
+  if (slashIdx >= 0) {
+    slashPosition.value = slashIdx
+    skillFilter.value = text.slice(slashIdx + 1, cursor)
+    dropdownIndex.value = 0
+    showSkillDropdown.value = filteredSkills.value.length > 0
+  } else {
+    showSkillDropdown.value = false
+  }
+}
+
+// 从下拉框选中一个技能，将 /xxx 替换为 /skill_name 并关闭下拉框
+function selectSkillFromDropdown(skill: SkillItem) {
+  const ta = textareaRef.value
+  if (!ta) return
+
+  const cursor = ta.selectionStart ?? 0
+  const text = ta.value
+  const before = text.slice(0, slashPosition.value)
+  const after = text.slice(cursor)
+  const inserted = `/${skill.skill_name} `
+
+  inputText.value = before + inserted + after
+  showSkillDropdown.value = false
+
+  nextTick(() => {
+    const pos = before.length + inserted.length
+    ta.setSelectionRange(pos, pos)
+    ta.focus()
+  })
+}
+
+// 按 Enter 发送（Shift+Enter 换行）；下拉框开启时 Enter/ArrowUp/ArrowDown/Esc 控制下拉框
 function onKeydown(e: KeyboardEvent) {
+  if (showSkillDropdown.value) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      dropdownIndex.value = Math.min(dropdownIndex.value + 1, filteredSkills.value.length - 1)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      dropdownIndex.value = Math.max(dropdownIndex.value - 1, 0)
+      return
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const skill = filteredSkills.value[dropdownIndex.value]
+      if (skill) selectSkillFromDropdown(skill)
+      return
+    }
+    if (e.key === 'Escape') {
+      showSkillDropdown.value = false
+      return
+    }
+  }
+
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     sendMessage()
@@ -524,42 +613,39 @@ onUnmounted(() => {
 
           <!-- 输入区域 -->
           <div class="shrink-0 border-t border-border bg-card px-4 pt-2 pb-3">
-            <!-- 技能选择条（有技能时才显示） -->
-            <div v-if="skills.length > 0" class="flex items-center gap-1.5 mb-2 flex-wrap">
-              <span class="text-[11px] text-muted-foreground shrink-0">{{ t('instanceChat.skillSelect') }}:</span>
-              <!-- 无技能选项 -->
-              <button
-                class="px-2 py-0.5 rounded-full text-[11px] border transition-colors"
-                :class="selectedSkill === null
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'border-border text-muted-foreground hover:bg-accent'"
-                @click="selectedSkill = null"
+            <!-- 文本输入和发送按钮（相对定位，用于锚定下拉框） -->
+            <div class="relative flex items-end gap-2">
+              <!-- 技能斜杠命令下拉框：显示在 textarea 上方 -->
+              <div
+                v-if="showSkillDropdown && filteredSkills.length > 0"
+                class="absolute bottom-full left-0 mb-1 w-64 max-h-52 overflow-y-auto rounded-xl border border-border bg-popover shadow-lg z-50"
               >
-                {{ t('instanceChat.noSkill') }}
-              </button>
-              <!-- 技能 chip -->
-              <button
-                v-for="skill in skills"
-                :key="skill.skill_name"
-                class="px-2 py-0.5 rounded-full text-[11px] border transition-colors"
-                :class="selectedSkill === skill.skill_name
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'border-border text-muted-foreground hover:bg-accent'"
-                :title="skill.description || skill.name"
-                @click="selectedSkill = skill.skill_name"
-              >
-                {{ skill.name || skill.skill_name }}
-              </button>
-            </div>
+                <div class="px-2.5 py-1.5 text-[11px] text-muted-foreground border-b border-border">
+                  {{ t('instanceChat.skillSelect') }}
+                </div>
+                <button
+                  v-for="(skill, idx) in filteredSkills"
+                  :key="skill.skill_name"
+                  class="w-full text-left px-3 py-2 flex flex-col gap-0.5 hover:bg-accent transition-colors"
+                  :class="idx === dropdownIndex ? 'bg-accent' : ''"
+                  @mousedown.prevent="selectSkillFromDropdown(skill)"
+                >
+                  <span class="text-sm font-medium">/{{ skill.skill_name }}</span>
+                  <span v-if="skill.description" class="text-[11px] text-muted-foreground truncate">
+                    {{ skill.description }}
+                  </span>
+                </button>
+              </div>
 
-            <!-- 文本输入和发送按钮 -->
-            <div class="flex items-end gap-2">
               <textarea
+                ref="textareaRef"
                 v-model="inputText"
                 rows="2"
                 class="flex-1 resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40 transition-colors placeholder:text-muted-foreground"
                 :placeholder="t('instanceChat.placeholder', { name: instance?.name || 'AI 员工' })"
+                @input="handleInput"
                 @keydown="onKeydown"
+                @blur="showSkillDropdown = false"
               />
               <button
                 class="shrink-0 w-9 h-9 rounded-xl bg-primary text-primary-foreground flex items-center justify-center hover:bg-primary/90 transition-colors disabled:opacity-50"
