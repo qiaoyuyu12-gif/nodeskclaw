@@ -1074,6 +1074,32 @@ def _get_plugin_source_dir() -> Path:
     )
 
 
+async def _fix_docker_plugin_permissions(fs: "DockerFS", dir_name: str) -> None:
+    """通过 docker exec 将 world-writable 插件复制到 npm global extensions 路径。
+
+    Windows NTFS bind-mount 中的文件在容器内显示为 mode=777，OpenClaw 安全检查
+    拒绝加载此类插件。此函数在容器内直接操作 overlayfs，无需重建镜像或重启容器。
+    """
+    plugin_src = f"/root/.openclaw/extensions/{dir_name}"
+    fix_cmd = (
+        f'GLOBAL_EXT="$(npm root -g 2>/dev/null)/openclaw/extensions" && '
+        f'mkdir -p "${{GLOBAL_EXT}}" && '
+        f'rm -rf "${{GLOBAL_EXT}}/{dir_name}" && '
+        f'cp -r "{plugin_src}" "${{GLOBAL_EXT}}/" && '
+        f'chmod -R 755 "${{GLOBAL_EXT}}/{dir_name}" && '
+        f'echo "plugin-perm-fixed:{dir_name}"'
+    )
+    try:
+        out = await fs.exec_command(["bash", "-c", fix_cmd])
+        if "plugin-perm-fixed" in out:
+            logger.info("Plugin permissions fixed via docker exec: %s", dir_name)
+        else:
+            logger.warning("Plugin permission fix output unexpected: %s", out[:200])
+    except Exception as exc:
+        # 权限修复失败不阻断部署主流程，entrypoint 重启时会重试
+        logger.warning("Plugin permission fix skipped (non-fatal): %s", exc)
+
+
 async def _deploy_plugin_files_generic(
     fs: RemoteFS, source_dir: Path, spec: ChannelPluginSpec,
 ) -> None:
@@ -1092,6 +1118,13 @@ async def _deploy_plugin_files_generic(
     content_hash = _get_plugin_hash(spec.plugin_id)
     if content_hash:
         await fs.write_text(f"{target_base}/.plugin-hash", content_hash)
+
+    # Windows bind-mount 权限修复：写完文件后通过 docker exec 把插件复制到
+    # npm global extensions 路径（overlayfs，权限可控），避免 mode=777 被 OpenClaw 拒绝加载。
+    # K8s 不受此影响，仅对 DockerFS 执行。
+    from app.services.nfs_mount import DockerFS
+    if isinstance(fs, DockerFS):
+        await _fix_docker_plugin_permissions(fs, spec.dir_name)
 
 
 async def _deploy_plugin_files(fs: RemoteFS, plugin_source: Path) -> None:
