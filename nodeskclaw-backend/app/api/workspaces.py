@@ -1611,7 +1611,7 @@ async def list_workspace_messages(
             limit=limit,
         )
     else:
-        messages = await msg_service.get_recent_messages(db, workspace_id, limit)
+        messages = await msg_service.get_recent_messages(db, workspace_id, limit, exclude_private=True)
     return _ok([
         {
             "id": m.id,
@@ -1740,7 +1740,7 @@ async def agent_chat(
     db: AsyncSession = Depends(get_db),
     user=Depends(_get_current_user_dep()),
 ):
-    """Single-agent chat (deprecated, use workspace_chat instead)."""
+    """与单个 AI 员工的私人对话，仅对本人可见。"""
     await wm_service.check_workspace_access(workspace_id, user, "send_chat", db)
     wa_check = await db.execute(
         sa_select(WorkspaceAgent).where(
@@ -1756,7 +1756,10 @@ async def agent_chat(
         raise _error(404, 40432, "errors.workspace.agent_not_in_workspace", "AI 员工不在该办公室中")
 
     ws_info = await workspace_service.get_workspace(db, workspace_id)
-    recent_messages = await msg_service.get_recent_messages(db, workspace_id)
+    # 私人对话：上下文仅加载本会话历史，不混入群聊消息
+    recent_messages = await msg_service.get_recent_messages(
+        db, workspace_id, conversation_id=data.conversation_id,
+    )
     members = _build_members_list(ws_info, user)
 
     from app.services.corridor_router import get_reachable_names
@@ -1781,6 +1784,20 @@ async def agent_chat(
     from app.services.tunnel import tunnel_adapter
     if instance_id not in tunnel_adapter.connected_instances:
         raise _error(400, 40033, "errors.workspace.agent_connection_missing", "AI 员工实例未通过隧道连接")
+
+    # 先持久化用户消息（私有类型，会话隔离）
+    user_name = getattr(user, "name", None) or getattr(user, "email", "") or str(getattr(user, "id", ""))
+    async with async_session_factory() as save_db:
+        await msg_service.record_message(
+            save_db,
+            workspace_id=workspace_id,
+            sender_type="user",
+            sender_id=str(getattr(user, "id", "")),
+            sender_name=user_name,
+            content=data.message,
+            message_type="private",
+            conversation_id=data.conversation_id,
+        )
 
     async def stream():
         full_response = ""
@@ -1814,6 +1831,8 @@ async def agent_chat(
                     sender_id=instance_id,
                     sender_name=agent_name,
                     content=full_response,
+                    message_type="private",
+                    conversation_id=data.conversation_id,
                 )
 
     return StreamingResponse(stream(), media_type="text/event-stream")

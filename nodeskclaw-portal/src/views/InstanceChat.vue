@@ -242,68 +242,19 @@ function relativeTime(iso: string | null): string {
   return new Date(iso).toLocaleDateString()
 }
 
-// SSE 实时消息回调
-function onSSEEvent(event: string, data: Record<string, unknown>) {
-  const senderId = data.instance_id as string
+// SSE 事件回调（仅保留系统事件，消息流已改用直连）
+function onSSEEvent(_event: string, _data: Record<string, unknown>) {}
 
-  if (event === 'agent:typing') {
-    // 当前 AI 员工开始处理，尚未输出时显示思考指示器
-    if (senderId === instanceId.value) {
-      isTyping.value = true
-    }
-    return
-  }
-
-  if (event === 'agent:chunk') {
-    // 收到第一个 chunk，隐藏思考指示器
-    if (senderId === instanceId.value) isTyping.value = false
-
-    const existing = messages.value.find(
-      (m) => m.sender_id === senderId && m.streaming,
-    )
-    if (existing) {
-      existing.content += (data.content as string) || ''
-    } else {
-      messages.value.push({
-        id: (data.envelope_id as string) || `stream-${senderId}-${Date.now()}`,
-        sender_type: 'agent',
-        sender_id: senderId,
-        sender_name: (data.agent_name as string) || '',
-        content: (data.content as string) || '',
-        created_at: new Date().toISOString(),
-        streaming: true,
-      })
-    }
-    scrollToBottom()
-    return
-  }
-
-  if (event === 'agent:done') {
-    if (senderId === instanceId.value) isTyping.value = false
-    const target = messages.value.find(
-      (m) => m.streaming && m.sender_id === senderId,
-    )
-    if (target) {
-      target.streaming = false
-      // 更新当前会话的最后消息预览
-      const session = sessions.value.find((s) => s.id === activeSessionId.value)
-      if (session) {
-        session.last_message_at = new Date().toISOString()
-        session.last_message_preview = target.content.slice(0, 60)
-      }
-    }
-  }
-}
-
-// 发送消息
+// 发送消息：调用私人对话直连端点，流式读取响应
 async function sendMessage() {
   if (!inputText.value.trim() || sending.value || !workspace.value || !activeSessionId.value) return
 
   const text = inputText.value.trim()
   inputText.value = ''
   sending.value = true
+  isTyping.value = true
 
-  // 乐观更新：立即将用户消息加入列表
+  // 乐观更新：立即显示用户消息
   messages.value.push({
     id: `local-${Date.now()}`,
     sender_type: 'user',
@@ -314,26 +265,94 @@ async function sendMessage() {
   })
   await scrollToBottom()
 
-  // 更新会话列表预览
+  // 更新会话预览
   const session = sessions.value.find((s) => s.id === activeSessionId.value)
   if (session) {
     session.last_message_at = new Date().toISOString()
     session.last_message_preview = text.slice(0, 60)
   }
 
+  // 创建占位流式消息气泡
+  const streamMsg: ChatMsg = {
+    id: `stream-${Date.now()}`,
+    sender_type: 'agent',
+    sender_id: instanceId.value,
+    sender_name: instance.value?.name || '',
+    content: '',
+    created_at: new Date().toISOString(),
+    streaming: true,
+  }
+
   try {
-    await store.sendWorkspaceMessage(
-      workspace.value.id,
-      text,
-      [instanceId.value],
-      undefined,
-      undefined,
-      activeSessionId.value,
+    const token = localStorage.getItem('portal_token') || ''
+    const response = await fetch(
+      `/api/v1/workspaces/${workspace.value.id}/agents/${instanceId.value}/chat`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          message: text,
+          conversation_id: activeSessionId.value,
+        }),
+      },
     )
+
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    // 第一个字节到达时结束思考指示器，推入流式消息气泡
+    isTyping.value = false
+    messages.value.push(streamMsg)
+    await scrollToBottom()
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const payload = line.slice(6)
+        if (payload === '[DONE]') {
+          streamMsg.streaming = false
+          // 更新会话预览为最终回复内容
+          if (session) session.last_message_preview = streamMsg.content.slice(0, 60)
+          break
+        }
+        try {
+          const parsed = JSON.parse(payload) as { content?: string; error?: string }
+          if (parsed.error) {
+            streamMsg.content = `[${parsed.error}]`
+            streamMsg.streaming = false
+          } else if (parsed.content) {
+            streamMsg.content += parsed.content
+            scrollToBottom()
+          }
+        } catch {
+          // 忽略非 JSON 行
+        }
+      }
+    }
   } catch {
-    // 发送失败保持乐观更新显示
+    isTyping.value = false
+    // 若气泡已推入则标记完成，否则移除
+    if (messages.value.includes(streamMsg)) {
+      streamMsg.streaming = false
+    }
   } finally {
     sending.value = false
+    streamMsg.streaming = false
   }
 }
 
@@ -426,24 +445,18 @@ onMounted(async () => {
   await findWorkspace()
 
   if (workspace.value) {
-    // 并行加载会话列表和技能列表
     await Promise.all([loadSessions(), loadSkills()])
 
-    // 若有历史会话选中最新的，否则自动创建第一个
     if (sessions.value.length > 0) {
       activeSessionId.value = sessions.value[0].id
       await loadSessionMessages()
     } else {
       await createNewSession()
     }
-
-    store.connectSSE(workspace.value.id, onSSEEvent)
   }
 })
 
-onUnmounted(() => {
-  store.disconnectSSE()
-})
+onUnmounted(() => {})
 </script>
 
 <template>
