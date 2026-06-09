@@ -146,6 +146,11 @@ rm -rf /tmp/jiti/* 2>/dev/null || true
 
 chmod 700 "${OPENCLAW_DIR}" 2>/dev/null || true
 [ -d "${CREDENTIALS_DIR}" ] && chmod 700 "${CREDENTIALS_DIR}"
+# Windows bind-mount 会让所有目录以 mode=777 出现，OpenClaw 会拒绝加载 world-writable 插件。
+# 收紧 extensions/ 下所有子目录的权限，确保 go-w 位被清除。
+if [ -d "${OPENCLAW_DIR}/extensions" ]; then
+  find "${OPENCLAW_DIR}/extensions" -type d -exec chmod go-w {} \; 2>/dev/null || true
+fi
 
 # ---- 4. 前台启动 ----
 
