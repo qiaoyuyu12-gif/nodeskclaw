@@ -77,10 +77,11 @@ const dropdownIndex = ref(0)
 
 const filteredSkills = computed(() => {
   const q = skillFilter.value.toLowerCase()
+  if (!q) return skills.value
   return skills.value.filter(
     (s) =>
-      s.skill_name.toLowerCase().includes(q) ||
-      s.name.toLowerCase().includes(q),
+      s.skill_name.toLowerCase().startsWith(q) ||
+      s.name.toLowerCase().startsWith(q),
   )
 })
 
