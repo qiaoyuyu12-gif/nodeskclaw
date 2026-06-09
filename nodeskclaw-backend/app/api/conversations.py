@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,26 +44,15 @@ async def _check_workspace(workspace_id: str, org, db: AsyncSession) -> Workspac
 @router.get("/{workspace_id}/conversations")
 async def list_conversations(
     workspace_id: str,
+    member_id: str | None = Query(None, description="按成员 instance_id 过滤"),
     org_ctx=Depends(get_current_org),
     db: AsyncSession = Depends(get_db),
 ):
     user, org = org_ctx
     await _check_workspace(workspace_id, org, db)
     await wm_service.check_workspace_member(workspace_id, user, db)
-    convs = await conversation_service.list_conversations(workspace_id, db)
-    return _ok([
-        {
-            "id": c.id,
-            "workspace_id": c.workspace_id,
-            "name": c.name,
-            "is_blackboard_group": c.is_blackboard_group,
-            "member_node_ids": c.member_node_ids,
-            "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
-            "last_message_preview": c.last_message_preview,
-            "created_at": c.created_at.isoformat() if c.created_at else None,
-        }
-        for c in convs
-    ])
+    convs = await conversation_service.list_conversations(workspace_id, db, member_id=member_id)
+    return _ok([_conv_dict(c) for c in convs])
 
 
 @router.get("/{workspace_id}/conversations/{conv_id}/messages")
@@ -106,3 +96,37 @@ async def get_conversation_messages(
         }
         for m in messages
     ])
+
+
+class _CreateConversationRequest(BaseModel):
+    name: str
+    member_node_ids: list[str]
+
+
+def _conv_dict(c: Conversation) -> dict:
+    return {
+        "id": c.id,
+        "workspace_id": c.workspace_id,
+        "name": c.name,
+        "is_blackboard_group": c.is_blackboard_group,
+        "member_node_ids": c.member_node_ids,
+        "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
+        "last_message_preview": c.last_message_preview,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+    }
+
+
+@router.post("/{workspace_id}/conversations")
+async def create_conversation(
+    workspace_id: str,
+    body: _CreateConversationRequest,
+    org_ctx=Depends(get_current_org),
+    db: AsyncSession = Depends(get_db),
+):
+    user, org = org_ctx
+    await _check_workspace(workspace_id, org, db)
+    await wm_service.check_workspace_member(workspace_id, user, db)
+    conv = await conversation_service.create_manual_conversation(
+        db, workspace_id, body.name, body.member_node_ids,
+    )
+    return _ok(_conv_dict(conv))

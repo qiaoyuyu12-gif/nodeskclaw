@@ -921,6 +921,12 @@ const zhCN = {
     startHint: "和 {name} 打个招呼吧",
     placeholder: "给 {name} 发送消息…",
     workspaceHint: "通过工作空间「{name}」与该 AI 员工通信",
+    newSession: "新建对话",
+    sessions: "对话记录",
+    skillSelect: "技能",
+    noSkill: "无",
+    typingIndicator: "正在思考…",
+    sessionTitle: "对话 {index}",
   },
   createInstance: {
     pageTitle: "创建 AI 员工",

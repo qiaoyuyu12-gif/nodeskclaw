@@ -921,6 +921,12 @@ const enUS = {
     startHint: "Say hi to {name}",
     placeholder: "Message {name}…",
     workspaceHint: "Communicating via workspace \"{name}\"",
+    newSession: "New Chat",
+    sessions: "Conversations",
+    skillSelect: "Skill",
+    noSkill: "None",
+    typingIndicator: "Thinking…",
+    sessionTitle: "Chat {index}",
   },
   createInstance: {
     pageTitle: "Create AI Employee",

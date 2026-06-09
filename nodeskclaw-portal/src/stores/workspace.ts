@@ -750,6 +750,25 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
+  async function fetchInstanceConversations(workspaceId: string, instanceId: string): Promise<Conversation[]> {
+    const res = await api.get(`/workspaces/${workspaceId}/conversations`, {
+      params: { member_id: instanceId },
+    })
+    return (res.data.data || []) as Conversation[]
+  }
+
+  async function createConversation(
+    workspaceId: string,
+    name: string,
+    memberNodeIds: string[],
+  ): Promise<Conversation> {
+    const res = await api.post(`/workspaces/${workspaceId}/conversations`, {
+      name,
+      member_node_ids: memberNodeIds,
+    })
+    return res.data.data as Conversation
+  }
+
   async function fetchConversationMessages(workspaceId: string, conversationId: string, limit = 50): Promise<GroupChatMessage[]> {
     try {
       const res = await api.get(`/workspaces/${workspaceId}/conversations/${conversationId}/messages`, {
@@ -1661,6 +1680,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     conversations,
     activeConversationId,
     fetchConversations,
+    fetchInstanceConversations,
+    createConversation,
     fetchConversationMessages,
     fetchChatHistory,
     sendWorkspaceMessage,
