@@ -330,6 +330,11 @@ class DockerFS:
         os.makedirs(str(self._base), exist_ok=True)
 
     def _resolve(self, remote_path: str) -> pathlib.Path:
+        # 兼容 Path 对象和 Windows 反斜杠（str(Path)在 Windows 产生 \，as_posix 统一为 /）
+        if isinstance(remote_path, pathlib.Path):
+            remote_path = remote_path.as_posix()
+        else:
+            remote_path = str(remote_path).replace("\\", "/")
         abs_slash = self._abs_prefix + "/"
         if remote_path.startswith(abs_slash):
             rel = remote_path[len(abs_slash):]
