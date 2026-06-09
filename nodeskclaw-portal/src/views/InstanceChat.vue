@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft, Bot, Send, Loader2, AlertCircle, Plus, MessageSquare } from 'lucide-vue-next'
+import { ArrowLeft, Bot, Send, Loader2, AlertCircle, Plus, MessageSquare, Trash2 } from 'lucide-vue-next'
 import api from '@/services/api'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAuthStore } from '@/stores/auth'
@@ -170,6 +170,29 @@ async function createNewSession() {
     await switchSession(conv.id)
   } finally {
     creatingSession.value = false
+  }
+}
+
+// 删除会话
+async function deleteSession(sessionId: string) {
+  if (!workspace.value) return
+  try {
+    await api.delete(`/workspaces/${workspace.value.id}/conversations/${sessionId}`)
+  } catch {
+    // 删除失败也从本地列表移除，保持 UI 一致
+  }
+  const idx = sessions.value.findIndex((s) => s.id === sessionId)
+  if (idx !== -1) sessions.value.splice(idx, 1)
+
+  // 若删除的是当前激活会话，切换到最新的或新建一个
+  if (activeSessionId.value === sessionId) {
+    activeSessionId.value = null
+    messages.value = []
+    if (sessions.value.length > 0) {
+      await switchSession(sessions.value[0].id)
+    } else {
+      await createNewSession()
+    }
   }
 }
 
@@ -486,7 +509,7 @@ onUnmounted(() => {
               <button
                 v-for="session in sessions"
                 :key="session.id"
-                class="w-full text-left px-3 py-2.5 flex flex-col gap-0.5 hover:bg-accent transition-colors relative"
+                class="group w-full text-left px-3 py-2.5 flex flex-col gap-0.5 hover:bg-accent transition-colors relative"
                 :class="session.id === activeSessionId ? 'bg-accent/60' : ''"
                 @click="switchSession(session.id)"
               >
@@ -497,12 +520,17 @@ onUnmounted(() => {
                 />
                 <div class="flex items-center justify-between gap-1 pl-1">
                   <span class="text-xs font-medium truncate flex-1">{{ session.name }}</span>
-                  <span class="text-[10px] text-muted-foreground shrink-0">
-                    {{ relativeTime(session.last_message_at) }}
-                  </span>
+                  <!-- 删除按钮：hover 时显示 -->
+                  <button
+                    class="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-destructive/15 hover:text-destructive text-muted-foreground transition-all"
+                    @click.stop="deleteSession(session.id)"
+                  >
+                    <Trash2 class="w-3 h-3" />
+                  </button>
                 </div>
                 <p v-if="session.last_message_preview" class="text-[11px] text-muted-foreground truncate pl-1">
                   {{ session.last_message_preview }}
+                  <span class="ml-1 text-muted-foreground/60">· {{ relativeTime(session.last_message_at) }}</span>
                 </p>
                 <div v-else class="flex items-center gap-1 pl-1">
                   <MessageSquare class="w-2.5 h-2.5 text-muted-foreground/50" />

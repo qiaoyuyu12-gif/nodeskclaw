@@ -130,3 +130,31 @@ async def create_conversation(
         db, workspace_id, body.name, body.member_node_ids,
     )
     return _ok(_conv_dict(conv))
+
+
+@router.delete("/{workspace_id}/conversations/{conv_id}")
+async def delete_conversation(
+    workspace_id: str,
+    conv_id: str,
+    org_ctx=Depends(get_current_org),
+    db: AsyncSession = Depends(get_db),
+):
+    user, org = org_ctx
+    await _check_workspace(workspace_id, org, db)
+    await wm_service.check_workspace_member(workspace_id, user, db)
+
+    from datetime import datetime, timezone
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == conv_id,
+            Conversation.workspace_id == workspace_id,
+            not_deleted(Conversation),
+        ).limit(1)
+    )
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise NotFoundError("群聊不存在", "errors.conversation.not_found")
+
+    conv.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+    return _ok()
