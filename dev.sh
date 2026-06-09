@@ -183,7 +183,7 @@ if [ "$DOCKER_PG" = true ]; then
     log "PostgreSQL 就绪"
   fi
 
-  export DATABASE_URL="postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/nodeskclaw"
+  export DATABASE_URL="postgresql+asyncpg://nodeskclaw:nodeskclaw123@localhost:5432/nodeskclaw_rbac"
   export DATABASE_NAME_SUFFIX=""
   log "DATABASE_URL 已设置为 Docker PostgreSQL (localhost:5432)"
 fi

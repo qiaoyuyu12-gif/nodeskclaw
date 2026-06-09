@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import httpx
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/nodeskclaw_test")
+os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://nodeskclaw:nodeskclaw123@localhost:5432/nodeskclaw_rbac_test")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import proxy

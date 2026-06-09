@@ -10,7 +10,7 @@ from app.models.workspace import Workspace
 from app.models.workspace_message import WorkspaceMessage
 from app.services.workspace_message_service import search_messages
 
-TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/nodeskclaw_test"
+TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw123@localhost:5432/nodeskclaw_rbac_test"
 engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 TestSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

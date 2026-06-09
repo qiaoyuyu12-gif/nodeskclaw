@@ -34,7 +34,7 @@ from app.models import Base
 from app.models.organization import Organization
 from app.models.user import User
 
-TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/nodeskclaw_test"
+TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw123@localhost:5432/nodeskclaw_rbac_test"
 
 # NullPool：每次操作独立连接，避免 asyncpg 连接状态冲突
 engine = create_async_engine(TEST_DATABASE_URL, echo=False, poolclass=NullPool)

@@ -17,7 +17,7 @@ from app.models.workspace_task import WorkspaceTask
 from app.schemas.workspace import TaskInfo
 from app.services.workspace_service import list_tasks, list_tasks_paginated
 
-TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/nodeskclaw_test"
+TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw123@localhost:5432/nodeskclaw_rbac_test"
 engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 TestSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

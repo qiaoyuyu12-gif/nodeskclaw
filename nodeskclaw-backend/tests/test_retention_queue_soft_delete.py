@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models.message_queue import MessageQueueItem
 from app.services.runtime.retention import cleanup_consumed_queue_items
 
-TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/nodeskclaw_test"
+TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw123@localhost:5432/nodeskclaw_rbac_test"
 engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 TestSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
