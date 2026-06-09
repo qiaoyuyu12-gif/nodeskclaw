@@ -146,10 +146,34 @@ rm -rf /tmp/jiti/* 2>/dev/null || true
 
 chmod 700 "${OPENCLAW_DIR}" 2>/dev/null || true
 [ -d "${CREDENTIALS_DIR}" ] && chmod 700 "${CREDENTIALS_DIR}"
-# Windows bind-mount 会让所有目录以 mode=777 出现，OpenClaw 会拒绝加载 world-writable 插件。
-# 收紧 extensions/ 下所有子目录的权限，确保 go-w 位被清除。
+
+# ---- 3.6 Windows bind-mount 插件权限修复 ----
+#
+# Windows NTFS bind-mount 进容器后所有目录均显示为 mode=777，
+# OpenClaw 的安全检查会拒绝加载 world-writable 的插件候选目录。
+# chmod 对 NTFS bind-mount 无效，因此改为：
+#   将 world-writable 插件目录复制到 npm global extensions 路径
+#   （该路径位于容器 overlayfs，权限可控）。
+# npm global extensions 路径已被 OpenClaw 作为 "bundled" 路径扫描，
+# 无需修改 openclaw.json。
 if [ -d "${OPENCLAW_DIR}/extensions" ]; then
-  find "${OPENCLAW_DIR}/extensions" -type d -exec chmod go-w {} \; 2>/dev/null || true
+  GLOBAL_EXT="$(npm root -g 2>/dev/null)/openclaw/extensions"
+  mkdir -p "${GLOBAL_EXT}"
+  for ext_dir in "${OPENCLAW_DIR}/extensions"/*/; do
+    [ -d "${ext_dir}" ] || continue
+    dir_mode=$(stat -c '%a' "${ext_dir}" 2>/dev/null || echo "000")
+    dir_name=$(basename "${ext_dir}")
+    dest="${GLOBAL_EXT}/${dir_name}"
+    if [ "${dir_mode}" = "777" ]; then
+      rm -rf "${dest}"
+      cp -r "${ext_dir}" "${dest}"
+      chmod -R 755 "${dest}"
+      echo "[entrypoint] 插件 ${dir_name} 已从 bind-mount 复制到 bundled 路径（Windows 权限修复）"
+    else
+      # Linux 原生挂载：直接收紧权限即可
+      find "${ext_dir}" -type d -exec chmod go-w {} \; 2>/dev/null || true
+    fi
+  done
 fi
 
 # ---- 4. 前台启动 ----
