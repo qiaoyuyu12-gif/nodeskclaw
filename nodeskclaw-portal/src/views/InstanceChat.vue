@@ -94,6 +94,14 @@ const statusDisplay = computed(() =>
   getStatusDisplay(instance.value?.display_status ?? ''),
 )
 
+// 剥离 LLM 内部格式标签（如 <final>…</final>），只展示正文
+function cleanContent(text: string): string {
+  return text
+    .replace(/<final[^>]*>/gi, '')
+    .replace(/<\/final[^>]*>/gi, '')
+    .trim()
+}
+
 // 滚动到底部
 async function scrollToBottom() {
   await nextTick()
@@ -452,8 +460,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 主对话区域：左侧会话面板 + 右侧消息区 -->
-    <template v-else>
-      <div class="flex-1 flex overflow-hidden">
+    <div v-else class="flex-1 flex overflow-hidden">
 
         <!-- ── 左侧会话侧边栏 200px ── -->
         <aside class="w-[200px] shrink-0 border-r border-border flex flex-col bg-card">
@@ -587,7 +594,7 @@ onUnmounted(() => {
                   >
                     {{ msg.sender_name }}
                   </div>
-                  {{ msg.content }}
+                  {{ cleanContent(msg.content) }}
                   <!-- 流式输出光标 -->
                   <span v-if="msg.streaming" class="inline-block w-1 h-3.5 ml-0.5 bg-current animate-pulse align-middle" />
                 </div>
@@ -662,7 +669,6 @@ onUnmounted(() => {
             </p>
           </div>
         </div>
-      </div>
-    </template>
+    </div>
   </div>
 </template>
