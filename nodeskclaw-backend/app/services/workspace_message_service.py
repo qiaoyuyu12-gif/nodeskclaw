@@ -111,6 +111,7 @@ async def search_messages(
     from_at: datetime | None = None,
     to_at: datetime | None = None,
     limit: int = 200,
+    exclude_private: bool = False,
 ) -> list[WorkspaceMessage]:
     stmt = (
         select(WorkspaceMessage)
@@ -134,6 +135,8 @@ async def search_messages(
         stmt = stmt.where(WorkspaceMessage.created_at >= from_at)
     if to_at:
         stmt = stmt.where(WorkspaceMessage.created_at <= to_at)
+    if exclude_private:
+        stmt = stmt.where(WorkspaceMessage.message_type != "private")
 
     result = await db.execute(
         stmt.order_by(WorkspaceMessage.created_at.desc()).limit(limit)

@@ -45,13 +45,19 @@ async def _check_workspace(workspace_id: str, org, db: AsyncSession) -> Workspac
 async def list_conversations(
     workspace_id: str,
     member_id: str | None = Query(None, description="按成员 instance_id 过滤"),
+    is_manual: bool | None = Query(None, description="None=全部, true=仅手动, false=仅拓扑"),
     org_ctx=Depends(get_current_org),
     db: AsyncSession = Depends(get_db),
 ):
     user, org = org_ctx
     await _check_workspace(workspace_id, org, db)
     await wm_service.check_workspace_member(workspace_id, user, db)
-    convs = await conversation_service.list_conversations(workspace_id, db, member_id=member_id)
+    # 工作空间群聊默认只显示拓扑驱动的会话（is_manual=False），
+    # 私人会话（is_manual=True）只在 InstanceChat 中通过 member_id + is_manual=true 查询
+    effective_is_manual = is_manual if is_manual is not None else (True if member_id else False)
+    convs = await conversation_service.list_conversations(
+        workspace_id, db, member_id=member_id, is_manual=effective_is_manual,
+    )
     return _ok([_conv_dict(c) for c in convs])
 
 

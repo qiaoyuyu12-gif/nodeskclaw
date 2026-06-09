@@ -336,6 +336,7 @@ async def get_blackboard_conversation(
 
 async def list_conversations(
     workspace_id: str, db: AsyncSession, *, member_id: str | None = None,
+    is_manual: bool | None = None,
 ) -> list[Conversation]:
     q = (
         select(Conversation).where(
@@ -346,6 +347,8 @@ async def list_conversations(
     if member_id:
         # 过滤包含指定成员的会话（JSONB contains 语法）
         q = q.where(Conversation.member_node_ids.contains(cast([member_id], JSONB)))
+    if is_manual is not None:
+        q = q.where(Conversation.is_manual == is_manual)
     q = q.order_by(
         Conversation.is_blackboard_group.desc(),
         Conversation.last_message_at.desc().nulls_last(),
@@ -366,6 +369,7 @@ async def create_manual_conversation(
         workspace_id=workspace_id,
         name=name,
         is_blackboard_group=False,
+        is_manual=True,
         member_node_ids=member_node_ids,
         member_hash=member_hash,
     )

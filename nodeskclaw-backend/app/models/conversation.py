@@ -31,6 +31,9 @@ class Conversation(BaseModel):
     is_blackboard_group: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False,
     )
+    is_manual: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false",
+    )
     member_node_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     member_hash: Mapped[str] = mapped_column(String(16), nullable=False)
     last_message_at: Mapped[datetime | None] = mapped_column(

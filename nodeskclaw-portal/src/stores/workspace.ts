@@ -752,7 +752,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   async function fetchInstanceConversations(workspaceId: string, instanceId: string): Promise<Conversation[]> {
     const res = await api.get(`/workspaces/${workspaceId}/conversations`, {
-      params: { member_id: instanceId },
+      params: { member_id: instanceId, is_manual: true },
     })
     return (res.data.data || []) as Conversation[]
   }

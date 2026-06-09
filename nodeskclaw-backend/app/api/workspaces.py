@@ -1609,6 +1609,7 @@ async def list_workspace_messages(
             from_at=from_dt,
             to_at=to_dt,
             limit=limit,
+            exclude_private=True,
         )
     else:
         messages = await msg_service.get_recent_messages(db, workspace_id, limit, exclude_private=True)
