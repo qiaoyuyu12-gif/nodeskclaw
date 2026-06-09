@@ -99,9 +99,23 @@ if [ -f "${CONFIG_FILE}" ]; then
     const exec = tools.exec ?? (tools.exec = {});
     if (!exec.security) { exec.security = 'full'; changed = true; }
     if (!exec.ask) { exec.ask = 'off'; changed = true; }
+    // 补全 nodeskclaw channel 配置（旧版 PVC 上的 openclaw.json 缺少此节）
+    // 三个环境变量由 deploy_service 在容器启动时注入
+    const ndApiUrl = process.env.NODESKCLAW_API_URL || '';
+    const ndInstanceId = process.env.NODESKCLAW_INSTANCE_ID || '';
+    const ndToken = process.env.OPENCLAW_GATEWAY_TOKEN || '';
+    if (ndApiUrl || ndInstanceId || ndToken) {
+      const channels = c.channels ?? (c.channels = {});
+      const ndChannel = channels.nodeskclaw ?? (channels.nodeskclaw = {});
+      const accounts = ndChannel.accounts ?? (ndChannel.accounts = {});
+      const defAcc = accounts.default ?? (accounts.default = {});
+      if (ndApiUrl && defAcc.apiUrl !== ndApiUrl) { defAcc.apiUrl = ndApiUrl; changed = true; }
+      if (ndInstanceId && defAcc.instanceId !== ndInstanceId) { defAcc.instanceId = ndInstanceId; changed = true; }
+      if (ndToken && defAcc.apiToken !== ndToken) { defAcc.apiToken = ndToken; changed = true; }
+    }
     if (changed) {
       fs.writeFileSync(f, JSON.stringify(c, null, 2));
-      console.log('[entrypoint] 已补全 controlUi / skills / exec 配置');
+      console.log('[entrypoint] 已补全 controlUi / skills / exec / nodeskclaw channel 配置');
     }
   "
 fi
