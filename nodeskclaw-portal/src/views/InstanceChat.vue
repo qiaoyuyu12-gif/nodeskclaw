@@ -535,7 +535,7 @@ onUnmounted(() => {})
                   <span class="text-xs font-medium truncate flex-1">{{ session.name }}</span>
                   <!-- 删除按钮：hover 时显示，带背景色与侧边栏区分 -->
                   <button
-                    class="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-md bg-background border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 transition-all shadow-sm"
+                    class="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded text-foreground hover:text-destructive transition-all"
                     @click.stop="deleteSession(session.id)"
                   >
                     <Trash2 class="w-3 h-3" />
