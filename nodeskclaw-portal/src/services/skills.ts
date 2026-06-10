@@ -7,8 +7,19 @@ export interface KnowledgeBase {
   ragflow_kb_id: string
   ragflow_endpoint: string
   source_type: 'doc' | 'system' | 'mixed'
+  is_reachable: boolean
+  last_checked_at: string | null
   created_at: string
   updated_at: string
+}
+
+export interface InstanceKnowledgeBase {
+  id: string
+  instance_id: string
+  kb_id: string
+  enabled: boolean
+  kb: KnowledgeBase
+  created_at: string
 }
 
 export interface KnowledgeBaseCreate {
@@ -83,6 +94,17 @@ export const kbApi = {
     api.patch<{ data: KnowledgeBase }>(`/knowledge-bases/${id}`, body).then((r) => r.data.data),
 
   remove: (id: string) => api.delete(`/knowledge-bases/${id}`),
+}
+
+export const instanceKbApi = {
+  list: (instanceId: string) =>
+    api.get<{ data: InstanceKnowledgeBase[] }>(`/instances/${instanceId}/knowledge-bases`).then((r) => r.data.data),
+
+  attach: (instanceId: string, kbId: string) =>
+    api.post<{ data: InstanceKnowledgeBase }>(`/instances/${instanceId}/knowledge-bases`, { kb_id: kbId }).then((r) => r.data.data),
+
+  detach: (instanceId: string, kbId: string) =>
+    api.delete(`/instances/${instanceId}/knowledge-bases/${kbId}`),
 }
 
 /** 上传目标：个人 library / 组织 library / 公共市场 */
