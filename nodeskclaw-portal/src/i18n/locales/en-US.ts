@@ -33,6 +33,7 @@ const enUS = {
     comingSoon: "Coming soon",
     goBack: "Go back",
     runtimeStatus: "Runtime Status",
+    knowledgeBases: "Knowledge Bases",
     yes: "Yes",
     no: "No",
     copyFailed: "Copy failed, please select and copy manually",

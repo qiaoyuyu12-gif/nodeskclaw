@@ -33,6 +33,7 @@ const zhCN = {
     comingSoon: "开发中",
     goBack: "返回",
     runtimeStatus: "运行状态",
+    knowledgeBases: "知识库",
     yes: "是",
     no: "否",
     copyFailed: "复制失败，请手动选中复制",

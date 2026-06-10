@@ -2,7 +2,7 @@
 import { ref, onMounted, computed, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowLeft, Circle, Loader2, LayoutDashboard, Brain, Dna, History, Radio, FolderOpen, Users, Activity, Archive } from 'lucide-vue-next'
+import { ArrowLeft, Circle, Loader2, LayoutDashboard, Brain, Dna, History, Radio, FolderOpen, Users, Activity, Archive, Database } from 'lucide-vue-next'
 import api from '@/services/api'
 import { getRuntimeCaps } from '@/utils/runtimeCapabilities'
 import { getStatusDisplay } from '@/utils/instanceStatus'
@@ -62,6 +62,7 @@ const navItems = computed(() => {
   if (caps.value.evolutionLog) items.push({ name: 'EvolutionLog', label: t('common.evolutionLog'), icon: History })
   items.push({ name: 'InstanceChannels', label: t('common.channels'), icon: Radio })
   if (caps.value.llmConfig) items.push({ name: 'InstanceSettings', label: t('common.modelConfig'), icon: Brain })
+  items.push({ name: 'InstanceKnowledgeBase', label: t('common.knowledgeBases'), icon: Database })
   if (myInstanceRole.value === 'admin') {
     items.push({ name: 'InstanceFiles', label: t('common.files'), icon: FolderOpen })
     items.push({ name: 'InstanceBackups', label: t('backup.title'), icon: Archive })

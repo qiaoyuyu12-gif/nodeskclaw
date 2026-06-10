@@ -3,7 +3,6 @@ import { ref, computed, watch, inject, type ComputedRef, type Ref } from 'vue'
 import { Loader2, Brain, Key, Trash2, Plus, RefreshCw, HardDrive, Save, ChevronDown, Check, Star, X, AlertTriangle, Zap, CheckCircle, XCircle } from 'lucide-vue-next'
 import BaseUrlInput, { stripProtocol } from '@/components/shared/BaseUrlInput.vue'
 import { useI18n } from 'vue-i18n'
-import InstanceKbPanel from '@/components/instance/InstanceKbPanel.vue'
 
 const { t } = useI18n()
 import ModelSelect from '@/components/shared/ModelSelect.vue'
@@ -813,14 +812,6 @@ watch(() => instanceOrgId.value, (newVal, oldVal) => {
         </div>
 
       </template>
-    </div>
-
-    <!-- 外挂知识库 -->
-    <div v-if="!loading && runtimeSupported" class="mt-6">
-      <InstanceKbPanel
-        :instance-id="instanceId"
-        :can-edit="canEdit"
-      />
     </div>
 
     <!-- Close dropdown overlay -->
