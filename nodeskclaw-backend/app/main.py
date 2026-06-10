@@ -388,7 +388,7 @@ async def lifespan(app: FastAPI):
                     _tpl_path = _seed_dir / _fname
                     if not _tpl_path.exists():
                         continue
-                    _tpl = _seed_json.loads(_tpl_path.read_text())
+                    _tpl = _seed_json.loads(_tpl_path.read_text(encoding="utf-8"))
                     _slug = _tpl["slug"]
 
                     _manifest = _tpl.get("manifest", {})
@@ -398,7 +398,7 @@ async def lifespan(app: FastAPI):
                         for _sname in _manifest["scripts"]:
                             _spath = _scripts_dir / _sname
                             if _spath.exists():
-                                _scripts_dict[_sname] = _spath.read_text()
+                                _scripts_dict[_sname] = _spath.read_text(encoding="utf-8")
                             else:
                                 logger.warning("Seed missing script: %s for %s", _sname, _slug)
                         _manifest["scripts"] = _scripts_dict
@@ -433,7 +433,7 @@ async def lifespan(app: FastAPI):
                     _tpl_path = _seed_dir / _fname
                     if not _tpl_path.exists():
                         continue
-                    _tpl = _seed_json.loads(_tpl_path.read_text())
+                    _tpl = _seed_json.loads(_tpl_path.read_text(encoding="utf-8"))
                     _slug = _tpl["slug"]
                     _existing = (await _seed_db.execute(
                         select(_SeedGenome).where(_SeedGenome.slug == _slug, _seed_not_deleted(_SeedGenome))

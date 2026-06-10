@@ -23,7 +23,7 @@ def _discover_from_openclaw_config() -> tuple[str, str, str]:
     api, tok, ws = "", "", ""
     try:
         import re as _re
-        with open(cfg_path) as f:
+        with open(cfg_path, encoding="utf-8") as f:
             raw = f.read()
         clean = _re.sub(r"^\s*//.*$", "", raw, flags=_re.MULTILINE)
         cfg = json.loads(clean)
