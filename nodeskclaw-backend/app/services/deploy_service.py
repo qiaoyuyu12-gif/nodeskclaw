@@ -339,6 +339,15 @@ async def precheck(req: DeployRequest, db: AsyncSession) -> PrecheckResult:
         except asyncio.TimeoutError:
             items.append(PrecheckItem(name="Docker", status="fail", message="Docker 环境检查超时"))
             return PrecheckResult(passed=False, items=items)
+        except NotImplementedError:
+            # Windows SelectorEventLoop 不支持 asyncio subprocess，回退同步探测
+            try:
+                from app.services.cluster_service import _probe_docker_sync
+                await _probe_docker_sync()
+                items.append(PrecheckItem(name="Docker", status="pass", message="docker compose 可用"))
+            except Exception as probe_err:
+                items.append(PrecheckItem(name="Docker", status="fail", message=str(probe_err) or "Docker 环境检查失败"))
+                return PrecheckResult(passed=False, items=items)
         except Exception:
             items.append(PrecheckItem(name="Docker", status="fail", message="Docker 环境检查失败"))
             return PrecheckResult(passed=False, items=items)
@@ -455,7 +464,10 @@ async def deploy_instance(
     # Docker: 分配宿主机端口
     docker_host_port: int | None = None
     if is_docker:
+        import socket as _socket
         from app.services.docker_constants import DOCKER_BASE_PORT
+
+        # 1. 从 DB 收集已记录的端口（避免多 instance 分配到同一端口）
         used_ports: set[int] = set()
         port_result = await db.execute(
             select(Instance.env_vars).where(
@@ -472,8 +484,20 @@ async def deploy_instance(
                         used_ports.add(int(p))
                 except (ValueError, TypeError):
                     pass
+
+        def _port_available(port: int) -> bool:
+            """尝试绑定端口，验证操作系统层面是否真正空闲。"""
+            with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+                s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind(("0.0.0.0", port))
+                    return True
+                except OSError:
+                    return False
+
+        # 2. 同时跳过 DB 记录端口和系统实际占用端口，避免 Docker 绑定失败
         docker_host_port = DOCKER_BASE_PORT
-        while docker_host_port in used_ports:
+        while docker_host_port in used_ports or not _port_available(docker_host_port):
             docker_host_port += 1
         namespace = f"docker-{slug}"
 

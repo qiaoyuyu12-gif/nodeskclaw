@@ -81,6 +81,7 @@ async def get_recent_messages(
     workspace_id: str,
     limit: int = 50,
     conversation_id: str | None = None,
+    exclude_private: bool = False,
 ) -> list[WorkspaceMessage]:
     stmt = (
         select(WorkspaceMessage)
@@ -91,6 +92,9 @@ async def get_recent_messages(
     )
     if conversation_id:
         stmt = stmt.where(WorkspaceMessage.conversation_id == conversation_id)
+    if exclude_private:
+        # 群聊上下文排除私人对话消息，避免信息泄露
+        stmt = stmt.where(WorkspaceMessage.message_type != "private")
     result = await db.execute(
         stmt.order_by(WorkspaceMessage.created_at.desc()).limit(limit)
     )
@@ -107,6 +111,7 @@ async def search_messages(
     from_at: datetime | None = None,
     to_at: datetime | None = None,
     limit: int = 200,
+    exclude_private: bool = False,
 ) -> list[WorkspaceMessage]:
     stmt = (
         select(WorkspaceMessage)
@@ -130,6 +135,8 @@ async def search_messages(
         stmt = stmt.where(WorkspaceMessage.created_at >= from_at)
     if to_at:
         stmt = stmt.where(WorkspaceMessage.created_at <= to_at)
+    if exclude_private:
+        stmt = stmt.where(WorkspaceMessage.message_type != "private")
 
     result = await db.execute(
         stmt.order_by(WorkspaceMessage.created_at.desc()).limit(limit)

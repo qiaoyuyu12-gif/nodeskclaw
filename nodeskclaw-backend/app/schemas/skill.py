@@ -43,8 +43,23 @@ class KnowledgeBaseResponse(PydanticBase):
     ragflow_kb_id: str
     ragflow_endpoint: str
     source_type: str
+    is_reachable: bool
+    last_checked_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class InstanceKnowledgeBaseResponse(PydanticBase):
+    """AI 员工与知识库绑定的响应体，含嵌套知识库详情。"""
+
+    id: str
+    instance_id: str
+    kb_id: str
+    enabled: bool
+    kb: KnowledgeBaseResponse
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 

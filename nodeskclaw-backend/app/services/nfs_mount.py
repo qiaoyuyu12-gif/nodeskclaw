@@ -330,6 +330,11 @@ class DockerFS:
         os.makedirs(str(self._base), exist_ok=True)
 
     def _resolve(self, remote_path: str) -> pathlib.Path:
+        # 兼容 Path 对象和 Windows 反斜杠（str(Path)在 Windows 产生 \，as_posix 统一为 /）
+        if isinstance(remote_path, pathlib.Path):
+            remote_path = remote_path.as_posix()
+        else:
+            remote_path = str(remote_path).replace("\\", "/")
         abs_slash = self._abs_prefix + "/"
         if remote_path.startswith(abs_slash):
             rel = remote_path[len(abs_slash):]
@@ -437,16 +442,33 @@ class DockerFS:
         return lines[-1] if lines else None
 
     async def exec_command(self, cmd: list[str]) -> str:
-        """Run a command inside the Docker container via docker exec."""
+        """Run a command inside the Docker container via docker exec.
+
+        使用与 docker_provider._run_docker 相同的跨平台写法：
+        Windows SelectorEventLoop 不支持 asyncio.create_subprocess_exec，
+        NotImplementedError 时自动回退到线程池里的同步 subprocess.run。
+        """
         import asyncio
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "exec", self._slug, *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await proc.communicate()
-        if proc.returncode != 0:
-            raise NFSMountError(f"docker exec 失败 (rc={proc.returncode}): {stdout.decode()[:500]}")
+        import subprocess
+        args = ["docker", "exec", self._slug, *cmd]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await proc.communicate()
+            rc = proc.returncode or 0
+        except NotImplementedError:
+            # Windows SelectorEventLoop 不支持 asyncio subprocess，回退同步路径
+            result = await asyncio.to_thread(
+                subprocess.run, args,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            stdout = result.stdout or b""
+            rc = result.returncode
+        if rc != 0:
+            raise NFSMountError(f"docker exec 失败 (rc={rc}): {stdout.decode()[:500]}")
         return stdout.decode() if stdout else ""
 
 

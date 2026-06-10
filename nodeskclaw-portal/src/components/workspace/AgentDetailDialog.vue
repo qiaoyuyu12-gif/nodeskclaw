@@ -14,6 +14,7 @@ import type { InstanceSkillItem, InstanceGeneItem, GenomeItem } from '@/stores/g
 import { getRuntimeCaps } from '@/utils/runtimeCapabilities'
 import { copyToClipboard } from '@/utils/clipboard'
 import { formatDate } from '@/utils/localeFormat'
+import InstanceKbPanel from '@/components/instance/InstanceKbPanel.vue'
 
 const props = defineProps<{
   visible: boolean
@@ -536,6 +537,12 @@ onUnmounted(stopPolling)
                   </div>
                 </div>
               </div>
+
+              <!-- 外挂知识库 -->
+              <InstanceKbPanel
+                :instance-id="instance.id"
+                :can-edit="(ROLE_LEVEL[instance.my_role ?? ''] ?? 0) >= ROLE_LEVEL.admin"
+              />
             </template>
           </div>
 

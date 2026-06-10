@@ -750,6 +750,25 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
+  async function fetchInstanceConversations(workspaceId: string, instanceId: string): Promise<Conversation[]> {
+    const res = await api.get(`/workspaces/${workspaceId}/conversations`, {
+      params: { member_id: instanceId, is_manual: true },
+    })
+    return (res.data.data || []) as Conversation[]
+  }
+
+  async function createConversation(
+    workspaceId: string,
+    name: string,
+    memberNodeIds: string[],
+  ): Promise<Conversation> {
+    const res = await api.post(`/workspaces/${workspaceId}/conversations`, {
+      name,
+      member_node_ids: memberNodeIds,
+    })
+    return res.data.data as Conversation
+  }
+
   async function fetchConversationMessages(workspaceId: string, conversationId: string, limit = 50): Promise<GroupChatMessage[]> {
     try {
       const res = await api.get(`/workspaces/${workspaceId}/conversations/${conversationId}/messages`, {
@@ -940,6 +959,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       streaming.streaming = false
       streaming.error = errorObj
     } else {
+      // 对 instance_not_connected_locally 做前端去重：
+      // 后端冷却期（5 min）已限频，但在实例重连前的第一条广播仍会到达。
+      // 若 chatMessages 里最近一条同类错误距今 < 10 分钟，则不重复追加气泡。
+      const DEDUP_MS = 10 * 60 * 1000
+      const hasRecentSameError = chatMessages.value.some(
+        (m) =>
+          m.sender_id === instanceId &&
+          m.error?.code === errorCode &&
+          Date.now() - new Date(m.created_at).getTime() < DEDUP_MS,
+      )
+      if (hasRecentSameError) return
+
       chatMessages.value.push({
         id: `error-${instanceId}-${Date.now()}`,
         sender_type: 'agent',
@@ -1649,6 +1680,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     conversations,
     activeConversationId,
     fetchConversations,
+    fetchInstanceConversations,
+    createConversation,
     fetchConversationMessages,
     fetchChatHistory,
     sendWorkspaceMessage,

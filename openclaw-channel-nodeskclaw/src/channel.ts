@@ -41,7 +41,9 @@ function resolveAccount(
   return {
     accountId: id,
     enabled: raw.enabled !== false,
-    configured: Boolean(raw.workspaceId && raw.instanceId),
+    // workspaceId 不在部署时注入（实例可属于多个 workspace），
+    // tunnel 连接只需要 instanceId + apiToken，workspace 上下文由消息的 session key 提供
+    configured: Boolean(raw.instanceId && raw.apiToken),
     apiUrl: raw.apiUrl ?? "",
     workspaceId: raw.workspaceId ?? "",
     instanceId: raw.instanceId ?? "",

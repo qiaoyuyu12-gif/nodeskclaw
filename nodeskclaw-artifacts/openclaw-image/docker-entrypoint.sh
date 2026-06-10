@@ -99,9 +99,23 @@ if [ -f "${CONFIG_FILE}" ]; then
     const exec = tools.exec ?? (tools.exec = {});
     if (!exec.security) { exec.security = 'full'; changed = true; }
     if (!exec.ask) { exec.ask = 'off'; changed = true; }
+    // 补全 nodeskclaw channel 配置（旧版 PVC 上的 openclaw.json 缺少此节）
+    // 三个环境变量由 deploy_service 在容器启动时注入
+    const ndApiUrl = process.env.NODESKCLAW_API_URL || '';
+    const ndInstanceId = process.env.NODESKCLAW_INSTANCE_ID || '';
+    const ndToken = process.env.OPENCLAW_GATEWAY_TOKEN || '';
+    if (ndApiUrl || ndInstanceId || ndToken) {
+      const channels = c.channels ?? (c.channels = {});
+      const ndChannel = channels.nodeskclaw ?? (channels.nodeskclaw = {});
+      const accounts = ndChannel.accounts ?? (ndChannel.accounts = {});
+      const defAcc = accounts.default ?? (accounts.default = {});
+      if (ndApiUrl && defAcc.apiUrl !== ndApiUrl) { defAcc.apiUrl = ndApiUrl; changed = true; }
+      if (ndInstanceId && defAcc.instanceId !== ndInstanceId) { defAcc.instanceId = ndInstanceId; changed = true; }
+      if (ndToken && defAcc.apiToken !== ndToken) { defAcc.apiToken = ndToken; changed = true; }
+    }
     if (changed) {
       fs.writeFileSync(f, JSON.stringify(c, null, 2));
-      console.log('[entrypoint] 已补全 controlUi / skills / exec 配置');
+      console.log('[entrypoint] 已补全 controlUi / skills / exec / nodeskclaw channel 配置');
     }
   "
 fi
@@ -132,6 +146,37 @@ rm -rf /tmp/jiti/* 2>/dev/null || true
 
 chmod 700 "${OPENCLAW_DIR}" 2>/dev/null || true
 [ -d "${CREDENTIALS_DIR}" ] && chmod 700 "${CREDENTIALS_DIR}"
+
+# ---- 3.6 Windows bind-mount 插件权限修复 ----
+#
+# Windows NTFS bind-mount 进容器后所有目录均显示为 world-writable，
+# OpenClaw 的安全检查会拒绝加载这类插件候选目录。
+# 旧方案依赖 stat -c '%a' == "777" 的字符串比较，
+# 但实际返回值可能是 "0777" / "1777" / "777" 等多种格式，导致漏检。
+# 新方案：先尝试 chmod，若 chmod 无效（NTFS bind-mount 会静默忽略），
+# 用 find -perm /o+w 检测 other-write bit，确认仍为 world-writable 后
+# 复制到 npm global extensions 路径（overlayfs，权限可控）。
+if [ -d "${OPENCLAW_DIR}/extensions" ]; then
+  GLOBAL_EXT="$(npm root -g 2>/dev/null)/openclaw/extensions"
+  mkdir -p "${GLOBAL_EXT}"
+  copied=0
+  for ext_dir in "${OPENCLAW_DIR}/extensions"/*/; do
+    [ -d "${ext_dir}" ] || continue
+    dir_name=$(basename "${ext_dir}")
+    dest="${GLOBAL_EXT}/${dir_name}"
+    # 先尝试直接收紧权限（对 Linux 原生挂载有效）
+    find "${ext_dir}" -type d -exec chmod go-w {} \; 2>/dev/null || true
+    # 若 other-write bit 仍然存在（Windows bind-mount chmod 无效）→ 复制到 bundled 路径
+    if find "${ext_dir}" -maxdepth 0 -perm /o+w 2>/dev/null | grep -q .; then
+      rm -rf "${dest}"
+      cp -r "${ext_dir}" "${dest}"
+      chmod -R 755 "${dest}"
+      echo "[entrypoint] 插件 ${dir_name} 已复制到 bundled 路径（Windows bind-mount 权限修复）"
+      copied=$((copied + 1))
+    fi
+  done
+  [ "${copied}" -gt 0 ] && echo "[entrypoint] 共修复 ${copied} 个 world-writable 插件"
+fi
 
 # ---- 4. 前台启动 ----
 

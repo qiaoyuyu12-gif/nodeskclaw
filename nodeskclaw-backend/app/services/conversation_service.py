@@ -6,8 +6,10 @@ import hashlib
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
+from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, cast
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.base import not_deleted
@@ -333,18 +335,48 @@ async def get_blackboard_conversation(
 
 
 async def list_conversations(
-    workspace_id: str, db: AsyncSession,
+    workspace_id: str, db: AsyncSession, *, member_id: str | None = None,
+    is_manual: bool | None = None,
 ) -> list[Conversation]:
-    result = await db.execute(
+    q = (
         select(Conversation).where(
             Conversation.workspace_id == workspace_id,
             not_deleted(Conversation),
-        ).order_by(
-            Conversation.is_blackboard_group.desc(),
-            Conversation.last_message_at.desc().nulls_last(),
         )
     )
+    if member_id:
+        # 过滤包含指定成员的会话（JSONB contains 语法）
+        q = q.where(Conversation.member_node_ids.contains(cast([member_id], JSONB)))
+    if is_manual is not None:
+        q = q.where(Conversation.is_manual == is_manual)
+    q = q.order_by(
+        Conversation.is_blackboard_group.desc(),
+        Conversation.last_message_at.desc().nulls_last(),
+    )
+    result = await db.execute(q)
     return list(result.scalars().all())
+
+
+async def create_manual_conversation(
+    db: AsyncSession,
+    workspace_id: str,
+    name: str,
+    member_node_ids: list[str],
+) -> Conversation:
+    """创建手动新建的会话（非拓扑自动生成），使用 UUID hash 保证唯一性。"""
+    member_hash = hashlib.sha256(str(uuid4()).encode()).hexdigest()[:16]
+    conv = Conversation(
+        workspace_id=workspace_id,
+        name=name,
+        is_blackboard_group=False,
+        is_manual=True,
+        member_node_ids=member_node_ids,
+        member_hash=member_hash,
+    )
+    db.add(conv)
+    await db.commit()
+    await db.refresh(conv)
+    return conv
 
 
 async def resolve_conversation_for_message(

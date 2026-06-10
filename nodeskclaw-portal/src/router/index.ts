@@ -57,6 +57,11 @@ const ceRoutes: RouteRecordRaw[] = [
     component: () => import('@/views/DeployProgress.vue'),
   },
   {
+    path: '/instances/:id/chat',
+    name: 'InstanceChat',
+    component: () => import('@/views/InstanceChat.vue'),
+  },
+  {
     path: '/instances/:id',
     component: () => import('@/views/InstanceLayout.vue'),
     children: [
@@ -67,6 +72,7 @@ const ceRoutes: RouteRecordRaw[] = [
 
       { path: 'channels', name: 'InstanceChannels', component: () => import('@/views/InstanceChannels.vue') },
       { path: 'settings', name: 'InstanceSettings', component: () => import('@/views/InstanceSettings.vue') },
+      { path: 'knowledge-bases', name: 'InstanceKnowledgeBase', component: () => import('@/views/InstanceKnowledgeBase.vue') },
       { path: 'files', name: 'InstanceFiles', component: () => import('@/views/InstanceFiles.vue') },
       { path: 'backups', name: 'InstanceBackups', component: () => import('@/views/InstanceBackups.vue') },
       { path: 'members', name: 'InstanceMembers', component: () => import('@/views/InstanceMembers.vue') },

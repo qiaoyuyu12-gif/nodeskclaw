@@ -14,15 +14,14 @@ Revises: fed0e4f7dfa9
 Create Date: 2026-06-06 16:07:44.860322
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
 
-
-# revision identifiers, used by Alembic.
-revision: str = '4efa541f362f'
-down_revision: Union[str, Sequence[str], None] = 'fed0e4f7dfa9'
+revision: str = "4efa541f362f"
+down_revision: Union[str, Sequence[str], None] = "fed0e4f7dfa9"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -30,7 +29,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Upgrade schema: 建立 RBAC 第一期 7 张表。"""
 
-    # ── 1. roles 角色定义表 ──
+    # 1. roles
     op.create_table(
         "roles",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -58,9 +57,9 @@ def upgrade() -> None:
     )
     op.create_index("ix_roles_scope", "roles", ["scope"], unique=False)
     op.create_index("ix_roles_org_id", "roles", ["org_id"], unique=False)
-    op.create_index(op.f("ix_roles_deleted_at"), "roles", ["deleted_at"], unique=False)
+    op.create_index("ix_roles_deleted_at", "roles", ["deleted_at"], unique=False)
 
-    # ── 2. menus 菜单/按钮/权限点表 ──
+    # 2. menus（菜单 + 按钮 + 权限点三合一）
     op.create_table(
         "menus",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -79,26 +78,19 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
-        sa.CheckConstraint(
-            "menu_type in ('M','C','F')",
-            name="ck_menus_menu_type",
-        ),
-        sa.CheckConstraint(
-            "menu_type<>'F' OR perms IS NOT NULL",
-            name="ck_menus_button_perms",
-        ),
+        sa.CheckConstraint("menu_type in ('M','C','F')", name="ck_menus_menu_type"),
+        sa.CheckConstraint("menu_type<>'F' OR perms IS NOT NULL", name="ck_menus_button_perms"),
     )
     op.create_index(
         "uq_menus_perms_active", "menus", ["perms"],
-        unique=True,
-        postgresql_where=sa.text("deleted_at IS NULL AND perms IS NOT NULL"),
+        unique=True, postgresql_where=sa.text("deleted_at IS NULL AND perms IS NOT NULL"),
     )
     op.create_index("ix_menus_parent_id", "menus", ["parent_id"], unique=False)
     op.create_index("ix_menus_app_code", "menus", ["app_code"], unique=False)
     op.create_index("ix_menus_type", "menus", ["menu_type"], unique=False)
-    op.create_index(op.f("ix_menus_deleted_at"), "menus", ["deleted_at"], unique=False)
+    op.create_index("ix_menus_deleted_at", "menus", ["deleted_at"], unique=False)
 
-    # ── 3. apps 应用入口表 ──
+    # 3. apps
     op.create_table(
         "apps",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -119,9 +111,9 @@ def upgrade() -> None:
         unique=True, postgresql_where=sa.text("deleted_at IS NULL"),
     )
     op.create_index("ix_apps_status", "apps", ["status"], unique=False)
-    op.create_index(op.f("ix_apps_deleted_at"), "apps", ["deleted_at"], unique=False)
+    op.create_index("ix_apps_deleted_at", "apps", ["deleted_at"], unique=False)
 
-    # ── 4. subject_roles 主体 ↔ 角色（带 scope） ──
+    # 4. subject_roles（MOM sys_user_role 的 DeskClaw 扩展版）
     op.create_table(
         "subject_roles",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -165,9 +157,9 @@ def upgrade() -> None:
         "ix_subject_roles_expires", "subject_roles", ["expires_at"],
         unique=False, postgresql_where=sa.text("expires_at IS NOT NULL"),
     )
-    op.create_index(op.f("ix_subject_roles_deleted_at"), "subject_roles", ["deleted_at"], unique=False)
+    op.create_index("ix_subject_roles_deleted_at", "subject_roles", ["deleted_at"], unique=False)
 
-    # ── 5. role_menus 角色 ↔ 菜单按钮 ──
+    # 5. role_menus
     op.create_table(
         "role_menus",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -186,9 +178,9 @@ def upgrade() -> None:
     )
     op.create_index("ix_role_menus_role_id", "role_menus", ["role_id"], unique=False)
     op.create_index("ix_role_menus_menu_id", "role_menus", ["menu_id"], unique=False)
-    op.create_index(op.f("ix_role_menus_deleted_at"), "role_menus", ["deleted_at"], unique=False)
+    op.create_index("ix_role_menus_deleted_at", "role_menus", ["deleted_at"], unique=False)
 
-    # ── 6. role_apps 角色 ↔ 应用 ──
+    # 6. role_apps
     op.create_table(
         "role_apps",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -205,9 +197,9 @@ def upgrade() -> None:
         "uq_role_apps", "role_apps", ["role_id", "app_id"],
         unique=True, postgresql_where=sa.text("deleted_at IS NULL"),
     )
-    op.create_index(op.f("ix_role_apps_deleted_at"), "role_apps", ["deleted_at"], unique=False)
+    op.create_index("ix_role_apps_deleted_at", "role_apps", ["deleted_at"], unique=False)
 
-    # ── 7. permission_audit_logs 权限决策审计（默认关，不软删） ──
+    # 7. permission_audit_logs（默认关闭，仅在 RBAC_AUDIT=true 时写入）
     op.create_table(
         "permission_audit_logs",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -232,57 +224,69 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema: 按反序删除 7 张 RBAC 表。"""
-
-    # 7. permission_audit_logs
     op.drop_index("ix_pal_created_at", table_name="permission_audit_logs")
     op.drop_index("ix_pal_decision", table_name="permission_audit_logs")
     op.drop_index("ix_pal_subject", table_name="permission_audit_logs")
     op.drop_table("permission_audit_logs")
 
-    # 6. role_apps
-    op.drop_index(op.f("ix_role_apps_deleted_at"), table_name="role_apps")
-    op.drop_index("uq_role_apps", table_name="role_apps",
-                  postgresql_where=sa.text("deleted_at IS NULL"))
+    op.drop_index(
+        "ix_role_apps_deleted_at", table_name="role_apps",
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
+    op.drop_index(
+        "uq_role_apps", table_name="role_apps",
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
     op.drop_table("role_apps")
 
-    # 5. role_menus
-    op.drop_index(op.f("ix_role_menus_deleted_at"), table_name="role_menus")
+    op.drop_index(
+        "ix_role_menus_deleted_at", table_name="role_menus",
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
     op.drop_index("ix_role_menus_menu_id", table_name="role_menus")
     op.drop_index("ix_role_menus_role_id", table_name="role_menus")
-    op.drop_index("uq_role_menus", table_name="role_menus",
-                  postgresql_where=sa.text("deleted_at IS NULL"))
+    op.drop_index(
+        "uq_role_menus", table_name="role_menus",
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
     op.drop_table("role_menus")
 
-    # 4. subject_roles
-    op.drop_index(op.f("ix_subject_roles_deleted_at"), table_name="subject_roles")
-    op.drop_index("ix_subject_roles_expires", table_name="subject_roles",
-                  postgresql_where=sa.text("expires_at IS NOT NULL"))
+    op.drop_index("ix_subject_roles_deleted_at", table_name="subject_roles")
+    op.drop_index(
+        "ix_subject_roles_expires", table_name="subject_roles",
+        postgresql_where=sa.text("expires_at IS NOT NULL"),
+    )
     op.drop_index("ix_subject_roles_scope", table_name="subject_roles")
     op.drop_index("ix_subject_roles_subject", table_name="subject_roles")
-    op.drop_index("uq_subject_roles_active", table_name="subject_roles",
-                  postgresql_where=sa.text("deleted_at IS NULL"))
+    op.drop_index(
+        "uq_subject_roles_active", table_name="subject_roles",
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
     op.drop_table("subject_roles")
 
-    # 3. apps
-    op.drop_index(op.f("ix_apps_deleted_at"), table_name="apps")
+    op.drop_index("ix_apps_deleted_at", table_name="apps")
     op.drop_index("ix_apps_status", table_name="apps")
-    op.drop_index("uq_apps_app_code_active", table_name="apps",
-                  postgresql_where=sa.text("deleted_at IS NULL"))
+    op.drop_index(
+        "uq_apps_app_code_active", table_name="apps",
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
     op.drop_table("apps")
 
-    # 2. menus
-    op.drop_index(op.f("ix_menus_deleted_at"), table_name="menus")
+    op.drop_index("ix_menus_deleted_at", table_name="menus")
     op.drop_index("ix_menus_type", table_name="menus")
     op.drop_index("ix_menus_app_code", table_name="menus")
     op.drop_index("ix_menus_parent_id", table_name="menus")
-    op.drop_index("uq_menus_perms_active", table_name="menus",
-                  postgresql_where=sa.text("deleted_at IS NULL AND perms IS NOT NULL"))
+    op.drop_index(
+        "uq_menus_perms_active", table_name="menus",
+        postgresql_where=sa.text("deleted_at IS NULL AND perms IS NOT NULL"),
+    )
     op.drop_table("menus")
 
-    # 1. roles
-    op.drop_index(op.f("ix_roles_deleted_at"), table_name="roles")
+    op.drop_index("ix_roles_deleted_at", table_name="roles")
     op.drop_index("ix_roles_org_id", table_name="roles")
     op.drop_index("ix_roles_scope", table_name="roles")
-    op.drop_index("uq_roles_role_key_active", table_name="roles",
-                  postgresql_where=sa.text("deleted_at IS NULL"))
+    op.drop_index(
+        "uq_roles_role_key_active", table_name="roles",
+        postgresql_where=sa.text("deleted_at IS NULL"),
+    )
     op.drop_table("roles")

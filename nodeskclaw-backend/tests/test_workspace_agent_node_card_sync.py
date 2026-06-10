@@ -13,7 +13,7 @@ from app.schemas.workspace import UpdateAgentRequest
 from app.services import workspace_service
 import app.services.corridor_router as corridor_router
 
-TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/nodeskclaw_test"
+TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw123@localhost:5432/nodeskclaw_rbac_test"
 engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 TestSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from app.services.runtime.messaging.pipeline import MessageMiddleware, NextFn, PipelineContext
 from app.services.runtime.transport.base import DeliveryResult
@@ -11,6 +12,11 @@ from app.services.runtime.transport.base import DeliveryResult
 logger = logging.getLogger(__name__)
 
 MAX_RETRY = 3
+
+# 同一节点离线告警的最小间隔（秒）。防止 circuit half_open 每 30s 循环探活
+# 都向前端推送 agent:error 事件，导致聊天气泡持续堆积。
+_OFFLINE_BROADCAST_COOLDOWN_S = 300  # 5 分钟
+_last_offline_broadcast: dict[str, float] = {}  # key: "workspace_id:node_id"
 
 
 class TransportMiddleware(MessageMiddleware):
@@ -232,6 +238,13 @@ class TransportMiddleware(MessageMiddleware):
     async def _broadcast_offline_error(
         self, db, workspace_id: str, result: DeliveryResult,
     ) -> None:
+        # 冷却期内不重复广播，避免 circuit half_open 每 30s 探活失败时向前端疯狂推错误气泡
+        key = f"{workspace_id}:{result.target_node_id}"
+        now = time.monotonic()
+        if now - _last_offline_broadcast.get(key, 0.0) < _OFFLINE_BROADCAST_COOLDOWN_S:
+            return
+        _last_offline_broadcast[key] = now
+
         try:
             from sqlalchemy import select
 

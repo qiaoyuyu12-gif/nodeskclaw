@@ -1074,10 +1074,47 @@ def _get_plugin_source_dir() -> Path:
     )
 
 
+async def _fix_docker_plugin_permissions(fs: "DockerFS", dir_name: str) -> str | None:
+    """通过 docker exec 将 world-writable 插件复制到 npm global extensions 路径。
+
+    Windows NTFS bind-mount 中的文件在容器内显示为 mode=777，OpenClaw 安全检查
+    拒绝加载此类插件。此函数在容器内直接操作 overlayfs，无需重建镜像或重启容器。
+
+    成功时返回 npm global extensions 目录路径（如 /usr/local/lib/node_modules/openclaw/extensions），
+    调用方应将此路径写入 plugins.load.paths 替换 bind-mount 路径，避免 OpenClaw 因
+    world-writable 路径而报 Config invalid 并 crash。
+    """
+    plugin_src = f"/root/.openclaw/extensions/{dir_name}"
+    fix_cmd = (
+        f'GLOBAL_EXT="$(npm root -g 2>/dev/null)/openclaw/extensions" && '
+        f'mkdir -p "${{GLOBAL_EXT}}" && '
+        f'rm -rf "${{GLOBAL_EXT}}/{dir_name}" && '
+        f'cp -r "{plugin_src}" "${{GLOBAL_EXT}}/" && '
+        f'chmod -R 755 "${{GLOBAL_EXT}}/{dir_name}" && '
+        f'printf "plugin-perm-fixed:%s" "${{GLOBAL_EXT}}"'
+    )
+    try:
+        out = await fs.exec_command(["bash", "-c", fix_cmd])
+        if out.startswith("plugin-perm-fixed:"):
+            global_ext = out.removeprefix("plugin-perm-fixed:").strip()
+            logger.info("Plugin permissions fixed via docker exec: %s -> %s", dir_name, global_ext)
+            return global_ext
+        logger.warning("Plugin permission fix output unexpected: %s", out[:200])
+        return None
+    except Exception as exc:
+        # 权限修复失败不阻断部署主流程，entrypoint 重启时会重试
+        logger.warning("Plugin permission fix skipped (non-fatal): %s", exc)
+        return None
+
+
 async def _deploy_plugin_files_generic(
     fs: RemoteFS, source_dir: Path, spec: ChannelPluginSpec,
-) -> None:
-    """Copy channel plugin files to the Pod and write a content hash marker."""
+) -> str | None:
+    """Copy channel plugin files to the Pod and write a content hash marker.
+
+    返回 npm global extensions 路径（仅 DockerFS 且权限修复成功时），调用方
+    应将此路径写入 plugins.load.paths，替换 bind-mount 路径，避免 OpenClaw crash。
+    """
     target_base = f".openclaw/extensions/{spec.dir_name}"
     await fs.mkdir(f"{target_base}/src")
 
@@ -1093,10 +1130,18 @@ async def _deploy_plugin_files_generic(
     if content_hash:
         await fs.write_text(f"{target_base}/.plugin-hash", content_hash)
 
+    # Windows bind-mount 权限修复：写完文件后通过 docker exec 把插件复制到
+    # npm global extensions 路径（overlayfs，权限可控），避免 mode=777 被 OpenClaw 拒绝加载。
+    # K8s 不受此影响，仅对 DockerFS 执行。返回 npm global 路径供调用方更新 config。
+    from app.services.nfs_mount import DockerFS
+    if isinstance(fs, DockerFS):
+        return await _fix_docker_plugin_permissions(fs, spec.dir_name)
+    return None
 
-async def _deploy_plugin_files(fs: RemoteFS, plugin_source: Path) -> None:
+
+async def _deploy_plugin_files(fs: RemoteFS, plugin_source: Path) -> str | None:
     """Copy nodeskclaw channel plugin files (backward-compat wrapper)."""
-    await _deploy_plugin_files_generic(
+    return await _deploy_plugin_files_generic(
         fs, plugin_source, CHANNEL_PLUGIN_REGISTRY["nodeskclaw"],
     )
 
@@ -1136,10 +1181,13 @@ def _inject_channel_config(
     config: dict,
     instance: Instance,
     workspace_id: str,
+    npm_global_ext: str | None = None,
 ) -> None:
     """Inject nodeskclaw channel config and plugin load path into openclaw.json.
 
     Preserves existing accounts; adds or updates the given workspace_id account.
+    npm_global_ext: 若提供（Docker 实例权限修复成功），使用 npm global 路径替代
+    bind-mount 路径（mode=777 会被 OpenClaw 拒绝并导致 crash）。
     """
     if "channels" not in config:
         config["channels"] = {}
@@ -1160,7 +1208,15 @@ def _inject_channel_config(
     old_relative = f".openclaw/extensions/{CHANNEL_PLUGIN_DIR}"
     if old_relative in paths:
         paths.remove(old_relative)
-    plugin_path = f"/root/.openclaw/extensions/{CHANNEL_PLUGIN_DIR}"
+
+    bind_path = f"/root/.openclaw/extensions/{CHANNEL_PLUGIN_DIR}"
+    if npm_global_ext:
+        # Docker + Windows 权限修复成功：改用 npm global 路径（overlayfs，mode=755）
+        if bind_path in paths:
+            paths.remove(bind_path)
+        plugin_path = f"{npm_global_ext}/{CHANNEL_PLUGIN_DIR}"
+    else:
+        plugin_path = bind_path
     if plugin_path not in paths:
         paths.append(plugin_path)
 
@@ -1198,7 +1254,7 @@ async def deploy_nodeskclaw_channel_plugin(
     plugin_source = _get_plugin_source_dir()
 
     async with remote_fs(instance, db) as fs:
-        await _deploy_plugin_files(fs, plugin_source)
+        npm_global_ext = await _deploy_plugin_files(fs, plugin_source)
 
         try:
             existing = await _read_config_file(fs)
@@ -1209,7 +1265,7 @@ async def deploy_nodeskclaw_channel_plugin(
         if existing is None:
             existing = {}
 
-        _inject_channel_config(existing, instance, workspace_id)
+        _inject_channel_config(existing, instance, workspace_id, npm_global_ext)
         _ensure_gateway_config(existing, instance)
         await _write_config_file(fs, existing)
 
@@ -1353,9 +1409,9 @@ def _get_learning_plugin_source_dir() -> Path:
     )
 
 
-async def _deploy_learning_plugin_files(fs: RemoteFS, plugin_source: Path) -> None:
+async def _deploy_learning_plugin_files(fs: RemoteFS, plugin_source: Path) -> str | None:
     """Copy learning channel plugin files (backward-compat wrapper)."""
-    await _deploy_plugin_files_generic(
+    return await _deploy_plugin_files_generic(
         fs, plugin_source, CHANNEL_PLUGIN_REGISTRY["learning"],
     )
 
@@ -1363,6 +1419,7 @@ async def _deploy_learning_plugin_files(fs: RemoteFS, plugin_source: Path) -> No
 def _inject_learning_channel_config(
     config: dict,
     instance: Instance,
+    npm_global_ext: str | None = None,
 ) -> None:
     if "channels" not in config:
         config["channels"] = {}
@@ -1385,7 +1442,14 @@ def _inject_learning_channel_config(
     old_relative = f".openclaw/extensions/{LEARNING_PLUGIN_DIR}"
     if old_relative in paths:
         paths.remove(old_relative)
-    plugin_path = f"/root/.openclaw/extensions/{LEARNING_PLUGIN_DIR}"
+
+    bind_path = f"/root/.openclaw/extensions/{LEARNING_PLUGIN_DIR}"
+    if npm_global_ext:
+        if bind_path in paths:
+            paths.remove(bind_path)
+        plugin_path = f"{npm_global_ext}/{LEARNING_PLUGIN_DIR}"
+    else:
+        plugin_path = bind_path
     if plugin_path not in paths:
         paths.append(plugin_path)
 
@@ -1403,7 +1467,7 @@ async def deploy_learning_channel_plugin(
         return
 
     async with remote_fs(instance, db) as fs:
-        await _deploy_learning_plugin_files(fs, plugin_source)
+        npm_global_ext = await _deploy_learning_plugin_files(fs, plugin_source)
 
         try:
             existing = await _read_config_file(fs)
@@ -1414,7 +1478,7 @@ async def deploy_learning_channel_plugin(
         if existing is None:
             existing = {}
 
-        _inject_learning_channel_config(existing, instance)
+        _inject_learning_channel_config(existing, instance, npm_global_ext)
         await _write_config_file(fs, existing)
 
     logger.info("已部署 learning channel plugin: instance=%s", instance.name)
@@ -1448,21 +1512,28 @@ def _get_dingtalk_plugin_source_dir() -> Path:
     )
 
 
-async def _deploy_dingtalk_plugin_files(fs: RemoteFS, plugin_source: Path) -> None:
+async def _deploy_dingtalk_plugin_files(fs: RemoteFS, plugin_source: Path) -> str | None:
     """Copy dingtalk channel plugin files (backward-compat wrapper)."""
-    await _deploy_plugin_files_generic(
+    return await _deploy_plugin_files_generic(
         fs, plugin_source, CHANNEL_PLUGIN_REGISTRY["dingtalk"],
     )
 
 
-def _inject_dingtalk_plugin_path(config: dict) -> None:
+def _inject_dingtalk_plugin_path(config: dict, npm_global_ext: str | None = None) -> None:
     plugins = config.setdefault("plugins", {})
     load = plugins.setdefault("load", {})
     paths = load.setdefault("paths", [])
     old_relative = f".openclaw/extensions/{DINGTALK_PLUGIN_DIR}"
     if old_relative in paths:
         paths.remove(old_relative)
-    plugin_path = f"/root/.openclaw/extensions/{DINGTALK_PLUGIN_DIR}"
+
+    bind_path = f"/root/.openclaw/extensions/{DINGTALK_PLUGIN_DIR}"
+    if npm_global_ext:
+        if bind_path in paths:
+            paths.remove(bind_path)
+        plugin_path = f"{npm_global_ext}/{DINGTALK_PLUGIN_DIR}"
+    else:
+        plugin_path = bind_path
     if plugin_path not in paths:
         paths.append(plugin_path)
 
@@ -1480,7 +1551,7 @@ async def deploy_dingtalk_channel_plugin(
         return
 
     async with remote_fs(instance, db) as fs:
-        await _deploy_dingtalk_plugin_files(fs, plugin_source)
+        npm_global_ext = await _deploy_dingtalk_plugin_files(fs, plugin_source)
 
         try:
             existing = await _read_config_file(fs)
@@ -1491,7 +1562,7 @@ async def deploy_dingtalk_channel_plugin(
         if existing is None:
             existing = {}
 
-        _inject_dingtalk_plugin_path(existing)
+        _inject_dingtalk_plugin_path(existing, npm_global_ext)
         await _write_config_file(fs, existing)
 
     logger.info("已部署 dingtalk channel plugin: instance=%s", instance.name)

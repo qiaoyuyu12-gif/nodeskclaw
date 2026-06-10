@@ -31,7 +31,7 @@ from app.models.organization import Organization
 from app.models.user import User
 
 # 与 nodeskclaw-backend/tests/conftest.py 使用同一测试库 URL
-TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw@localhost:5432/nodeskclaw_test"
+TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw123@localhost:5432/nodeskclaw_rbac_test"
 
 # 需要在每个用例前后清理的表（CASCADE 自动处理外键引用顺序）
 # instances 先于 clusters / organizations，防止外键约束报错

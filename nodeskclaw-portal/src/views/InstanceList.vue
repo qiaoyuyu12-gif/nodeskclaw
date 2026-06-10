@@ -2,14 +2,14 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Plus, Loader2, Server, RefreshCw, Package, Dna, X, Container } from 'lucide-vue-next'
+import { Plus, Loader2, Server, RefreshCw, Package, Dna, X } from 'lucide-vue-next'
 import api from '@/services/api'
 import { resolveApiErrorMessage } from '@/i18n/error'
 import { useGeneStore } from '@/stores/gene'
 import { useClusterStore } from '@/stores/cluster'
 import { useEdition } from '@/composables/useFeature'
-import { getStatusDisplay } from '@/utils/instanceStatus'
 import BaseTooltip from '@/components/shared/BaseTooltip.vue'
+import InstanceCard from '@/components/instance/InstanceCard.vue'
 import type { TemplateInfo } from '@/stores/gene'
 
 interface InstanceInfo {
@@ -32,21 +32,8 @@ interface InstanceInfo {
   compute_provider?: string
 }
 
-const roleLabels: Record<string, string> = {
-  admin: 'instanceMembers.roleAdmin',
-  editor: 'instanceMembers.roleEditor',
-  user: 'instanceMembers.roleUser',
-  viewer: 'instanceMembers.roleViewer',
-}
-
-function getRoleLabel(role: string | null): string {
-  if (!role) return '-'
-  const key = roleLabels[role]
-  return key ? t(key) : role
-}
-
 const router = useRouter()
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const geneStore = useGeneStore()
 const clusterStore = useClusterStore()
 const { isEE } = useEdition()
@@ -74,15 +61,6 @@ function selectTemplate(tpl: TemplateInfo) {
   router.push(`/instances/create?template_id=${tpl.id}`)
 }
 
-function getStatus(inst: InstanceInfo) {
-  return getStatusDisplay(inst.display_status ?? '')
-}
-
-function getStatusLabel(inst: InstanceInfo) {
-  const d = getStatusDisplay(inst.display_status ?? '')
-  return t(`displayStatus.${d.key}`)
-}
-
 const sortedInstances = computed(() =>
   [...instances.value].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
@@ -100,18 +78,6 @@ async function fetchInstances() {
   } finally {
     loading.value = false
   }
-}
-
-function formatTime(iso: string) {
-  const d = new Date(iso)
-  const currentLocale = locale.value === 'zh-CN' ? 'zh-CN' : 'en-US'
-  return d.toLocaleDateString(currentLocale, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 onMounted(() => {
@@ -265,55 +231,15 @@ onMounted(() => {
       </button>
     </div>
 
-    <!-- Instance table -->
-    <div v-else class="rounded-xl border border-border overflow-hidden">
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="border-b border-border bg-card/60">
-            <th class="text-left px-4 py-3 font-medium text-muted-foreground">{{ t('instanceList.tableName') }}</th>
-            <th class="text-left px-4 py-3 font-medium text-muted-foreground">{{ t('instanceList.tableStatus') }}</th>
-            <th class="text-left px-4 py-3 font-medium text-muted-foreground">{{ t('instanceList.tableImageVersion') }}</th>
-            <th class="text-left px-4 py-3 font-medium text-muted-foreground">{{ t('instanceList.tableCreatedAt') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="inst in sortedInstances"
-            :key="inst.id"
-            class="border-b border-border last:border-b-0 hover:bg-accent/50 cursor-pointer transition-colors"
-            @click="router.push(`/instances/${inst.id}`)"
-          >
-            <td class="px-4 py-3 font-medium">
-              <span class="inline-flex items-center gap-1.5">
-                {{ inst.name }}
-                <span
-                  v-if="inst.compute_provider === 'docker'"
-                  class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-500/15 text-sky-400"
-                >
-                  <Container class="w-3 h-3" />
-                  Docker
-                </span>
-              </span>
-            </td>
-            <td class="px-4 py-3">
-              <span class="inline-flex items-center gap-1.5">
-                <span
-                  class="w-2 h-2 rounded-full"
-                  :class="[
-                    getStatus(inst).bgColor,
-                    getStatus(inst).pulse ? 'animate-pulse' : '',
-                  ]"
-                />
-                <span :class="getStatus(inst).color">
-                  {{ getStatusLabel(inst) }}
-                </span>
-              </span>
-            </td>
-            <td class="px-4 py-3 text-muted-foreground font-mono text-xs">{{ inst.image_version }}</td>
-            <td class="px-4 py-3 text-muted-foreground">{{ formatTime(inst.created_at) }}</td>
-          </tr>
-        </tbody>
-      </table>
+    <!-- AI 员工卡片网格 -->
+    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <InstanceCard
+        v-for="inst in sortedInstances"
+        :key="inst.id"
+        :instance="inst"
+        @chat="router.push(`/instances/${inst.id}/chat`)"
+        @detail="router.push(`/instances/${inst.id}`)"
+      />
     </div>
   </div>
 </template>

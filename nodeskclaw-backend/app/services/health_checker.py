@@ -21,9 +21,11 @@ async def _check_docker_health() -> tuple[bool, str]:
     Returns (healthy, detail) where detail is the daemon version string on
     success or a short error message on failure.
     """
+    import subprocess
+    args = ["docker", "info", "--format", "{{.ServerVersion}}"]
     try:
         proc = await asyncio.create_subprocess_exec(
-            "docker", "info", "--format", "{{.ServerVersion}}",
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -38,8 +40,23 @@ async def _check_docker_health() -> tuple[bool, str]:
         return False, "Docker CLI 未安装"
     except asyncio.TimeoutError:
         return False, "docker info 超时"
+    except NotImplementedError:
+        # Windows SelectorEventLoop 不支持 asyncio subprocess，回退同步路径
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run, args,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+            )
+            if result.returncode == 0:
+                return True, result.stdout.decode().strip()
+            err = result.stderr.decode().strip()
+            if "permission denied" in err.lower() or "cannot connect" in err.lower():
+                err = "无法连接 Docker daemon（socket 不可访问）"
+            return False, err[:200] or "docker info 失败"
+        except Exception as e:
+            return False, str(e)[:200] or "Docker 健康检查失败"
     except Exception as e:
-        return False, str(e)[:200]
+        return False, str(e)[:200] or "Docker 健康检查失败"
 
 
 class HealthChecker:
