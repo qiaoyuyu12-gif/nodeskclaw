@@ -13,6 +13,7 @@ from app.models.org_membership import OrgMembership, OrgRole
 from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.organization import MemberInfo, OrgCreate, OrgInfo, OrgUpdate
+from app.services.rbac_sync import grant_role, replace_role, revoke_role
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,12 @@ async def create_org(body: OrgCreate, creator: User, db: AsyncSession) -> OrgInf
     # 创建者自动成为组织管理员
     membership = OrgMembership(user_id=creator.id, org_id=org.id, role=OrgRole.admin)
     db.add(membership)
+    # RBAC 双写：org_admin grant 到 subject_roles
+    await grant_role(
+        db, subject_type="user", subject_id=creator.id,
+        role_key="org_admin", scope_type="org", scope_id=org.id,
+        granted_by=creator.id, granted_reason="org_create",
+    )
 
     # 如果创建者还没有当前组织，自动切换
     if creator.current_org_id is None:
@@ -109,6 +116,12 @@ async def _ensure_membership(
         db.add(OrgMembership(
             user_id=user.id, org_id=org.id, role=role, job_title=job_title,
         ))
+        # RBAC 双写：org_{role} grant 到 subject_roles
+        await grant_role(
+            db, subject_type="user", subject_id=user.id,
+            role_key=f"org_{role}", scope_type="org", scope_id=org.id,
+            granted_reason="ensure_membership",
+        )
     user.current_org_id = org.id
     await db.commit()
     await db.refresh(user)
@@ -215,6 +228,12 @@ async def add_member(org_id: str, user_id: str, role: str, db: AsyncSession) -> 
 
     membership = OrgMembership(user_id=user_id, org_id=org_id, role=role)
     db.add(membership)
+    # RBAC 双写：org_{role} grant 到 subject_roles
+    await grant_role(
+        db, subject_type="user", subject_id=user_id,
+        role_key=f"org_{role}", scope_type="org", scope_id=org_id,
+        granted_reason="add_member",
+    )
 
     # 如果用户还没有当前组织，自动设置
     if user.current_org_id is None:

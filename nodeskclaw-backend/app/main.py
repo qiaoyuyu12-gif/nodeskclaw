@@ -945,14 +945,24 @@ if feature_gate.is_ee:
         app.include_router(ee_api_router, prefix="/api/v1")
         app.include_router(ee_admin_router, prefix="/api/v1/admin")
 
-        from ee.backend.hooks.topology_audit import register_hooks as _register_audit_hooks
-        _register_audit_hooks()
+        # 分离每个 hook import，单独处理异常
+        try:
+            from ee.backend.hooks.topology_audit import register_hooks as _register_audit_hooks
+            _register_audit_hooks()
+        except ImportError as e:
+            logging.getLogger(__name__).warning("topology_audit hook not available: %s", e)
 
-        from ee.backend.hooks.operation_audit import register_hooks as _register_op_audit_hooks
-        _register_op_audit_hooks()
+        try:
+            from ee.backend.hooks.operation_audit import register_hooks as _register_op_audit_hooks
+            _register_op_audit_hooks()
+        except ImportError as e:
+            logging.getLogger(__name__).warning("operation_audit hook not available: %s", e)
 
-        from ee.backend.middleware.audit_middleware import AuditMiddleware
-        app.add_middleware(AuditMiddleware)
+        try:
+            from ee.backend.middleware.audit_middleware import AuditMiddleware
+            app.add_middleware(AuditMiddleware)
+        except ImportError as e:
+            logging.getLogger(__name__).warning("audit_middleware not available: %s", e)
 
         try:
             from ee.backend.hooks.member_hook import EEMemberHookProvider
@@ -961,7 +971,9 @@ if feature_gate.is_ee:
         except ImportError:
             pass
 
-        logging.getLogger(__name__).info("EE 模块已加载（含操作审计）")
+        logging.getLogger(__name__).info("EE 模块已加载（部分可用）")
+    except ImportError as e:
+        logging.getLogger(__name__).warning("主 EE 模块缺失: %s，以 CE 模式运行", e)
     except Exception:
         logging.getLogger(__name__).exception("EE 模块加载失败，无法以 CE 模式降级运行")
         raise
