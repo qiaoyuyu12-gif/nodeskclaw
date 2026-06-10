@@ -45,13 +45,13 @@ class FeatureGate:
             self._edition = "ee" if _EE_DIR.is_dir() else "ce"
 
         if _FEATURES_YAML.exists():
-            with open(_FEATURES_YAML) as f:
+            with open(_FEATURES_YAML, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             ee_features = data.get("edition_features", {}).get("ee", [])
             self._all_features.extend(ee_features)
 
         if self._edition == "ee" and _EE_FEATURES_YAML.exists():
-            with open(_EE_FEATURES_YAML) as f:
+            with open(_EE_FEATURES_YAML, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             extra = data.get("edition_features", {}).get("ee", [])
             existing_ids = {f["id"] for f in self._all_features}
