@@ -1,6 +1,8 @@
 """KnowledgeBase model for RAGFlow integration."""
 
-from sqlalchemy import ForeignKey, String, Text
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import BaseModel
@@ -20,3 +22,8 @@ class KnowledgeBase(BaseModel):
     source_type: Mapped[str] = mapped_column(
         String(32), nullable=False, default="doc", server_default="doc"
     )
+    # 由 /sync 端点写入，标记 RAGFlow 连接是否可达
+    is_reachable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

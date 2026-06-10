@@ -5,7 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel as PydanticBase
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +21,8 @@ from app.schemas.backup import CloneRequest, RestoreRequest
 from app.schemas.common import ApiResponse
 from app.schemas.deploy import DeployRecordInfo
 from app.schemas.instance import InstanceDetail, InstanceInfo, UpdateConfigRequest
-from app.services import instance_service
+from app.schemas.skill import InstanceKnowledgeBaseResponse
+from app.services import instance_service, instance_kb_service
 from app.services import instance_member_service
 from app.services.runtime.registries.compute_registry import require_k8s_client
 
@@ -124,7 +125,7 @@ async def get_instance(
     return ApiResponse(data=data)
 
 
-class ScaleBody(BaseModel):
+class ScaleBody(PydanticBase):
     replicas: int
 
 
@@ -216,7 +217,7 @@ async def apply_config(
     return ApiResponse(data=data)
 
 
-class RollbackBody(BaseModel):
+class RollbackBody(PydanticBase):
     target_revision: int
 
 
@@ -451,3 +452,70 @@ async def _cascade_soft_delete_members(instance_id: str, db: AsyncSession) -> No
         .values(deleted_at=func.now())
     )
     await db.commit()
+
+
+# ── 外挂知识库端点 ──────────────────────────────────────────────
+
+
+class AttachKbBody(PydanticBase):
+    kb_id: str
+
+
+@router.get(
+    "/{instance_id}/knowledge-bases",
+    response_model=ApiResponse[list[InstanceKnowledgeBaseResponse]],
+)
+async def list_instance_kbs(
+    instance_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """列出 AI 员工已绑定的外挂知识库。"""
+    await instance_member_service.check_instance_access(
+        instance_id, current_user, InstanceRole.viewer, db
+    )
+    bindings = await instance_kb_service.list_instance_kbs(instance_id=instance_id, db=db)
+    return ApiResponse(data=[InstanceKnowledgeBaseResponse.model_validate(b) for b in bindings])
+
+
+@router.post(
+    "/{instance_id}/knowledge-bases",
+    response_model=ApiResponse[InstanceKnowledgeBaseResponse],
+)
+async def attach_kb_to_instance(
+    instance_id: str,
+    body: AttachKbBody,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """将已连接的知识库绑定到 AI 员工。"""
+    await instance_member_service.check_instance_access(
+        instance_id, current_user, InstanceRole.admin, db
+    )
+    org_id = current_user.current_org_id
+    binding = await instance_kb_service.attach_kb(
+        instance_id=instance_id,
+        kb_id=body.kb_id,
+        org_id=org_id,
+        user_id=current_user.id,
+        db=db,
+    )
+    return ApiResponse(data=InstanceKnowledgeBaseResponse.model_validate(binding))
+
+
+@router.delete(
+    "/{instance_id}/knowledge-bases/{kb_id}",
+    response_model=ApiResponse[None],
+)
+async def detach_kb_from_instance(
+    instance_id: str,
+    kb_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """解除 AI 员工与知识库的绑定。"""
+    await instance_member_service.check_instance_access(
+        instance_id, current_user, InstanceRole.admin, db
+    )
+    await instance_kb_service.detach_kb(instance_id=instance_id, kb_id=kb_id, db=db)
+    return ApiResponse(data=None)
