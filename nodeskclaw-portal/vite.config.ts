@@ -40,6 +40,7 @@ export default defineConfig({
       : [],
   },
   server: {
+    host: true,
     port: 4517,
     fs: {
       allow: ['.', ...(hasEE ? [eePortalDir] : [])],
