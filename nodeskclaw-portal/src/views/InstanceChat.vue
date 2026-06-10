@@ -705,9 +705,6 @@ onUnmounted(() => {})
                 <Loader2 v-else class="w-4 h-4 animate-spin" />
               </button>
             </div>
-            <p class="text-[11px] text-muted-foreground mt-1.5 ml-1">
-              {{ t('instanceChat.workspaceHint', { name: workspace?.name }) }}
-            </p>
           </div>
         </div>
     </div>
