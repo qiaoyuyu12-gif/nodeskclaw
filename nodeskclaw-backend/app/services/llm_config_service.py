@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.nfs_mount import DockerFS
 import hashlib
 import json
 import logging
@@ -1664,7 +1668,8 @@ async def _check_plugin_stale(
         return None
 
     try:
-        remote_hash = (await fs.read_text(f"{target_base}/.plugin-hash")).strip()
+        content = await fs.read_text(f"{target_base}/.plugin-hash")
+        remote_hash = content.strip() if content is not None else ""
         return remote_hash != expected_hash
     except Exception:
         pass
