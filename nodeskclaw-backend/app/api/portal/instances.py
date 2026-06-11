@@ -150,7 +150,7 @@ async def rename_instance(
         raise HTTPException(status_code=422, detail="名称不能为空")
 
     result = await db.execute(
-        select(Instance).where(Instance.id == instance_id, not_deleted())
+        select(Instance).where(Instance.id == instance_id, not_deleted(Instance))
     )
     instance = result.scalar_one_or_none()
     if not instance:

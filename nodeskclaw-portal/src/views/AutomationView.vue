@@ -1,16 +1,17 @@
 <!--
   自动化任务管理页面
-  - 展示「已安排」和「已完成」任务列表
-  - 支持「添加自动化任务」对话框
-  - 执行频率：每天 / 按间隔 / 单次
-  - AI 员工字段为必选，从 GET /api/v1/instances 拉取
+  - 任务列表从 GET /api/v1/automation-tasks 加载
+  - 增删改均调用对应接口持久化
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { Plus, Zap, Clock, CheckCircle2, Circle, Trash2, X, ChevronDown, Bot } from 'lucide-vue-next'
+import { Plus, Zap, Clock, CheckCircle2, Circle, Trash2, X, ChevronDown, Bot, Loader2 } from 'lucide-vue-next'
 import api from '@/services/api'
+import { useToast } from '@/composables/useToast'
 
-// ——— 类型定义 ———
+const toast = useToast()
+
+// ——— 类型 ———
 
 type FrequencyType = 'daily' | 'interval' | 'once'
 type WeekDay = 0 | 1 | 2 | 3 | 4 | 5 | 6
@@ -24,22 +25,22 @@ interface InstanceInfo {
 
 interface AutomationTask {
   id: string
+  instance_id: string
+  instance_name: string
   name: string
-  instanceId: string
-  instanceName: string
   prompt: string
   frequency: FrequencyType
-  time?: string
-  intervalMinutes?: number
-  weekDays?: WeekDay[]
-  startDate?: string
-  endDate?: string
-  status: 'scheduled' | 'completed'
-  nextRunLabel?: string
-  lastRunLabel?: string
+  exec_time?: string | null
+  interval_minutes?: number | null
+  week_days?: WeekDay[] | null
+  start_date?: string | null
+  end_date?: string | null
+  push_notification: boolean
+  status: string         // active / paused
+  created_at: string
 }
 
-// ——— AI 员工列表 ———
+// ——— 实例列表 ———
 
 const instances = ref<InstanceInfo[]>([])
 const instancesLoading = ref(false)
@@ -54,21 +55,37 @@ async function fetchInstances() {
   }
 }
 
-onMounted(fetchInstances)
-
 // ——— 任务列表 ———
 
 const tasks = ref<AutomationTask[]>([])
+const tasksLoading = ref(false)
 
-const scheduledTasks = computed(() => tasks.value.filter((t) => t.status === 'scheduled'))
-const completedTasks = computed(() => tasks.value.filter((t) => t.status === 'completed'))
+const scheduledTasks = computed(() => tasks.value.filter((t) => t.status === 'active'))
+const completedTasks = computed(() => tasks.value.filter((t) => t.status !== 'active'))
+
+async function fetchTasks() {
+  tasksLoading.value = true
+  try {
+    const { data } = await api.get('/automation-tasks')
+    tasks.value = data.data ?? []
+  } catch {
+    toast.error('加载自动化任务失败')
+  } finally {
+    tasksLoading.value = false
+  }
+}
+
+onMounted(() => {
+  fetchInstances()
+  fetchTasks()
+})
 
 // ——— 弹窗 & 表单 ———
 
 const showDialog = ref(false)
-/** null = 新增模式；非 null = 编辑模式，值为被编辑任务的 id */
 const editingTaskId = ref<string | null>(null)
 const isEditMode = computed(() => editingTaskId.value !== null)
+const submitting = ref(false)
 
 const form = ref({
   name: '',
@@ -83,16 +100,13 @@ const form = ref({
   pushNotification: false,
 })
 
-/** AI 员工下拉展开状态 */
 const instanceDropdownOpen = ref(false)
 const instanceDropdownRef = ref<HTMLElement>()
 
-/** 当前选中的实例对象 */
 const selectedInstance = computed(() =>
   instances.value.find((i) => i.id === form.value.instanceId) ?? null,
 )
 
-/** 表单是否可提交 */
 const canSubmit = computed(
   () => form.value.name.trim() !== '' && form.value.instanceId !== '' && form.value.prompt.trim() !== '',
 )
@@ -102,7 +116,6 @@ function selectInstance(instance: InstanceInfo) {
   instanceDropdownOpen.value = false
 }
 
-/** 点击外部关闭下拉 */
 function onDocumentClick(e: MouseEvent) {
   if (
     instanceDropdownOpen.value &&
@@ -153,20 +166,19 @@ function openDialog() {
   showDialog.value = true
 }
 
-/** 点击任务行：进入编辑模式，将已有数据填入表单 */
 function openEditDialog(task: AutomationTask) {
   editingTaskId.value = task.id
   form.value = {
     name: task.name,
-    instanceId: task.instanceId,
+    instanceId: task.instance_id,
     prompt: task.prompt,
     frequency: task.frequency,
-    time: task.time ?? '09:00',
-    intervalMinutes: task.intervalMinutes ?? 60,
-    weekDays: task.weekDays ? [...task.weekDays] : [0, 1, 2, 3, 4],
-    startDate: task.startDate ?? '',
-    endDate: task.endDate ?? '',
-    pushNotification: false,
+    time: task.exec_time ?? '09:00',
+    intervalMinutes: task.interval_minutes ?? 60,
+    weekDays: task.week_days ? ([...task.week_days] as WeekDay[]) : [0, 1, 2, 3, 4],
+    startDate: task.start_date ?? '',
+    endDate: task.end_date ?? '',
+    pushNotification: task.push_notification,
   }
   instanceDropdownOpen.value = false
   showDialog.value = true
@@ -177,57 +189,51 @@ function closeDialog() {
   editingTaskId.value = null
 }
 
-function addTask() {
-  if (!canSubmit.value) return
-
-  tasks.value.unshift({
-    id: Date.now().toString(),
+/** 构建请求 body */
+function buildPayload() {
+  return {
+    instance_id: form.value.instanceId,
     name: form.value.name.trim(),
-    instanceId: form.value.instanceId,
-    instanceName: selectedInstance.value?.name ?? '',
     prompt: form.value.prompt.trim(),
     frequency: form.value.frequency,
-    time: form.value.time,
-    intervalMinutes: form.value.intervalMinutes,
-    weekDays: [...form.value.weekDays],
-    startDate: form.value.startDate || undefined,
-    endDate: form.value.endDate || undefined,
-    status: 'scheduled',
-    nextRunLabel: '稍后开始',
-  })
-  closeDialog()
+    exec_time: form.value.time || null,
+    interval_minutes: form.value.frequency === 'interval' ? form.value.intervalMinutes : null,
+    week_days: form.value.frequency === 'daily' ? form.value.weekDays : null,
+    start_date: form.value.startDate || null,
+    end_date: form.value.endDate || null,
+    push_notification: form.value.pushNotification,
+  }
 }
 
-/** 保存编辑中的任务 */
-function saveTask() {
-  if (!canSubmit.value || !editingTaskId.value) return
-
-  tasks.value = tasks.value.map((t) =>
-    t.id === editingTaskId.value
-      ? {
-          ...t,
-          name: form.value.name.trim(),
-          instanceId: form.value.instanceId,
-          instanceName: selectedInstance.value?.name ?? t.instanceName,
-          prompt: form.value.prompt.trim(),
-          frequency: form.value.frequency,
-          time: form.value.time,
-          intervalMinutes: form.value.intervalMinutes,
-          weekDays: [...form.value.weekDays],
-          startDate: form.value.startDate || undefined,
-          endDate: form.value.endDate || undefined,
-        }
-      : t,
-  )
-  closeDialog()
+async function submitForm() {
+  if (!canSubmit.value || submitting.value) return
+  submitting.value = true
+  try {
+    if (isEditMode.value) {
+      const { data } = await api.patch(`/automation-tasks/${editingTaskId.value}`, buildPayload())
+      const updated: AutomationTask = data.data
+      tasks.value = tasks.value.map((t) => (t.id === updated.id ? updated : t))
+      toast.success('任务已更新')
+    } else {
+      const { data } = await api.post('/automation-tasks', buildPayload())
+      tasks.value = [data.data, ...tasks.value]
+      toast.success('任务已创建')
+    }
+    closeDialog()
+  } catch (e: any) {
+    toast.error(e?.response?.data?.message || '操作失败')
+  } finally {
+    submitting.value = false
+  }
 }
 
-function submitForm() {
-  isEditMode.value ? saveTask() : addTask()
-}
-
-function deleteTask(id: string) {
-  tasks.value = tasks.value.filter((t) => t.id !== id)
+async function deleteTask(id: string) {
+  try {
+    await api.delete(`/automation-tasks/${id}`)
+    tasks.value = tasks.value.filter((t) => t.id !== id)
+  } catch (e: any) {
+    toast.error(e?.response?.data?.message || '删除失败')
+  }
 }
 </script>
 
@@ -244,7 +250,7 @@ function deleteTask(id: string) {
       </div>
       <div class="flex items-center gap-2">
         <button
-          class="px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted/50 transition-colors opacity-50 cursor-not-allowed"
+          class="px-3 py-1.5 text-sm border border-border rounded-lg opacity-50 cursor-not-allowed"
           disabled
         >
           从模板添加
@@ -259,68 +265,73 @@ function deleteTask(id: string) {
       </div>
     </div>
 
-    <!-- 已安排 -->
-    <div class="space-y-2">
-      <h2 class="text-sm font-medium text-muted-foreground">已安排</h2>
-      <div
-        v-if="scheduledTasks.length === 0"
-        class="text-center py-10 text-sm text-muted-foreground border border-dashed border-border rounded-lg"
-      >
-        暂无已安排的任务
-      </div>
-      <div
-        v-for="task in scheduledTasks"
-        :key="task.id"
-        class="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/20 transition-colors group cursor-pointer"
-        @click="openEditDialog(task)"
-      >
-        <Circle class="w-4 h-4 text-muted-foreground shrink-0" />
-        <div class="flex-1 min-w-0">
-          <span class="text-sm font-medium truncate block">{{ task.name }}</span>
-          <span class="text-xs text-muted-foreground truncate block">{{ task.instanceName }}</span>
-        </div>
-        <span class="text-xs text-muted-foreground shrink-0">{{ task.nextRunLabel }}</span>
-        <button
-          class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 hover:text-destructive"
-          @click.stop="deleteTask(task.id)"
-        >
-          <Trash2 class="w-3.5 h-3.5" />
-        </button>
-      </div>
+    <!-- 加载中 -->
+    <div v-if="tasksLoading" class="flex items-center justify-center py-16">
+      <Loader2 class="w-5 h-5 animate-spin text-muted-foreground" />
     </div>
 
-    <!-- 已完成 -->
-    <div class="space-y-2">
-      <h2 class="text-sm font-medium text-muted-foreground">已完成</h2>
-      <div
-        v-if="completedTasks.length === 0"
-        class="text-center py-10 text-sm text-muted-foreground border border-dashed border-border rounded-lg"
-      >
-        暂无已完成的任务
-      </div>
-      <div
-        v-for="task in completedTasks"
-        :key="task.id"
-        class="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/20 transition-colors group cursor-pointer"
-        @click="openEditDialog(task)"
-      >
-        <CheckCircle2 class="w-4 h-4 text-green-500 shrink-0" />
-        <div class="flex-1 min-w-0">
-          <span class="text-sm font-medium truncate block">{{ task.name }}</span>
-          <span class="text-xs text-muted-foreground truncate block">{{ task.instanceName }}</span>
-        </div>
-        <span class="text-xs text-muted-foreground shrink-0">{{ task.lastRunLabel }}</span>
-        <button
-          class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 hover:text-destructive"
-          @click.stop="deleteTask(task.id)"
+    <template v-else>
+      <!-- 已安排（active） -->
+      <div class="space-y-2">
+        <h2 class="text-sm font-medium text-muted-foreground">已安排</h2>
+        <div
+          v-if="scheduledTasks.length === 0"
+          class="text-center py-10 text-sm text-muted-foreground border border-dashed border-border rounded-lg"
         >
-          <Trash2 class="w-3.5 h-3.5" />
-        </button>
+          暂无已安排的任务
+        </div>
+        <div
+          v-for="task in scheduledTasks"
+          :key="task.id"
+          class="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/20 transition-colors group cursor-pointer"
+          @click="openEditDialog(task)"
+        >
+          <Circle class="w-4 h-4 text-muted-foreground shrink-0" />
+          <div class="flex-1 min-w-0">
+            <span class="text-sm font-medium truncate block">{{ task.name }}</span>
+            <span class="text-xs text-muted-foreground truncate block">{{ task.instance_name }}</span>
+          </div>
+          <button
+            class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 hover:text-destructive"
+            @click.stop="deleteTask(task.id)"
+          >
+            <Trash2 class="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
-    </div>
+
+      <!-- 已完成 / 暂停 -->
+      <div class="space-y-2">
+        <h2 class="text-sm font-medium text-muted-foreground">已完成</h2>
+        <div
+          v-if="completedTasks.length === 0"
+          class="text-center py-10 text-sm text-muted-foreground border border-dashed border-border rounded-lg"
+        >
+          暂无已完成的任务
+        </div>
+        <div
+          v-for="task in completedTasks"
+          :key="task.id"
+          class="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/20 transition-colors group cursor-pointer"
+          @click="openEditDialog(task)"
+        >
+          <CheckCircle2 class="w-4 h-4 text-green-500 shrink-0" />
+          <div class="flex-1 min-w-0">
+            <span class="text-sm font-medium truncate block">{{ task.name }}</span>
+            <span class="text-xs text-muted-foreground truncate block">{{ task.instance_name }}</span>
+          </div>
+          <button
+            class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 hover:text-destructive"
+            @click.stop="deleteTask(task.id)"
+          >
+            <Trash2 class="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    </template>
   </div>
 
-  <!-- 添加自动化任务对话框 -->
+  <!-- 添加/编辑自动化任务对话框 -->
   <Teleport to="body">
     <Transition
       enter-active-class="transition duration-150 ease-out"
@@ -330,24 +341,14 @@ function deleteTask(id: string) {
       leave-from-class="opacity-100"
       leave-to-class="opacity-0"
     >
-      <div
-        v-if="showDialog"
-        class="fixed inset-0 z-50 flex items-center justify-center"
-      >
-        <!-- 遮罩 -->
+      <div v-if="showDialog" class="fixed inset-0 z-50 flex items-center justify-center">
         <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" @click="closeDialog" />
 
-        <!-- 对话框主体 -->
-        <div
-          class="relative z-10 w-full max-w-xl mx-4 bg-muted/95 backdrop-blur-sm border border-border rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto"
-        >
+        <div class="relative z-10 w-full max-w-xl mx-4 bg-muted/95 backdrop-blur-sm border border-border rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto">
           <!-- 头部 -->
           <div class="flex items-center justify-between px-6 pt-6 pb-2">
             <h2 class="text-lg font-semibold">{{ isEditMode ? '编辑自动化任务' : '添加自动化任务' }}</h2>
-            <button
-              class="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
-              @click="closeDialog"
-            >
+            <button class="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground" @click="closeDialog">
               <X class="w-4 h-4" />
             </button>
           </div>
@@ -367,48 +368,27 @@ function deleteTask(id: string) {
             <!-- AI 员工（必选） -->
             <div class="space-y-1.5" ref="instanceDropdownRef">
               <label class="text-sm font-medium">AI 员工</label>
-              <!-- 触发器 -->
               <button
                 type="button"
                 :class="[
                   'w-full px-3 py-2.5 bg-background border rounded-lg text-sm flex items-center gap-2 transition-colors',
-                  instanceDropdownOpen
-                    ? 'border-primary/50 ring-2 ring-primary/30'
-                    : 'border-border hover:border-primary/40',
+                  instanceDropdownOpen ? 'border-primary/50 ring-2 ring-primary/30' : 'border-border hover:border-primary/40',
                 ]"
                 @click="instanceDropdownOpen = !instanceDropdownOpen"
               >
                 <Bot class="w-4 h-4 text-muted-foreground shrink-0" />
-                <span
-                  :class="selectedInstance ? 'text-foreground flex-1 text-left' : 'text-muted-foreground flex-1 text-left'"
-                >
+                <span :class="selectedInstance ? 'text-foreground flex-1 text-left' : 'text-muted-foreground flex-1 text-left'">
                   {{ selectedInstance ? selectedInstance.name : '选择 AI 员工' }}
                 </span>
-                <ChevronDown
-                  :class="['w-4 h-4 text-muted-foreground transition-transform', instanceDropdownOpen && 'rotate-180']"
-                />
+                <ChevronDown :class="['w-4 h-4 text-muted-foreground transition-transform', instanceDropdownOpen && 'rotate-180']" />
               </button>
 
-              <!-- 下拉选项 -->
               <div
                 v-if="instanceDropdownOpen"
                 class="absolute z-20 w-full max-w-[calc(100%-3rem)] bg-background border border-border rounded-xl shadow-xl overflow-hidden"
               >
-                <!-- 加载中 -->
-                <div
-                  v-if="instancesLoading"
-                  class="px-4 py-3 text-sm text-muted-foreground text-center"
-                >
-                  加载中...
-                </div>
-                <!-- 空列表 -->
-                <div
-                  v-else-if="instances.length === 0"
-                  class="px-4 py-3 text-sm text-muted-foreground text-center"
-                >
-                  暂无可用的 AI 员工
-                </div>
-                <!-- 实例列表 -->
+                <div v-if="instancesLoading" class="px-4 py-3 text-sm text-muted-foreground text-center">加载中...</div>
+                <div v-else-if="instances.length === 0" class="px-4 py-3 text-sm text-muted-foreground text-center">暂无可用的 AI 员工</div>
                 <div v-else class="max-h-52 overflow-y-auto py-1">
                   <button
                     v-for="inst in instances"
@@ -416,23 +396,13 @@ function deleteTask(id: string) {
                     type="button"
                     :class="[
                       'w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors',
-                      form.instanceId === inst.id
-                        ? 'bg-primary/10 text-primary'
-                        : 'hover:bg-muted/60 text-foreground',
+                      form.instanceId === inst.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted/60 text-foreground',
                     ]"
                     @click="selectInstance(inst)"
                   >
                     <Bot class="w-4 h-4 shrink-0" />
                     <span class="flex-1 truncate">{{ inst.name }}</span>
-                    <!-- 状态点 -->
-                    <span
-                      :class="[
-                        'w-2 h-2 rounded-full shrink-0',
-                        inst.display_status === 'ready' || inst.status === 'running'
-                          ? 'bg-green-400'
-                          : 'bg-muted-foreground/40',
-                      ]"
-                    />
+                    <span :class="['w-2 h-2 rounded-full shrink-0', inst.display_status === 'ready' || inst.status === 'running' ? 'bg-green-400' : 'bg-muted-foreground/40']" />
                   </button>
                 </div>
               </div>
@@ -448,19 +418,11 @@ function deleteTask(id: string) {
                   rows="6"
                   class="w-full px-3 pt-3 pb-2 text-sm placeholder:text-muted-foreground focus:outline-none resize-none bg-transparent"
                 />
-                <!-- 提示词工具栏 -->
                 <div class="flex items-center gap-2 px-3 pb-2.5 pt-1 border-t border-border">
-                  <button
-                    type="button"
-                    class="flex items-center gap-1 px-2 py-1 text-xs bg-muted rounded-md hover:bg-muted/80 transition-colors text-foreground"
-                  >
-                    Auto
-                    <ChevronDown class="w-3 h-3" />
+                  <button type="button" class="flex items-center gap-1 px-2 py-1 text-xs bg-muted rounded-md hover:bg-muted/80 transition-colors text-foreground">
+                    Auto <ChevronDown class="w-3 h-3" />
                   </button>
-                  <button
-                    type="button"
-                    class="flex items-center gap-1 px-2 py-1 text-xs bg-muted rounded-md hover:bg-muted/80 transition-colors text-foreground"
-                  >
+                  <button type="button" class="flex items-center gap-1 px-2 py-1 text-xs bg-muted rounded-md hover:bg-muted/80 transition-colors text-foreground">
                     Skills
                   </button>
                 </div>
@@ -470,50 +432,29 @@ function deleteTask(id: string) {
             <!-- 执行频率 -->
             <div class="space-y-3">
               <label class="text-sm font-medium">执行频率</label>
-
-              <!-- 频率类型切换 -->
               <div class="flex gap-2">
                 <button
-                  v-for="opt in [
-                    { value: 'daily', label: '每天' },
-                    { value: 'interval', label: '按间隔' },
-                    { value: 'once', label: '单次' },
-                  ]"
+                  v-for="opt in [{ value: 'daily', label: '每天' }, { value: 'interval', label: '按间隔' }, { value: 'once', label: '单次' }]"
                   :key="opt.value"
                   type="button"
-                  :class="[
-                    'px-4 py-1.5 rounded-full text-sm font-medium transition-colors border',
-                    form.frequency === opt.value
-                      ? 'bg-foreground text-background border-foreground'
-                      : 'bg-background text-foreground border-border hover:bg-muted/50',
-                  ]"
+                  :class="['px-4 py-1.5 rounded-full text-sm font-medium transition-colors border', form.frequency === opt.value ? 'bg-foreground text-background border-foreground' : 'bg-background text-foreground border-border hover:bg-muted/50']"
                   @click="form.frequency = opt.value as FrequencyType"
                 >
                   {{ opt.label }}
                 </button>
               </div>
 
-              <!-- 每天：时间 + 星期选择 -->
               <div v-if="form.frequency === 'daily'" class="flex items-center gap-3 flex-wrap">
                 <div class="flex items-center gap-2 bg-background border border-border rounded-lg px-3 py-2">
                   <Clock class="w-4 h-4 text-muted-foreground" />
-                  <input
-                    v-model="form.time"
-                    type="time"
-                    class="text-sm bg-transparent focus:outline-none w-20"
-                  />
+                  <input v-model="form.time" type="time" class="text-sm bg-transparent focus:outline-none w-20" />
                 </div>
                 <div class="flex gap-1.5 flex-wrap">
                   <button
                     v-for="day in weekDayLabels"
                     :key="day.value"
                     type="button"
-                    :class="[
-                      'w-9 h-9 rounded-full text-xs font-medium transition-colors',
-                      form.weekDays.includes(day.value)
-                        ? 'bg-foreground text-background'
-                        : 'bg-background text-foreground border border-border hover:bg-muted/50',
-                    ]"
+                    :class="['w-9 h-9 rounded-full text-xs font-medium transition-colors', form.weekDays.includes(day.value) ? 'bg-foreground text-background' : 'bg-background text-foreground border border-border hover:bg-muted/50']"
                     @click="toggleWeekDay(day.value)"
                   >
                     {{ day.label }}
@@ -521,27 +462,16 @@ function deleteTask(id: string) {
                 </div>
               </div>
 
-              <!-- 按间隔：间隔分钟数 -->
               <div v-if="form.frequency === 'interval'" class="flex items-center gap-2">
                 <span class="text-sm text-muted-foreground">每隔</span>
-                <input
-                  v-model.number="form.intervalMinutes"
-                  type="number"
-                  min="1"
-                  class="w-20 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                />
+                <input v-model.number="form.intervalMinutes" type="number" min="1" class="w-20 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
                 <span class="text-sm text-muted-foreground">分钟</span>
               </div>
 
-              <!-- 单次：时间选择 -->
               <div v-if="form.frequency === 'once'" class="flex items-center gap-2">
                 <div class="flex items-center gap-2 bg-background border border-border rounded-lg px-3 py-2">
                   <Clock class="w-4 h-4 text-muted-foreground" />
-                  <input
-                    v-model="form.time"
-                    type="time"
-                    class="text-sm bg-transparent focus:outline-none w-20"
-                  />
+                  <input v-model="form.time" type="time" class="text-sm bg-transparent focus:outline-none w-20" />
                 </div>
               </div>
             </div>
@@ -553,21 +483,13 @@ function deleteTask(id: string) {
                 <span class="text-muted-foreground font-normal ml-1">（可选，留空表示始终生效。）</span>
               </label>
               <div class="flex gap-2 items-center">
-                <input
-                  v-model="form.startDate"
-                  type="date"
-                  class="flex-1 px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 text-muted-foreground"
-                />
+                <input v-model="form.startDate" type="date" class="flex-1 px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 text-muted-foreground" />
                 <span class="text-muted-foreground text-sm">—</span>
-                <input
-                  v-model="form.endDate"
-                  type="date"
-                  class="flex-1 px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 text-muted-foreground"
-                />
+                <input v-model="form.endDate" type="date" class="flex-1 px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 text-muted-foreground" />
               </div>
             </div>
 
-            <!-- 推送通知开关 -->
+            <!-- 通知开关 -->
             <div class="flex items-center justify-between py-1">
               <div>
                 <span class="text-sm font-medium">执行完成后发送通知</span>
@@ -575,41 +497,25 @@ function deleteTask(id: string) {
               </div>
               <button
                 type="button"
-                :class="[
-                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
-                  form.pushNotification ? 'bg-primary' : 'bg-muted-foreground/30',
-                ]"
+                :class="['relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none', form.pushNotification ? 'bg-primary' : 'bg-muted-foreground/30']"
                 @click="form.pushNotification = !form.pushNotification"
               >
-                <span
-                  :class="[
-                    'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
-                    form.pushNotification ? 'translate-x-6' : 'translate-x-1',
-                  ]"
-                />
+                <span :class="['inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform', form.pushNotification ? 'translate-x-6' : 'translate-x-1']" />
               </button>
             </div>
 
             <!-- 操作按钮 -->
             <div class="flex justify-end gap-2 pt-1">
-              <button
-                type="button"
-                class="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted/50 transition-colors"
-                @click="closeDialog"
-              >
+              <button type="button" class="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted/50 transition-colors" @click="closeDialog">
                 取消
               </button>
               <button
                 type="button"
-                :disabled="!canSubmit"
-                :class="[
-                  'px-4 py-2 text-sm rounded-lg transition-colors font-medium',
-                  canSubmit
-                    ? 'bg-foreground text-background hover:bg-foreground/90'
-                    : 'bg-muted text-muted-foreground cursor-not-allowed',
-                ]"
+                :disabled="!canSubmit || submitting"
+                :class="['px-4 py-2 text-sm rounded-lg transition-colors font-medium flex items-center gap-1.5', canSubmit && !submitting ? 'bg-foreground text-background hover:bg-foreground/90' : 'bg-muted text-muted-foreground cursor-not-allowed']"
                 @click="submitForm"
               >
+                <Loader2 v-if="submitting" class="w-3.5 h-3.5 animate-spin" />
                 {{ isEditMode ? '保存' : '添加' }}
               </button>
             </div>
