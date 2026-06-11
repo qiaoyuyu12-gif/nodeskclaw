@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { getCurrentLocale, setCurrentLocale } from '@/i18n'
-import { Settings, LogOut, Boxes, Server, FlaskConical, User, Loader2, BarChart3, Brain, BookOpen, ClipboardCheck } from 'lucide-vue-next'
+import { Settings, LogOut, Boxes, Server, FlaskConical, User, Loader2, Brain, BookOpen, ClipboardCheck, Zap } from 'lucide-vue-next'
 import { useFeature } from '@/composables/useFeature'
 import LocaleSelect from '@/components/shared/LocaleSelect.vue'
 import ToastContainer from '@/components/shared/ToastContainer.vue'
@@ -22,7 +22,6 @@ const showUserMenu = ref(false)
 const userMenuRef = ref<HTMLElement>()
 const locale = ref(getCurrentLocale())
 const appVersion = __APP_VERSION__
-const { isEnabled: isPerformanceEnabled } = useFeature('performance_analytics')
 const { isEnabled: isPlatformAdminEnabled } = useFeature('platform_admin')
 
 useDeployNotification()
@@ -114,17 +113,17 @@ function onLocaleChange(value: string) {
               <span class="hidden lg:inline">{{ t('common.geneMarket') }}</span>
               <span class="lg:hidden">{{ t('nav.geneMarket') }}</span>
             </button>
+            <!-- 自动化任务入口 -->
             <button
-              v-if="isPerformanceEnabled"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
-                route.path.startsWith('/agent-performance') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
+                route.path.startsWith('/automation') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
               ]"
-              @click="router.push('/agent-performance')"
+              @click="router.push('/automation')"
             >
-              <BarChart3 class="w-4 h-4 inline mr-1.5" />
-              <span class="hidden lg:inline">{{ t('agentPerformance.navTitle') }}</span>
-              <span class="lg:hidden">{{ t('nav.agentPerformance') }}</span>
+              <Zap class="w-4 h-4 inline mr-1.5" />
+              <span class="hidden lg:inline">自动化</span>
+              <span class="lg:hidden">自动化</span>
             </button>
             <template v-if="authStore.isLoggedIn">
             <button
