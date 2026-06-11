@@ -12,35 +12,6 @@ zeroclaw/
 nanobot/
 hermes-agent/
 
-# ========================
-# EE 模块（私有仓库，不纳入 CE 开源仓库）
-# 例外：超管后台代码本期入 CE 仓库（services/admin、api/admin/*、router.py）
-# ========================
-ee/*
-!ee/backend/
-ee/backend/*
-!ee/backend/router.py
-!ee/backend/api/
-ee/backend/api/*
-!ee/backend/api/__init__.py
-!ee/backend/api/admin/
-ee/backend/api/admin/*
-!ee/backend/api/admin/__init__.py
-!ee/backend/api/admin/organizations.py
-!ee/backend/api/admin/users.py
-!ee/backend/api/admin/features.py
-!ee/backend/api/admin/audit.py
-!ee/backend/api/admin/conftest.py
-!ee/backend/api/admin/test_*.py
-!ee/backend/services/
-ee/backend/services/*
-!ee/backend/services/__init__.py
-!ee/backend/services/admin/
-
-# ========================
-# Admin 前端（EE-only，防止误建同名目录被跟踪）
-# ========================
-nodeskclaw-frontend/
 
 # ========================
 # 环境 & 密钥

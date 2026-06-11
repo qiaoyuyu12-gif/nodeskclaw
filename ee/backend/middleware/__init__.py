@@ -1,0 +1,1 @@
+"""EE Middleware — stub implementations."""
