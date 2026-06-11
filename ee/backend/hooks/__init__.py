@@ -1,0 +1,1 @@
+"""EE Hooks — stub implementations."""
