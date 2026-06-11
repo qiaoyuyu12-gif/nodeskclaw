@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   RefreshCw, Trash2, Circle, Loader2, Copy, Check, RotateCcw, AlertTriangle,
-  Wrench, Archive, CopyPlus, ChevronDown, ChevronRight, Save,
+  Wrench, Archive, CopyPlus, ChevronDown, ChevronRight, Save, Pencil, X,
 } from 'lucide-vue-next'
 import api from '@/services/api'
 import { useToast } from '@/composables/useToast'
@@ -304,6 +304,38 @@ interface SkillItem {
   type: string
 }
 
+// ——— 名称内联编辑 ———
+
+const editingName = ref(false)
+const nameInput = ref('')
+const nameSaving = ref(false)
+
+function startEditName() {
+  if (!canEdit.value || !instance.value) return
+  nameInput.value = instance.value.name
+  editingName.value = true
+}
+
+function cancelEditName() {
+  editingName.value = false
+}
+
+async function saveName() {
+  if (!nameInput.value.trim() || nameSaving.value) return
+  nameSaving.value = true
+  try {
+    await api.patch(`/instances/${instanceId.value}/rename`, { name: nameInput.value.trim() })
+    if (instance.value) instance.value.name = nameInput.value.trim()
+    editingName.value = false
+    await refreshInstanceBasic()
+    toast.success('名称已更新')
+  } catch (e: any) {
+    toast.error(e?.response?.data?.message || t('common.failed'))
+  } finally {
+    nameSaving.value = false
+  }
+}
+
 const skillEditorOpen = ref(false)
 const skills = ref<SkillItem[]>([])
 const activeSkill = ref('')
@@ -420,8 +452,48 @@ function toggleSkillEditor() {
       </div>
 
       <!-- 基本信息 -->
-      <div class="p-4 rounded-xl border border-border bg-card">
+      <div class="p-4 rounded-xl border border-border bg-card group">
         <h2 class="text-sm font-medium mb-3">{{ t('agentDetailDialog.basicInfo') }}</h2>
+
+        <!-- 名称（可编辑） -->
+        <div class="flex items-center gap-2 mb-4 pb-3 border-b border-border">
+          <span class="text-sm text-muted-foreground shrink-0">名称</span>
+          <template v-if="editingName">
+            <input
+              v-model="nameInput"
+              class="flex-1 px-2 py-1 text-sm border border-border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+              autofocus
+              @keyup.enter="saveName"
+              @keyup.esc="cancelEditName"
+            />
+            <button
+              :disabled="nameSaving || !nameInput.trim()"
+              class="p-1.5 rounded-md text-primary hover:bg-primary/10 transition-colors disabled:opacity-40"
+              @click="saveName"
+            >
+              <Loader2 v-if="nameSaving" class="w-3.5 h-3.5 animate-spin" />
+              <Check v-else class="w-3.5 h-3.5" />
+            </button>
+            <button
+              class="p-1.5 rounded-md text-muted-foreground hover:bg-muted/50 transition-colors"
+              @click="cancelEditName"
+            >
+              <X class="w-3.5 h-3.5" />
+            </button>
+          </template>
+          <template v-else>
+            <span class="flex-1 text-sm font-medium">{{ instance.name }}</span>
+            <button
+              v-if="canEdit"
+              class="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors opacity-0 group-hover:opacity-100"
+              title="编辑名称"
+              @click="startEditName"
+            >
+              <Pencil class="w-3.5 h-3.5" />
+            </button>
+          </template>
+        </div>
+
         <div class="grid grid-cols-2 gap-4 text-sm">
           <div>
             <span class="text-muted-foreground">{{ t('agentDetailDialog.imageVersion') }}</span>

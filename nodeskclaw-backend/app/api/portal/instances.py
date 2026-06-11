@@ -129,6 +129,48 @@ class ScaleBody(PydanticBase):
     replicas: int
 
 
+class RenameBody(PydanticBase):
+    name: str
+
+
+@router.patch("/{instance_id}/rename", response_model=ApiResponse)
+async def rename_instance(
+    instance_id: str,
+    body: RenameBody,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """修改实例名称，需要 editor 及以上权限。"""
+    await instance_member_service.check_instance_access(
+        instance_id, current_user, InstanceRole.editor, db
+    )
+    name = body.name.strip()
+    if not name:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="名称不能为空")
+
+    result = await db.execute(
+        select(Instance).where(Instance.id == instance_id, not_deleted())
+    )
+    instance = result.scalar_one_or_none()
+    if not instance:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="实例不存在")
+
+    instance.name = name
+    await db.commit()
+    await hooks.emit(
+        "operation_audit",
+        action="instance.renamed",
+        target_type="instance",
+        target_id=instance_id,
+        actor_id=current_user.id,
+        org_id=current_user.current_org_id,
+        details={"new_name": name, "source": "portal"},
+    )
+    return ApiResponse(message="名称已更新")
+
+
 @router.delete("/{instance_id}", response_model=ApiResponse)
 async def delete_instance(
     instance_id: str,
