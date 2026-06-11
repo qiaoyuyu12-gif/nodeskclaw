@@ -66,10 +66,13 @@ const completedTasks = computed(() => tasks.value.filter((t) => t.status === 'co
 // ——— 弹窗 & 表单 ———
 
 const showDialog = ref(false)
+/** null = 新增模式；非 null = 编辑模式，值为被编辑任务的 id */
+const editingTaskId = ref<string | null>(null)
+const isEditMode = computed(() => editingTaskId.value !== null)
 
 const form = ref({
   name: '',
-  instanceId: '',   // 必选，AI 员工 id
+  instanceId: '',
   prompt: '',
   frequency: 'daily' as FrequencyType,
   time: '09:00',
@@ -133,6 +136,7 @@ function toggleWeekDay(day: WeekDay) {
 }
 
 function openDialog() {
+  editingTaskId.value = null
   form.value = {
     name: '',
     instanceId: '',
@@ -149,8 +153,28 @@ function openDialog() {
   showDialog.value = true
 }
 
+/** 点击任务行：进入编辑模式，将已有数据填入表单 */
+function openEditDialog(task: AutomationTask) {
+  editingTaskId.value = task.id
+  form.value = {
+    name: task.name,
+    instanceId: task.instanceId,
+    prompt: task.prompt,
+    frequency: task.frequency,
+    time: task.time ?? '09:00',
+    intervalMinutes: task.intervalMinutes ?? 60,
+    weekDays: task.weekDays ? [...task.weekDays] : [0, 1, 2, 3, 4],
+    startDate: task.startDate ?? '',
+    endDate: task.endDate ?? '',
+    pushNotification: false,
+  }
+  instanceDropdownOpen.value = false
+  showDialog.value = true
+}
+
 function closeDialog() {
   showDialog.value = false
+  editingTaskId.value = null
 }
 
 function addTask() {
@@ -172,6 +196,34 @@ function addTask() {
     nextRunLabel: '稍后开始',
   })
   closeDialog()
+}
+
+/** 保存编辑中的任务 */
+function saveTask() {
+  if (!canSubmit.value || !editingTaskId.value) return
+
+  tasks.value = tasks.value.map((t) =>
+    t.id === editingTaskId.value
+      ? {
+          ...t,
+          name: form.value.name.trim(),
+          instanceId: form.value.instanceId,
+          instanceName: selectedInstance.value?.name ?? t.instanceName,
+          prompt: form.value.prompt.trim(),
+          frequency: form.value.frequency,
+          time: form.value.time,
+          intervalMinutes: form.value.intervalMinutes,
+          weekDays: [...form.value.weekDays],
+          startDate: form.value.startDate || undefined,
+          endDate: form.value.endDate || undefined,
+        }
+      : t,
+  )
+  closeDialog()
+}
+
+function submitForm() {
+  isEditMode.value ? saveTask() : addTask()
 }
 
 function deleteTask(id: string) {
@@ -219,7 +271,8 @@ function deleteTask(id: string) {
       <div
         v-for="task in scheduledTasks"
         :key="task.id"
-        class="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/20 transition-colors group"
+        class="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/20 transition-colors group cursor-pointer"
+        @click="openEditDialog(task)"
       >
         <Circle class="w-4 h-4 text-muted-foreground shrink-0" />
         <div class="flex-1 min-w-0">
@@ -229,7 +282,7 @@ function deleteTask(id: string) {
         <span class="text-xs text-muted-foreground shrink-0">{{ task.nextRunLabel }}</span>
         <button
           class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 hover:text-destructive"
-          @click="deleteTask(task.id)"
+          @click.stop="deleteTask(task.id)"
         >
           <Trash2 class="w-3.5 h-3.5" />
         </button>
@@ -248,7 +301,8 @@ function deleteTask(id: string) {
       <div
         v-for="task in completedTasks"
         :key="task.id"
-        class="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/20 transition-colors group"
+        class="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/20 transition-colors group cursor-pointer"
+        @click="openEditDialog(task)"
       >
         <CheckCircle2 class="w-4 h-4 text-green-500 shrink-0" />
         <div class="flex-1 min-w-0">
@@ -258,7 +312,7 @@ function deleteTask(id: string) {
         <span class="text-xs text-muted-foreground shrink-0">{{ task.lastRunLabel }}</span>
         <button
           class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 hover:text-destructive"
-          @click="deleteTask(task.id)"
+          @click.stop="deleteTask(task.id)"
         >
           <Trash2 class="w-3.5 h-3.5" />
         </button>
@@ -289,7 +343,7 @@ function deleteTask(id: string) {
         >
           <!-- 头部 -->
           <div class="flex items-center justify-between px-6 pt-6 pb-2">
-            <h2 class="text-lg font-semibold">添加自动化任务</h2>
+            <h2 class="text-lg font-semibold">{{ isEditMode ? '编辑自动化任务' : '添加自动化任务' }}</h2>
             <button
               class="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
               @click="closeDialog"
@@ -554,9 +608,9 @@ function deleteTask(id: string) {
                     ? 'bg-foreground text-background hover:bg-foreground/90'
                     : 'bg-muted text-muted-foreground cursor-not-allowed',
                 ]"
-                @click="addTask"
+                @click="submitForm"
               >
-                添加
+                {{ isEditMode ? '保存' : '添加' }}
               </button>
             </div>
           </div>
