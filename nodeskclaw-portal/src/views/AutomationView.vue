@@ -3,78 +3,115 @@
   - 展示「已安排」和「已完成」任务列表
   - 支持「添加自动化任务」对话框
   - 执行频率：每天 / 按间隔 / 单次
+  - AI 员工字段为必选，从 GET /api/v1/instances 拉取
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { Plus, Zap, Clock, CheckCircle2, Circle, Trash2, X, ChevronDown } from 'lucide-vue-next'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { Plus, Zap, Clock, CheckCircle2, Circle, Trash2, X, ChevronDown, Bot } from 'lucide-vue-next'
+import api from '@/services/api'
 
 // ——— 类型定义 ———
 
 type FrequencyType = 'daily' | 'interval' | 'once'
 type WeekDay = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
+interface InstanceInfo {
+  id: string
+  name: string
+  display_status?: string
+  status: string
+}
+
 interface AutomationTask {
   id: string
   name: string
-  workspace?: string
+  instanceId: string
+  instanceName: string
   prompt: string
   frequency: FrequencyType
-  time?: string            // HH:mm，每天/单次模式使用
-  intervalMinutes?: number // 按间隔模式使用
-  weekDays?: WeekDay[]     // 每天模式选中的星期
+  time?: string
+  intervalMinutes?: number
+  weekDays?: WeekDay[]
   startDate?: string
   endDate?: string
   status: 'scheduled' | 'completed'
-  nextRunLabel?: string    // 展示用，如「3天后开始」
-  lastRunLabel?: string    // 展示用，如「3天前」
+  nextRunLabel?: string
+  lastRunLabel?: string
 }
 
-// ——— 状态 ———
+// ——— AI 员工列表 ———
 
-/** 模拟任务列表（实际应从 API 获取） */
-const tasks = ref<AutomationTask[]>([
-  {
-    id: '1',
-    name: 'GitHub每周热门项目',
-    prompt: '搜索本周 GitHub 上 star 数增长最快的 10 个仓库，输出名称、简介和 star 数。',
-    frequency: 'daily',
-    time: '09:00',
-    weekDays: [0, 1, 2, 3, 4],
-    status: 'scheduled',
-    nextRunLabel: '3天后开始',
-  },
-  {
-    id: '2',
-    name: 'GitHub每周热门项目',
-    prompt: '搜索本周 GitHub 上 star 数增长最快的 10 个仓库，输出名称、简介和 star 数。',
-    frequency: 'daily',
-    time: '09:00',
-    weekDays: [0, 1, 2, 3, 4],
-    status: 'completed',
-    lastRunLabel: '3天前',
-  },
-])
+const instances = ref<InstanceInfo[]>([])
+const instancesLoading = ref(false)
+
+async function fetchInstances() {
+  instancesLoading.value = true
+  try {
+    const { data } = await api.get('/instances')
+    instances.value = data.data ?? []
+  } finally {
+    instancesLoading.value = false
+  }
+}
+
+onMounted(fetchInstances)
+
+// ——— 任务列表 ———
+
+const tasks = ref<AutomationTask[]>([])
 
 const scheduledTasks = computed(() => tasks.value.filter((t) => t.status === 'scheduled'))
 const completedTasks = computed(() => tasks.value.filter((t) => t.status === 'completed'))
 
-// ——— 弹窗状态 ———
+// ——— 弹窗 & 表单 ———
 
 const showDialog = ref(false)
 
-/** 表单数据 */
 const form = ref({
   name: '',
-  workspace: '',
+  instanceId: '',   // 必选，AI 员工 id
   prompt: '',
   frequency: 'daily' as FrequencyType,
   time: '09:00',
   intervalMinutes: 60,
-  weekDays: [0, 1, 2, 3, 4] as WeekDay[], // 默认周一到周五
+  weekDays: [0, 1, 2, 3, 4] as WeekDay[],
   startDate: '',
   endDate: '',
   pushNotification: false,
 })
+
+/** AI 员工下拉展开状态 */
+const instanceDropdownOpen = ref(false)
+const instanceDropdownRef = ref<HTMLElement>()
+
+/** 当前选中的实例对象 */
+const selectedInstance = computed(() =>
+  instances.value.find((i) => i.id === form.value.instanceId) ?? null,
+)
+
+/** 表单是否可提交 */
+const canSubmit = computed(
+  () => form.value.name.trim() !== '' && form.value.instanceId !== '' && form.value.prompt.trim() !== '',
+)
+
+function selectInstance(instance: InstanceInfo) {
+  form.value.instanceId = instance.id
+  instanceDropdownOpen.value = false
+}
+
+/** 点击外部关闭下拉 */
+function onDocumentClick(e: MouseEvent) {
+  if (
+    instanceDropdownOpen.value &&
+    instanceDropdownRef.value &&
+    !instanceDropdownRef.value.contains(e.target as Node)
+  ) {
+    instanceDropdownOpen.value = false
+  }
+}
+
+onMounted(() => document.addEventListener('click', onDocumentClick))
+onBeforeUnmount(() => document.removeEventListener('click', onDocumentClick))
 
 const weekDayLabels: { value: WeekDay; label: string }[] = [
   { value: 0, label: '周一' },
@@ -96,10 +133,9 @@ function toggleWeekDay(day: WeekDay) {
 }
 
 function openDialog() {
-  // 重置表单
   form.value = {
     name: '',
-    workspace: '',
+    instanceId: '',
     prompt: '',
     frequency: 'daily',
     time: '09:00',
@@ -109,6 +145,7 @@ function openDialog() {
     endDate: '',
     pushNotification: false,
   }
+  instanceDropdownOpen.value = false
   showDialog.value = true
 }
 
@@ -117,12 +154,13 @@ function closeDialog() {
 }
 
 function addTask() {
-  if (!form.value.name.trim() || !form.value.prompt.trim()) return
+  if (!canSubmit.value) return
 
   tasks.value.unshift({
     id: Date.now().toString(),
     name: form.value.name.trim(),
-    workspace: form.value.workspace || undefined,
+    instanceId: form.value.instanceId,
+    instanceName: selectedInstance.value?.name ?? '',
     prompt: form.value.prompt.trim(),
     frequency: form.value.frequency,
     time: form.value.time,
@@ -154,7 +192,7 @@ function deleteTask(id: string) {
       </div>
       <div class="flex items-center gap-2">
         <button
-          class="px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted/50 transition-colors"
+          class="px-3 py-1.5 text-sm border border-border rounded-lg hover:bg-muted/50 transition-colors opacity-50 cursor-not-allowed"
           disabled
         >
           从模板添加
@@ -184,7 +222,10 @@ function deleteTask(id: string) {
         class="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/20 transition-colors group"
       >
         <Circle class="w-4 h-4 text-muted-foreground shrink-0" />
-        <span class="flex-1 text-sm font-medium truncate">{{ task.name }}</span>
+        <div class="flex-1 min-w-0">
+          <span class="text-sm font-medium truncate block">{{ task.name }}</span>
+          <span class="text-xs text-muted-foreground truncate block">{{ task.instanceName }}</span>
+        </div>
         <span class="text-xs text-muted-foreground shrink-0">{{ task.nextRunLabel }}</span>
         <button
           class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 hover:text-destructive"
@@ -210,7 +251,10 @@ function deleteTask(id: string) {
         class="flex items-center gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:bg-muted/20 transition-colors group"
       >
         <CheckCircle2 class="w-4 h-4 text-green-500 shrink-0" />
-        <span class="flex-1 text-sm font-medium truncate">{{ task.name }}</span>
+        <div class="flex-1 min-w-0">
+          <span class="text-sm font-medium truncate block">{{ task.name }}</span>
+          <span class="text-xs text-muted-foreground truncate block">{{ task.instanceName }}</span>
+        </div>
         <span class="text-xs text-muted-foreground shrink-0">{{ task.lastRunLabel }}</span>
         <button
           class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 hover:text-destructive"
@@ -235,7 +279,6 @@ function deleteTask(id: string) {
       <div
         v-if="showDialog"
         class="fixed inset-0 z-50 flex items-center justify-center"
-        @click.self="closeDialog"
       >
         <!-- 遮罩 -->
         <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" @click="closeDialog" />
@@ -267,17 +310,77 @@ function deleteTask(id: string) {
               />
             </div>
 
-            <!-- 工作空间（可选） -->
-            <div class="space-y-1.5">
-              <label class="text-sm font-medium">
-                工作空间
-                <span class="text-muted-foreground font-normal ml-1">（可选）</span>
-              </label>
-              <div
-                class="w-full px-3 py-2.5 bg-background border border-border rounded-lg flex items-center gap-2 cursor-pointer hover:border-primary/50 transition-colors text-sm text-muted-foreground"
+            <!-- AI 员工（必选） -->
+            <div class="space-y-1.5" ref="instanceDropdownRef">
+              <label class="text-sm font-medium">AI 员工</label>
+              <!-- 触发器 -->
+              <button
+                type="button"
+                :class="[
+                  'w-full px-3 py-2.5 bg-background border rounded-lg text-sm flex items-center gap-2 transition-colors',
+                  instanceDropdownOpen
+                    ? 'border-primary/50 ring-2 ring-primary/30'
+                    : 'border-border hover:border-primary/40',
+                ]"
+                @click="instanceDropdownOpen = !instanceDropdownOpen"
               >
-                <Plus class="w-4 h-4 shrink-0" />
-                <span>选择工作空间</span>
+                <Bot class="w-4 h-4 text-muted-foreground shrink-0" />
+                <span
+                  :class="selectedInstance ? 'text-foreground flex-1 text-left' : 'text-muted-foreground flex-1 text-left'"
+                >
+                  {{ selectedInstance ? selectedInstance.name : '选择 AI 员工' }}
+                </span>
+                <ChevronDown
+                  :class="['w-4 h-4 text-muted-foreground transition-transform', instanceDropdownOpen && 'rotate-180']"
+                />
+              </button>
+
+              <!-- 下拉选项 -->
+              <div
+                v-if="instanceDropdownOpen"
+                class="absolute z-20 w-full max-w-[calc(100%-3rem)] bg-background border border-border rounded-xl shadow-xl overflow-hidden"
+              >
+                <!-- 加载中 -->
+                <div
+                  v-if="instancesLoading"
+                  class="px-4 py-3 text-sm text-muted-foreground text-center"
+                >
+                  加载中...
+                </div>
+                <!-- 空列表 -->
+                <div
+                  v-else-if="instances.length === 0"
+                  class="px-4 py-3 text-sm text-muted-foreground text-center"
+                >
+                  暂无可用的 AI 员工
+                </div>
+                <!-- 实例列表 -->
+                <div v-else class="max-h-52 overflow-y-auto py-1">
+                  <button
+                    v-for="inst in instances"
+                    :key="inst.id"
+                    type="button"
+                    :class="[
+                      'w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors',
+                      form.instanceId === inst.id
+                        ? 'bg-primary/10 text-primary'
+                        : 'hover:bg-muted/60 text-foreground',
+                    ]"
+                    @click="selectInstance(inst)"
+                  >
+                    <Bot class="w-4 h-4 shrink-0" />
+                    <span class="flex-1 truncate">{{ inst.name }}</span>
+                    <!-- 状态点 -->
+                    <span
+                      :class="[
+                        'w-2 h-2 rounded-full shrink-0',
+                        inst.display_status === 'ready' || inst.status === 'running'
+                          ? 'bg-green-400'
+                          : 'bg-muted-foreground/40',
+                      ]"
+                    />
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -294,12 +397,14 @@ function deleteTask(id: string) {
                 <!-- 提示词工具栏 -->
                 <div class="flex items-center gap-2 px-3 pb-2.5 pt-1 border-t border-border">
                   <button
+                    type="button"
                     class="flex items-center gap-1 px-2 py-1 text-xs bg-muted rounded-md hover:bg-muted/80 transition-colors text-foreground"
                   >
                     Auto
                     <ChevronDown class="w-3 h-3" />
                   </button>
                   <button
+                    type="button"
                     class="flex items-center gap-1 px-2 py-1 text-xs bg-muted rounded-md hover:bg-muted/80 transition-colors text-foreground"
                   >
                     Skills
@@ -321,6 +426,7 @@ function deleteTask(id: string) {
                     { value: 'once', label: '单次' },
                   ]"
                   :key="opt.value"
+                  type="button"
                   :class="[
                     'px-4 py-1.5 rounded-full text-sm font-medium transition-colors border',
                     form.frequency === opt.value
@@ -343,10 +449,11 @@ function deleteTask(id: string) {
                     class="text-sm bg-transparent focus:outline-none w-20"
                   />
                 </div>
-                <div class="flex gap-1.5">
+                <div class="flex gap-1.5 flex-wrap">
                   <button
                     v-for="day in weekDayLabels"
                     :key="day.value"
+                    type="button"
                     :class="[
                       'w-9 h-9 rounded-full text-xs font-medium transition-colors',
                       form.weekDays.includes(day.value)
@@ -395,14 +502,12 @@ function deleteTask(id: string) {
                 <input
                   v-model="form.startDate"
                   type="date"
-                  placeholder="开始日期"
                   class="flex-1 px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 text-muted-foreground"
                 />
                 <span class="text-muted-foreground text-sm">—</span>
                 <input
                   v-model="form.endDate"
                   type="date"
-                  placeholder="结束日期"
                   class="flex-1 px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 text-muted-foreground"
                 />
               </div>
@@ -414,8 +519,8 @@ function deleteTask(id: string) {
                 <span class="text-sm font-medium">执行完成后发送通知</span>
                 <span class="text-xs text-muted-foreground ml-1.5">（可在消息渠道中配置）</span>
               </div>
-              <!-- Toggle 按钮 -->
               <button
+                type="button"
                 :class="[
                   'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
                   form.pushNotification ? 'bg-primary' : 'bg-muted-foreground/30',
@@ -434,16 +539,18 @@ function deleteTask(id: string) {
             <!-- 操作按钮 -->
             <div class="flex justify-end gap-2 pt-1">
               <button
+                type="button"
                 class="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted/50 transition-colors"
                 @click="closeDialog"
               >
                 取消
               </button>
               <button
-                :disabled="!form.name.trim() || !form.prompt.trim()"
+                type="button"
+                :disabled="!canSubmit"
                 :class="[
                   'px-4 py-2 text-sm rounded-lg transition-colors font-medium',
-                  form.name.trim() && form.prompt.trim()
+                  canSubmit
                     ? 'bg-foreground text-background hover:bg-foreground/90'
                     : 'bg-muted text-muted-foreground cursor-not-allowed',
                 ]"
