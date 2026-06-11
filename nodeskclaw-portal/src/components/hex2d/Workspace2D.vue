@@ -567,9 +567,8 @@ const emptyHexes = computed(() => {
           :stroke-dasharray="selectable ? 'none' : (agent.sse_connected ? 'none' : '6,4')"
           :opacity="selectable ? 1 : (agent.sse_connected ? 1 : (isAgentConnecting(agent) ? 0.75 : 0.6))"
           :class="{
-            'animate-pulse': !selectable && agent.sse_connected && (agent.status === 'running' || agent.status === 'active'),
+            'animate-pulse': !selectable && (agent.sse_connected && (agent.status === 'running' || agent.status === 'active') || isAgentConnecting(agent)),
             'animate-hex-thinking': !selectable && agent.sse_connected && (agent.status === 'thinking' || agent.status === 'pending' || agent.status === 'learning'),
-            'animate-pulse': !selectable && isAgentConnecting(agent),
           }"
         />
         <!-- Red strikethrough for deselected agents -->

@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.operation_audit_log import OperationAuditLog
@@ -44,9 +45,9 @@ async def purge_expired_audit_logs(
         ).scalars().all()
         if not ids:
             break
-        result = await db.execute(
+        result: CursorResult = cast(CursorResult, await db.execute(
             delete(OperationAuditLog).where(OperationAuditLog.id.in_(ids))
-        )
+        ))
         total_deleted += result.rowcount or 0
         await db.flush()
         # 取出行数小于 batch_limit 说明已无更多数据
