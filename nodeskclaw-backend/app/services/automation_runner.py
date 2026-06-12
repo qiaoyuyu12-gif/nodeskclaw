@@ -244,21 +244,20 @@ class AutomationRunner:
 
         workspace_id: str = row[0]
 
-        # 2. 构建 cron envelope 并写入 PG 队列
-        from app.services.runtime.messaging.envelope import MessageRouting, Priority
-        from app.services.runtime.messaging.ingestion.cron import build_cron_envelope
+        # 2. 构建 envelope 并写入 PG 队列
+        # 必须用 build_system_envelope 并设置 mention_targets，
+        # 与 ScheduleRunner 一致。build_cron_envelope 生成的是
+        # intent=notify + 空 mentions，AI 员工只记录不响应。
+        from app.services.runtime.messaging.envelope import Priority
+        from app.services.runtime.messaging.ingestion.system import build_system_envelope
         from app.services.runtime.messaging.queue import enqueue
 
-        envelope = build_cron_envelope(
+        envelope = build_system_envelope(
             workspace_id=workspace_id,
-            schedule_id=task.id,
-            schedule_name=task.name,
-            message_template=task.prompt,
-        )
-        # 指定 unicast 路由到对应实例
-        envelope.data.routing = MessageRouting(
-            mode="unicast",
+            content=task.prompt,
+            source_label=f"automation/{task.id}",
             targets=[task.instance_id],
+            mention_targets=[task.instance_id],
         )
 
         await enqueue(
