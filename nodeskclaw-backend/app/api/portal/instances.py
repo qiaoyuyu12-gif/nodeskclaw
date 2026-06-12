@@ -157,8 +157,27 @@ async def rename_instance(
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="实例不存在")
 
+    old_name = instance.name
     instance.name = name
     await db.commit()
+
+    # 广播改名事件到该实例所在的所有工作区，使各端实时同步显示名
+    from app.api.workspaces import broadcast_event
+    from app.models.workspace_agent import WorkspaceAgent
+
+    ws_result = await db.execute(
+        select(WorkspaceAgent.workspace_id).where(
+            WorkspaceAgent.instance_id == instance_id,
+            WorkspaceAgent.deleted_at.is_(None),
+        )
+    )
+    for (workspace_id,) in ws_result.fetchall():
+        broadcast_event(workspace_id, "agent:renamed", {
+            "instance_id": instance_id,
+            "old_name": old_name,
+            "new_name": name,
+        })
+
     await hooks.emit(
         "operation_audit",
         action="instance.renamed",

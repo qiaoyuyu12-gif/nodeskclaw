@@ -1123,6 +1123,24 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       })
     }
 
+    eventSource.addEventListener('agent:renamed', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data)
+        const { instance_id, new_name } = data as { instance_id: string; new_name: string }
+        // 更新当前打开的工作区中的 agent 名称
+        if (currentWorkspace.value) {
+          const agent = currentWorkspace.value.agents.find((a) => a.instance_id === instance_id)
+          if (agent) agent.name = new_name
+        }
+        // 同步更新工作区列表卡片中的 agent 名称
+        for (const ws of workspaces.value) {
+          const agent = ws.agents?.find((a) => a.instance_id === instance_id)
+          if (agent) agent.name = new_name
+        }
+        externalCallback?.('agent:renamed', data)
+      } catch { /* ignore */ }
+    })
+
     eventSource.addEventListener('agent:status', (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data)
