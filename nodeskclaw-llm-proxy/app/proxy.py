@@ -1,5 +1,6 @@
 """LLM Proxy: resolves real API keys and forwards requests to upstream LLM providers."""
 
+import asyncio
 import json
 import logging
 import time
@@ -644,13 +645,15 @@ async def _handle_codex_proxy(
                 yield "data: [DONE]\n\n"
             finally:
                 response_meta = json.dumps(usage, ensure_ascii=False)
-                await _record_usage(
+                # 用独立 task 记录用量：finally 块在请求 cancel scope 内运行，
+                # 直接 await DB 会因 asyncpg 连接终止时 cancel scope 已激活而抛 CancelledError
+                asyncio.create_task(_record_usage(
                     ctx,
                     usage=usage,
                     status_code=200,
                     latency_ms=latency_ms,
                     response_body=response_meta,
-                )
+                ))
 
         return StreamingResponse(
             stream_generator(),
@@ -1190,10 +1193,14 @@ async def _handle_stream(
             if stream_error:
                 logger.warning("SSE stream error from %s: %s", ctx.provider, stream_error[:512])
             response_meta = json.dumps(usage_data, ensure_ascii=False) if usage_data else None
-            await _record_usage(ctx, usage=usage_data, status_code=resp.status_code,
-                                latency_ms=latency_ms,
-                                error_message=stream_error[:512] if stream_error else None,
-                                response_body=response_meta)
+            # 用独立 task 记录用量：finally 块在请求 cancel scope 内运行，
+            # 直接 await DB 会因 asyncpg 连接终止时 cancel scope 已激活而抛 CancelledError
+            asyncio.create_task(_record_usage(
+                ctx, usage=usage_data, status_code=resp.status_code,
+                latency_ms=latency_ms,
+                error_message=stream_error[:512] if stream_error else None,
+                response_body=response_meta,
+            ))
 
     resp_headers = {}
     for k, v in resp.headers.items():
