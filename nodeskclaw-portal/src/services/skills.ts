@@ -94,6 +94,9 @@ export const kbApi = {
     api.patch<{ data: KnowledgeBase }>(`/knowledge-bases/${id}`, body).then((r) => r.data.data),
 
   remove: (id: string) => api.delete(`/knowledge-bases/${id}`),
+
+  sync: (id: string) =>
+    api.post<{ data: { reachable: boolean; kb_id: string } }>(`/knowledge-bases/${id}/sync`).then((r) => r.data.data),
 }
 
 export const instanceKbApi = {
