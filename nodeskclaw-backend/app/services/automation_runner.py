@@ -216,7 +216,13 @@ class AutomationRunner:
                     logger.exception("AutomationRunner: fire error for task %s", task.id)
 
     async def _fire(self, db: AsyncSession, task: AutomationTask, now: datetime) -> None:
-        """将 prompt 投递到对应 AI 员工，并更新 last_fired_at。"""
+        """将 prompt 写入 PG 队列，QueueConsumer 负责投递到 AI 员工。
+
+        不直接走 MessageBus.publish()：因为 TransportMiddleware 发现实例未通过
+        tunnel 连接时会返回 instance_not_connected_locally，该错误属于 NO_RETRY_ERRORS，
+        消息直接进死信队列永久丢失。改用 enqueue() 持久化到 PG 队列：
+        QueueConsumer 只对已连接实例出队，AI 员工离线时消息等待，重连后自动投递。
+        """
         # 1. 找实例所在的活跃 workspace
         wa_result = await db.execute(
             select(WorkspaceAgent.workspace_id)
@@ -238,23 +244,38 @@ class AutomationRunner:
 
         workspace_id: str = row[0]
 
-        # 2. 通过消息总线将 prompt 发给 AI 员工
-        from app.services.collaboration_service import send_system_message_to_agents
-        await send_system_message_to_agents(
+        # 2. 构建 cron envelope 并写入 PG 队列
+        from app.services.runtime.messaging.envelope import MessageRouting, Priority
+        from app.services.runtime.messaging.ingestion.cron import build_cron_envelope
+        from app.services.runtime.messaging.queue import enqueue
+
+        envelope = build_cron_envelope(
             workspace_id=workspace_id,
-            agent_ids=[task.instance_id],
-            message=task.prompt,
-            db=db,
-            mention_targets=[task.instance_id],
+            schedule_id=task.id,
+            schedule_name=task.name,
+            message_template=task.prompt,
+        )
+        # 指定 unicast 路由到对应实例
+        envelope.data.routing = MessageRouting(
+            mode="unicast",
+            targets=[task.instance_id],
         )
 
-        # 3. 更新触发记录
+        await enqueue(
+            db,
+            target_node_id=task.instance_id,
+            workspace_id=workspace_id,
+            priority=Priority.NORMAL,
+            envelope=envelope.to_dict(),
+        )
+
+        # 3. 更新触发记录（enqueue 成功即视为本次触发完成）
         task.last_fired_at = now
         if task.frequency == "once":
             task.status = "completed"
         await db.commit()
 
         logger.info(
-            "AutomationRunner: fired task '%s' (id=%s) → instance %s @ workspace %s",
+            "AutomationRunner: enqueued task '%s' (id=%s) → instance %s @ workspace %s",
             task.name, task.id, task.instance_id, workspace_id,
         )
