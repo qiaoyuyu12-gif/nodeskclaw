@@ -1,6 +1,8 @@
 """AutomationTask — 用户配置的自动化定时任务。"""
 
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, String, Text
+from datetime import datetime
+
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import BaseModel
@@ -39,5 +41,10 @@ class AutomationTask(BaseModel):
         Boolean, nullable=False, default=False
     )
 
-    # 任务状态：active / paused
+    # 任务状态：active / paused / completed
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+
+    # 最近一次触发时间（用于防重复触发和 interval 计时）
+    last_fired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
