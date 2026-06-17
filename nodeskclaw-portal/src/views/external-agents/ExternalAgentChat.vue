@@ -28,6 +28,10 @@ const input = ref('')
 const sending = ref(false)
 const scrollEl = ref<HTMLDivElement>()
 
+// custom 协议（mom_agent）使用稳定 session_id 维持多轮记忆
+// 每次进入聊天页生成一个新 session，刷新/清除后重新生成
+const chatSessionId = ref(crypto.randomUUID())
+
 // 历史记录（发送给 API）
 const history = computed<Array<{ role: string; content: string }>>(() =>
   messages.value.map((m) => ({ role: m.role, content: m.content })),
@@ -73,7 +77,7 @@ async function send() {
       ...history.value.slice(0, -1), // 去掉刚加入的空 assistant 占位
       { role: 'user', content: text },
     ]
-    const resp = await externalAgentApi.chatStream(agentId.value, messagesForApi)
+    const resp = await externalAgentApi.chatStream(agentId.value, messagesForApi, chatSessionId.value)
 
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`)
@@ -131,6 +135,8 @@ async function send() {
 function clearMessages() {
   if (!confirm('确定清除所有对话记录吗？')) return
   messages.value = []
+  // 重置 session_id，下次对话在 agent 侧也是全新会话
+  chatSessionId.value = crypto.randomUUID()
 }
 
 function onKeydown(e: KeyboardEvent) {

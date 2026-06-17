@@ -57,13 +57,17 @@ export const externalAgentApi = {
       .then((r) => r.data.data),
 
   /** 向外部 Agent 发送消息，返回原生 Response 用于 SSE 流读取。 */
-  chatStream: (id: string, messages: Array<{ role: string; content: string }>): Promise<Response> =>
+  chatStream: (
+    id: string,
+    messages: Array<{ role: string; content: string }>,
+    sessionId?: string,
+  ): Promise<Response> =>
     fetch(`/api/v1/external-agents/${id}/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${localStorage.getItem('portal_token') ?? ''}`,
       },
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({ messages, session_id: sessionId }),
     }),
 }

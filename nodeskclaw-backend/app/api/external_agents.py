@@ -147,6 +147,8 @@ async def chat_with_agent(
     _, org = auth
     body = await request.json()
     messages: list[dict] = body.get("messages", [])
+    # custom 协议（mom_agent）需要稳定的 session_id 维持多轮记忆
+    session_id: str | None = body.get("session_id")
 
     agent = await external_agent_service.get_external_agent(
         agent_id=agent_id, org_id=org.id, db=db
@@ -160,6 +162,7 @@ async def chat_with_agent(
                 api_key=api_key,
                 protocol=agent.protocol,
                 messages=messages,
+                session_id=session_id,
             ):
                 yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
         except Exception as exc:
