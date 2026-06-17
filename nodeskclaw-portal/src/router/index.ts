@@ -155,6 +155,31 @@ const ceRoutes: RouteRecordRaw[] = [
     component: () => import('@/views/skills/admin/KnowledgeBaseFormView.vue'),
     meta: { requiresAuth: true },
   },
+  // 外部专用 Agent 模块
+  {
+    path: '/agents',
+    name: 'ExternalAgentList',
+    component: () => import('@/views/external-agents/ExternalAgentList.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/agents/:id/chat',
+    name: 'ExternalAgentChat',
+    component: () => import('@/views/external-agents/ExternalAgentChat.vue'),
+    meta: { requiresAuth: true, hideNav: true },
+  },
+  {
+    path: '/org-settings/external-agents/new',
+    name: 'ExternalAgentNew',
+    component: () => import('@/views/external-agents/ExternalAgentFormView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/org-settings/external-agents/:id/edit',
+    name: 'ExternalAgentEdit',
+    component: () => import('@/views/external-agents/ExternalAgentFormView.vue'),
+    meta: { requiresAuth: true },
+  },
   {
     path: '/admin',
     component: () => import('@/views/admin/AdminLayout.vue'),
