@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel as PydanticBase
+from pydantic import BaseModel as PydanticBase, field_validator
 
 
 class ExternalAgentCreate(PydanticBase):
@@ -46,3 +47,16 @@ class ExternalAgentResponse(PydanticBase):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def parse_capabilities(cls, v: Any) -> list[str]:
+        """数据库存 JSON 字符串，Pydantic 验证前自动解析为列表。"""
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                return parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, ValueError):
+                return []
+        return v or []
+

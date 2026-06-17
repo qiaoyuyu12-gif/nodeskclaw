@@ -28,10 +28,8 @@ router = APIRouter()
 
 
 def _to_response(agent) -> ExternalAgentResponse:
-    """将 ORM 对象转换为响应体，同时解析 capabilities JSON。"""
-    resp = ExternalAgentResponse.model_validate(agent)
-    resp.capabilities = external_agent_service.get_capabilities(agent)
-    return resp
+    """将 ORM 对象转换为响应体（capabilities 由 Schema validator 自动解析）。"""
+    return ExternalAgentResponse.model_validate(agent)
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────
