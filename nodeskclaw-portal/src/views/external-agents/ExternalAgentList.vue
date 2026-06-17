@@ -177,19 +177,20 @@ function formatTime(ts: string | null) {
           </button>
           <button
             v-if="isAdmin"
+            class="inline-flex items-center justify-center gap-1 rounded-lg border border-border text-muted-foreground px-3 py-1.5 text-xs hover:text-primary hover:border-primary/50 hover:bg-primary/5"
+            @click="router.push(`/org-settings/external-agents/${agent.id}/edit`)"
+          >
+            <Pencil class="w-3 h-3" />
+            编辑
+          </button>
+          <button
+            v-if="isAdmin"
             class="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 disabled:opacity-40"
             :disabled="syncing === agent.id"
             title="验证连接"
             @click="sync(agent)"
           >
             <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': syncing === agent.id }" />
-          </button>
-          <button
-            v-if="isAdmin"
-            class="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10"
-            @click="router.push(`/org-settings/external-agents/${agent.id}/edit`)"
-          >
-            <Pencil class="w-3.5 h-3.5" />
           </button>
           <button
             v-if="isAdmin"
