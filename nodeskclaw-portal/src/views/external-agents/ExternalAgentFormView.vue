@@ -153,6 +153,7 @@ async function save() {
         >
           <option value="openai_compatible">OpenAI 兼容（/v1/chat/completions）</option>
           <option value="custom">自定义（/chat + /health）</option>
+          <option value="nap">NAP v1.0（/stream + /meta）</option>
         </select>
       </div>
 
