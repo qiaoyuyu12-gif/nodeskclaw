@@ -13,7 +13,7 @@ class ExternalAgentCreate(PydanticBase):
     name: str
     endpoint: str
     api_key: str | None = None
-    protocol: Literal["openai_compatible", "custom"] = "openai_compatible"
+    protocol: Literal["openai_compatible", "custom", "nap"] = "openai_compatible"
     description: str | None = None
     capabilities: list[str] = []
     icon_emoji: str | None = None
@@ -24,7 +24,7 @@ class ExternalAgentUpdate(PydanticBase):
     name: str | None = None
     endpoint: str | None = None
     api_key: str | None = None
-    protocol: Literal["openai_compatible", "custom"] | None = None
+    protocol: Literal["openai_compatible", "custom", "nap"] | None = None
     description: str | None = None
     capabilities: list[str] | None = None
     icon_emoji: str | None = None

@@ -20,7 +20,7 @@ class ExternalAgent(BaseModel):
     endpoint: Mapped[str] = mapped_column(String(512), nullable=False)
     # AES-256-GCM 加密后的 API Key，base64(nonce + ciphertext)
     api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # 通信协议：openai_compatible | custom
+    # 通信协议：openai_compatible | custom | nap（NoDeskClaw Agent Protocol v1.0）
     protocol: Mapped[str] = mapped_column(
         String(32), nullable=False, default="openai_compatible", server_default="openai_compatible"
     )

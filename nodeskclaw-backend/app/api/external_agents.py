@@ -106,7 +106,10 @@ async def sync_agent(
     db: AsyncSession = Depends(get_db),
     auth=Depends(require_org_admin),
 ):
-    """验证外部 Agent 连接可达性，更新 is_reachable（需要 org admin）。"""
+    """验证外部 Agent 连接可达性，更新 is_reachable（需要 org admin）。
+
+    NAP 协议额外调用 /meta，将 capabilities / description 同步回数据库。
+    """
     _, org = auth
     agent = await external_agent_service.get_external_agent(
         agent_id=agent_id, org_id=org.id, db=db
@@ -119,6 +122,20 @@ async def sync_agent(
     )
     agent.is_reachable = reachable
     agent.last_checked_at = datetime.now(timezone.utc)
+
+    # NAP 协议：连通后从 /meta 同步 capabilities 和 description
+    if agent.protocol == "nap" and reachable:
+        try:
+            meta = await external_agent_adapter.fetch_meta(
+                endpoint=agent.endpoint, api_key=api_key
+            )
+            if meta.get("capabilities"):
+                agent.capabilities = json.dumps(meta["capabilities"], ensure_ascii=False)
+            if meta.get("description"):
+                agent.description = meta["description"]
+        except Exception:
+            logger.warning("NAP /meta fetch failed for agent %s, skipping meta sync", agent_id)
+
     await db.commit()
     return ApiResponse(data={"reachable": reachable, "agent_id": agent_id})
 
@@ -135,17 +152,17 @@ async def chat_with_agent(
     """向外部 Agent 发起聊天，通过 SSE 流式返回响应（所有登录用户可用）。
 
     请求体：
-      { "messages": [{"role": "user"|"assistant", "content": "..."}] }
+      { "messages": [{"role": "user"|"assistant", "content": "..."}], "session_id": "..." }
 
     SSE 事件格式：
       data: {"chunk": "文本片段"}\n\n
       data: {"done": true}\n\n
       data: {"error": "错误信息"}\n\n
     """
-    _, org = auth
+    user, org = auth
     body = await request.json()
     messages: list[dict] = body.get("messages", [])
-    # custom 协议（mom_agent）需要稳定的 session_id 维持多轮记忆
+    # session_id 用于维持多轮记忆（custom / nap 协议均需要）
     session_id: str | None = body.get("session_id")
 
     agent = await external_agent_service.get_external_agent(
@@ -161,6 +178,8 @@ async def chat_with_agent(
                 protocol=agent.protocol,
                 messages=messages,
                 session_id=session_id,
+                user_id=str(user.id),
+                organization_id=str(org.id),
             ):
                 yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
         except Exception as exc:
