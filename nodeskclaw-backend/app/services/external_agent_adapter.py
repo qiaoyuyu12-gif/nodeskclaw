@@ -33,7 +33,8 @@ async def verify_connection(endpoint: str, api_key: str | None, protocol: str) -
         headers["Authorization"] = f"Bearer {api_key}"
 
     try:
-        async with httpx.AsyncClient(timeout=_VERIFY_TIMEOUT) as client:
+        # trust_env=False：不走系统代理（HTTP_PROXY 等），直连 Agent 服务
+        async with httpx.AsyncClient(timeout=_VERIFY_TIMEOUT, trust_env=False) as client:
             if protocol == "openai_compatible":
                 # /v1/models 可能返回 200（无鉴权）或 401（有鉴权），均视为服务可达
                 resp = await client.get(
@@ -70,7 +71,8 @@ async def fetch_meta(endpoint: str, api_key: str | None) -> dict:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    async with httpx.AsyncClient(timeout=_VERIFY_TIMEOUT) as client:
+    # trust_env=False：不走系统代理，直连 Agent 服务
+    async with httpx.AsyncClient(timeout=_VERIFY_TIMEOUT, trust_env=False) as client:
         resp = await client.get(f"{endpoint}/meta", headers=headers)
         resp.raise_for_status()
         return resp.json()
@@ -102,7 +104,8 @@ async def chat_stream(
     if protocol == "openai_compatible":
         url = f"{endpoint}/v1/chat/completions"
         payload: dict = {"model": "default", "messages": messages, "stream": True}
-        async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT) as client:
+        # trust_env=False：不走系统代理，直连 Agent 服务
+        async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT, trust_env=False) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
                 async for chunk in _parse_openai_sse(resp):
@@ -119,7 +122,8 @@ async def chat_stream(
             "messages": messages,
             "metadata": {"source": "nodeskclaw"},
         }
-        async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT) as client:
+        # trust_env=False：不走系统代理，直连 Agent 服务
+        async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT, trust_env=False) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
                 async for chunk in _parse_nap_sse(resp):
@@ -137,7 +141,8 @@ async def chat_stream(
             "session_id": session_id or str(uuid.uuid4()),
             "message": last_user_msg,
         }
-        async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT) as client:
+        # trust_env=False：不走系统代理，直连 Agent 服务
+        async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT, trust_env=False) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
                 async for chunk in _parse_named_sse(resp):
