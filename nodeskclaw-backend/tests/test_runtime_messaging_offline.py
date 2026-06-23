@@ -139,6 +139,14 @@ class TestHandleFailuresNonRetriable:
 
 
 class TestBroadcastOfflineError:
+    @pytest.fixture(autouse=True)
+    def clear_offline_broadcast_cooldown(self):
+        # 每个测试前清空冷却字典，防止 time.monotonic() 在 CI 容器中值较小时触发误判
+        import app.services.runtime.messaging.middlewares.transport as _transport
+        _transport._last_offline_broadcast.clear()
+        yield
+        _transport._last_offline_broadcast.clear()
+
     @pytest.fixture
     def middleware(self):
         return TransportMiddleware()
@@ -162,7 +170,6 @@ class TestBroadcastOfflineError:
 
         with patch(
             "app.api.workspaces.broadcast_event",
-            new_callable=AsyncMock,
         ) as mock_broadcast:
             await middleware._broadcast_offline_error(mock_db, "ws-1", result)
 
@@ -189,7 +196,6 @@ class TestBroadcastOfflineError:
 
         with patch(
             "app.api.workspaces.broadcast_event",
-            new_callable=AsyncMock,
         ) as mock_broadcast:
             await middleware._broadcast_offline_error(mock_db, "ws-1", result)
 

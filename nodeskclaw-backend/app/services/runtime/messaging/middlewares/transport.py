@@ -239,9 +239,11 @@ class TransportMiddleware(MessageMiddleware):
         self, db, workspace_id: str, result: DeliveryResult,
     ) -> None:
         # 冷却期内不重复广播，避免 circuit half_open 每 30s 探活失败时向前端疯狂推错误气泡
+        # 注意：不能用 get(key, 0.0) 作为"从未广播"的默认值——CI 容器刚启动时
+        # time.monotonic() 本身可能 < 300s，导致 now - 0.0 < 300 误判为冷却期内。
         key = f"{workspace_id}:{result.target_node_id}"
         now = time.monotonic()
-        if now - _last_offline_broadcast.get(key, 0.0) < _OFFLINE_BROADCAST_COOLDOWN_S:
+        if key in _last_offline_broadcast and now - _last_offline_broadcast[key] < _OFFLINE_BROADCAST_COOLDOWN_S:
             return
         _last_offline_broadcast[key] = now
 
