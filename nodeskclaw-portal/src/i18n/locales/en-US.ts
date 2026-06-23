@@ -1864,6 +1864,11 @@ const enUS = {
       docker_check_timeout: "Docker environment check timed out. Ensure Docker Desktop or Docker daemon is running.",
       docker_unavailable: "Docker Compose is not available.",
     },
+    kb: {
+      ragflow_error: "Knowledge base service error: {detail}",
+      ragflow_unreachable: "Cannot reach the knowledge base service, please check the service URL",
+      ragflow_auth_failed: "Knowledge base service authentication failed, please check the API Key",
+    },
     deploy: {
       localhost_not_reachable: "AGENT_API_BASE_URL is currently localhost, which is unreachable from K8s pods. Set AGENT_API_BASE_URL to an external address reachable by K8s pods in the backend .env, then restart.",
       ingress_base_domain_required: "K8s deployment requires an access domain (ingress_base_domain). Please configure it in System Settings before deploying.",
