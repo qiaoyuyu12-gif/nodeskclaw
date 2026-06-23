@@ -82,3 +82,21 @@ async def sync_kb(
     kb.last_checked_at = datetime.now(timezone.utc)
     await db.commit()
     return ApiResponse(data={"reachable": reachable, "kb_id": kb_id})
+
+
+@router.get("/{kb_id}/documents", response_model=ApiResponse[dict])
+async def list_kb_documents(
+    kb_id: str,
+    page: int = 1,
+    page_size: int = 30,
+    db: AsyncSession = Depends(get_db),
+    auth=Depends(require_org_admin),
+):
+    """预览知识库文档列表，代理 RAGFlow API 避免前端直接持有 API Key。"""
+    user, org = auth
+    kb = await kb_service.get_knowledge_base(kb_id=kb_id, org_id=org.id, db=db)
+    api_key = kb_service.get_decrypted_api_key(kb)
+    data = await ragflow_adapter.list_documents(
+        kb.ragflow_endpoint, api_key, kb.ragflow_kb_id, page, page_size
+    )
+    return ApiResponse(data=data)

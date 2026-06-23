@@ -162,6 +162,7 @@ class TestBroadcastOfflineError:
 
         with patch(
             "app.api.workspaces.broadcast_event",
+            new_callable=AsyncMock,
         ) as mock_broadcast:
             await middleware._broadcast_offline_error(mock_db, "ws-1", result)
 
@@ -188,6 +189,7 @@ class TestBroadcastOfflineError:
 
         with patch(
             "app.api.workspaces.broadcast_event",
+            new_callable=AsyncMock,
         ) as mock_broadcast:
             await middleware._broadcast_offline_error(mock_db, "ws-1", result)
 

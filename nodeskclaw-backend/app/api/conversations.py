@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_org, get_db
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ForbiddenError
 from app.models.base import not_deleted
 from app.models.conversation import Conversation
 from app.models.workspace import Workspace
@@ -55,8 +55,11 @@ async def list_conversations(
     # 工作空间群聊默认只显示拓扑驱动的会话（is_manual=False），
     # 私人会话（is_manual=True）只在 InstanceChat 中通过 member_id + is_manual=true 查询
     effective_is_manual = is_manual if is_manual is not None else (True if member_id else False)
+    # 手动会话按当前用户隔离：只返回本人所在的手动会话，防止跨用户会话泄露
+    current_user_id = str(user.id) if effective_is_manual else None
     convs = await conversation_service.list_conversations(
         workspace_id, db, member_id=member_id, is_manual=effective_is_manual,
+        current_user_id=current_user_id,
     )
     return _ok([_conv_dict(c) for c in convs])
 
@@ -80,8 +83,13 @@ async def get_conversation_messages(
             not_deleted(Conversation),
         ).limit(1)
     )
-    if not conv_q.scalar_one_or_none():
+    conv = conv_q.scalar_one_or_none()
+    if not conv:
         raise NotFoundError("群聊不存在", "errors.conversation.not_found")
+
+    # 手动会话为私人会话：校验当前用户在成员列表中，防止跨用户读取历史
+    if conv.is_manual and str(user.id) not in (conv.member_node_ids or []):
+        raise ForbiddenError("无权访问此会话", "errors.conversation.forbidden")
 
     messages = await wm_msg_service.get_recent_messages(
         db, workspace_id, limit=limit, conversation_id=conv_id,

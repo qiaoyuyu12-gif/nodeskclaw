@@ -33,3 +33,21 @@ async def verify_connection(endpoint: str, api_key: str) -> bool:
     except Exception:
         logger.debug("RAGFlow connection check failed", exc_info=True)
         return False
+
+
+async def list_documents(
+    endpoint: str,
+    api_key: str,
+    dataset_id: str,
+    page: int = 1,
+    page_size: int = 30,
+) -> dict:
+    """获取 RAGFlow 数据集中的文档列表，原样透传响应 data 字段。"""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(
+            f"{endpoint.rstrip('/')}/api/v1/datasets/{dataset_id}/documents",
+            headers={"Authorization": f"Bearer {api_key}"},
+            params={"page": page, "page_size": page_size},
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", {})

@@ -112,10 +112,10 @@ const ceRoutes: RouteRecordRaw[] = [
     redirect: '/org-settings',
   },
   {
-    path: '/agent-performance',
-    name: 'AgentPerformance',
-    component: () => import('@/views/AgentPerformance.vue'),
-    meta: { requireFeature: 'performance_analytics' },
+    path: '/automation',
+    name: 'Automation',
+    component: () => import('@/views/AutomationView.vue'),
+    meta: { requiresAuth: true },
   },
   {
     path: '/gene-market',
@@ -153,6 +153,31 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/admin/knowledge-bases/:id/edit',
     name: 'AdminKnowledgeBaseEdit',
     component: () => import('@/views/skills/admin/KnowledgeBaseFormView.vue'),
+    meta: { requiresAuth: true },
+  },
+  // 外部专用 Agent 模块
+  {
+    path: '/agents',
+    name: 'ExternalAgentList',
+    component: () => import('@/views/external-agents/ExternalAgentList.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/agents/:id/chat',
+    name: 'ExternalAgentChat',
+    component: () => import('@/views/external-agents/ExternalAgentChat.vue'),
+    meta: { requiresAuth: true, hideNav: true },
+  },
+  {
+    path: '/org-settings/external-agents/new',
+    name: 'ExternalAgentNew',
+    component: () => import('@/views/external-agents/ExternalAgentFormView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/org-settings/external-agents/:id/edit',
+    name: 'ExternalAgentEdit',
+    component: () => import('@/views/external-agents/ExternalAgentFormView.vue'),
     meta: { requiresAuth: true },
   },
   {

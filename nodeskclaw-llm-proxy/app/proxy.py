@@ -1,5 +1,6 @@
 """LLM Proxy: resolves real API keys and forwards requests to upstream LLM providers."""
 
+import asyncio
 import json
 import logging
 import time
@@ -27,6 +28,49 @@ from app.models import Instance, InstanceProviderConfig, LlmUsageLog, OrgLlmKey,
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ── 探测请求缓存 ──────────────────────────────────────────────────────────────
+# OpenClaw Gateway 每次请求前会对上游做 API 类型探测（/api/tags、/version、
+# /v1/models 等），结果恒定，但每次都重复打 MiniMax 并写 DB 鉴权，造成明显延迟。
+# 用两层内存缓存消除重复开销：
+#   1. token 鉴权缓存  — 避免每次探测走 4 个 SELECT
+#   2. GET 响应缓存    — 避免重复打上游（MiniMax 对无效路径返回 404）
+
+_AUTH_CACHE: dict[str, tuple] = {}           # token → auth_result tuple
+_AUTH_CACHE_TS: dict[str, float] = {}
+_AUTH_CACHE_TTL = 120                        # 2 分钟
+
+_PROBE_RESP_CACHE: dict[str, tuple] = {}     # (provider, path) → (status, body, ctype)
+_PROBE_RESP_CACHE_TS: dict[str, float] = {}
+_PROBE_RESP_CACHE_TTL = 600                  # 10 分钟
+
+
+def _get_auth_cache(token: str):
+    ts = _AUTH_CACHE_TS.get(token)
+    if ts and time.monotonic() - ts < _AUTH_CACHE_TTL:
+        return _AUTH_CACHE.get(token)
+    _AUTH_CACHE.pop(token, None)
+    _AUTH_CACHE_TS.pop(token, None)
+    return None
+
+
+def _set_auth_cache(token: str, value: tuple) -> None:
+    _AUTH_CACHE[token] = value
+    _AUTH_CACHE_TS[token] = time.monotonic()
+
+
+def _get_probe_resp(key: str):
+    ts = _PROBE_RESP_CACHE_TS.get(key)
+    if ts and time.monotonic() - ts < _PROBE_RESP_CACHE_TTL:
+        return _PROBE_RESP_CACHE.get(key)
+    _PROBE_RESP_CACHE.pop(key, None)
+    _PROBE_RESP_CACHE_TS.pop(key, None)
+    return None
+
+
+def _set_probe_resp(key: str, value: tuple) -> None:
+    _PROBE_RESP_CACHE[key] = value
+    _PROBE_RESP_CACHE_TS[key] = time.monotonic()
 
 PROVIDER_DEFAULTS: dict[str, dict] = {
     "codex": {"base_url": "", "auth_type": "bearer"},
@@ -644,13 +688,15 @@ async def _handle_codex_proxy(
                 yield "data: [DONE]\n\n"
             finally:
                 response_meta = json.dumps(usage, ensure_ascii=False)
-                await _record_usage(
+                # 用独立 task 记录用量：finally 块在请求 cancel scope 内运行，
+                # 直接 await DB 会因 asyncpg 连接终止时 cancel scope 已激活而抛 CancelledError
+                asyncio.create_task(_record_usage(
                     ctx,
                     usage=usage,
                     status_code=200,
                     latency_ms=latency_ms,
                     response_body=response_meta,
-                )
+                ))
 
         return StreamingResponse(
             stream_generator(),
@@ -917,95 +963,116 @@ async def llm_proxy(provider: str, path: str, request: Request):
     if not proxy_token:
         return JSONResponse(status_code=401, content={"error": "Missing proxy token"})
 
-    async with get_session() as db:
-        result = await db.execute(
-            select(Instance).where(
-                Instance.wp_api_key == proxy_token,
-                Instance.deleted_at.is_(None),
-            )
-        )
-        instance = result.scalar_one_or_none()
-        if instance is None:
+    # GET 探测请求：先查响应缓存，命中则免 DB 鉴权直接返回
+    is_probe = request.method == "GET" and path not in ("v1/chat/completions", "chat/completions")
+    if is_probe:
+        probe_key = f"{provider}:{path}"
+        cached_probe = _get_probe_resp(probe_key)
+        if cached_probe is not None:
+            status, body_bytes, ctype = cached_probe
+            return Response(content=body_bytes, status_code=status,
+                            media_type=ctype or "application/json")
+
+    # token 鉴权缓存：避免每次探测都走 4 个 SELECT
+    auth_cache_key = f"{proxy_token}:{provider}"
+    cached_auth = _get_auth_cache(auth_cache_key)
+    if cached_auth is not None:
+        instance, real_key, base_url, api_type, org_key_id, key_source, skip_ssl_verify = cached_auth
+    else:
+        async with get_session() as db:
             result = await db.execute(
                 select(Instance).where(
-                    Instance.proxy_token == proxy_token,
+                    Instance.wp_api_key == proxy_token,
                     Instance.deleted_at.is_(None),
                 )
             )
             instance = result.scalar_one_or_none()
-        if instance is None:
-            return JSONResponse(status_code=401, content={"error": "Invalid proxy token"})
+            if instance is None:
+                result = await db.execute(
+                    select(Instance).where(
+                        Instance.proxy_token == proxy_token,
+                        Instance.deleted_at.is_(None),
+                    )
+                )
+                instance = result.scalar_one_or_none()
+            if instance is None:
+                return JSONResponse(status_code=401, content={"error": "Invalid proxy token"})
 
-        ipc_result = await db.execute(
-            select(InstanceProviderConfig).where(
-                InstanceProviderConfig.instance_id == instance.id,
-                InstanceProviderConfig.provider == provider,
-                not_deleted(InstanceProviderConfig),
-            )
-        )
-        ipc = ipc_result.scalar_one_or_none()
-
-        if ipc is None:
-            fallback_result = await db.execute(
-                select(UserLlmConfig).where(
-                    UserLlmConfig.user_id == instance.created_by,
-                    UserLlmConfig.org_id == instance.org_id,
-                    UserLlmConfig.provider == provider,
-                    not_deleted(UserLlmConfig),
+            ipc_result = await db.execute(
+                select(InstanceProviderConfig).where(
+                    InstanceProviderConfig.instance_id == instance.id,
+                    InstanceProviderConfig.provider == provider,
+                    not_deleted(InstanceProviderConfig),
                 )
             )
-            fallback_config = fallback_result.scalar_one_or_none()
-            key_source = fallback_config.key_source if fallback_config else "org"
-        else:
-            key_source = ipc.key_source
+            ipc = ipc_result.scalar_one_or_none()
 
-        is_org_key = key_source == "org"
-        real_key: str | None = None
-        base_url: str | None = None
-        api_type: str | None = None
-        org_key_id: str | None = None
-        skip_ssl_verify: bool = False
-
-        if is_org_key:
-            key_result = await db.execute(
-                select(OrgLlmKey).where(
-                    OrgLlmKey.org_id == instance.org_id,
-                    OrgLlmKey.provider == provider,
-                    OrgLlmKey.is_active.is_(True),
-                    not_deleted(OrgLlmKey),
-                ).order_by(OrgLlmKey.created_at).limit(1)
-            )
-            org_key = key_result.scalar_one_or_none()
-            if org_key is None:
-                return JSONResponse(status_code=404, content={
-                    "error": f"当前组织未配置 {provider} 的 Working Plan Key，请联系管理员"
-                })
-            real_key = org_key.api_key
-            base_url = org_key.base_url
-            api_type = org_key.api_type
-            org_key_id = org_key.id
-            skip_ssl_verify = org_key.skip_ssl_verify
-
-            ok, msg = await _check_quota(org_key.id, org_key.org_token_limit, org_key.system_token_limit, db)
-            if not ok:
-                return JSONResponse(status_code=429, content={"error": msg})
-        else:
-            key_result = await db.execute(
-                select(UserLlmKey).where(
-                    UserLlmKey.user_id == instance.created_by,
-                    UserLlmKey.provider == provider,
-                    not_deleted(UserLlmKey),
+            if ipc is None:
+                fallback_result = await db.execute(
+                    select(UserLlmConfig).where(
+                        UserLlmConfig.user_id == instance.created_by,
+                        UserLlmConfig.org_id == instance.org_id,
+                        UserLlmConfig.provider == provider,
+                        not_deleted(UserLlmConfig),
+                    )
                 )
-            )
-            user_key = key_result.scalar_one_or_none()
-            if user_key is None:
-                return JSONResponse(status_code=404, content={
-                    "error": f"未找到 {provider} 的个人 Key"
-                })
-            real_key = user_key.api_key
-            base_url = user_key.base_url
-            api_type = user_key.api_type
-            skip_ssl_verify = user_key.skip_ssl_verify
+                fallback_config = fallback_result.scalar_one_or_none()
+                key_source = fallback_config.key_source if fallback_config else "org"
+            else:
+                key_source = ipc.key_source
+
+            is_org_key = key_source == "org"
+            real_key: str | None = None
+            base_url: str | None = None
+            api_type: str | None = None
+            org_key_id: str | None = None
+            skip_ssl_verify: bool = False
+
+            if is_org_key:
+                key_result = await db.execute(
+                    select(OrgLlmKey).where(
+                        OrgLlmKey.org_id == instance.org_id,
+                        OrgLlmKey.provider == provider,
+                        OrgLlmKey.is_active.is_(True),
+                        not_deleted(OrgLlmKey),
+                    ).order_by(OrgLlmKey.created_at).limit(1)
+                )
+                org_key = key_result.scalar_one_or_none()
+                if org_key is None:
+                    return JSONResponse(status_code=404, content={
+                        "error": f"当前组织未配置 {provider} 的 Working Plan Key，请联系管理员"
+                    })
+                real_key = org_key.api_key
+                base_url = org_key.base_url
+                api_type = org_key.api_type
+                org_key_id = org_key.id
+                skip_ssl_verify = org_key.skip_ssl_verify
+
+                ok, msg = await _check_quota(org_key.id, org_key.org_token_limit, org_key.system_token_limit, db)
+                if not ok:
+                    return JSONResponse(status_code=429, content={"error": msg})
+            else:
+                key_result = await db.execute(
+                    select(UserLlmKey).where(
+                        UserLlmKey.user_id == instance.created_by,
+                        UserLlmKey.provider == provider,
+                        not_deleted(UserLlmKey),
+                    )
+                )
+                user_key = key_result.scalar_one_or_none()
+                if user_key is None:
+                    return JSONResponse(status_code=404, content={
+                        "error": f"未找到 {provider} 的个人 Key"
+                    })
+                real_key = user_key.api_key
+                base_url = user_key.base_url
+                api_type = user_key.api_type
+                skip_ssl_verify = user_key.skip_ssl_verify
+
+        # 缓存鉴权结果（探测请求和普通请求复用）
+        _set_auth_cache(auth_cache_key, (
+            instance, real_key, base_url, api_type, org_key_id, key_source, skip_ssl_verify,
+        ))
 
     raw_body = await request.body()
     body = _maybe_inject_stream_options(raw_body, provider)
@@ -1025,6 +1092,7 @@ async def llm_proxy(provider: str, path: str, request: Request):
         request_path=f"/{path}",
         is_stream=is_stream,
         raw_body=raw_body,
+        is_probe=is_probe,
     )
 
     if provider == CODEX_PROVIDER:
@@ -1055,11 +1123,11 @@ async def llm_proxy(provider: str, path: str, request: Request):
 
 class _RequestContext:
     __slots__ = ("instance", "provider", "key_source", "org_key_id",
-                 "request_path", "is_stream", "raw_body")
+                 "request_path", "is_stream", "raw_body", "is_probe")
 
     def __init__(self, *, instance: Instance, provider: str, key_source: str,
                  org_key_id: str | None, request_path: str, is_stream: bool,
-                 raw_body: bytes):
+                 raw_body: bytes, is_probe: bool = False):
         self.instance = instance
         self.provider = provider
         self.key_source = key_source
@@ -1067,6 +1135,7 @@ class _RequestContext:
         self.request_path = request_path
         self.is_stream = is_stream
         self.raw_body = raw_body
+        self.is_probe = is_probe
 
 
 async def _handle_non_stream(
@@ -1110,6 +1179,13 @@ async def _handle_non_stream(
         try:
             parsed = json.loads(resp_body)
         except (json.JSONDecodeError, UnicodeDecodeError):
+            # 探测请求响应写入缓存（避免重复打上游）
+            if ctx.is_probe:
+                probe_key = f"{ctx.provider}:{ctx.request_path.lstrip('/')}"
+                _set_probe_resp(probe_key, (
+                    resp.status_code, resp_body,
+                    resp.headers.get("content-type", "application/json"),
+                ))
             return Response(
                 status_code=resp.status_code,
                 content=resp_body,
@@ -1118,6 +1194,15 @@ async def _handle_non_stream(
             )
     else:
         parsed = None
+
+    # 探测请求响应写入缓存
+    if ctx.is_probe:
+        probe_key = f"{ctx.provider}:{ctx.request_path.lstrip('/')}"
+        _set_probe_resp(probe_key, (
+            resp.status_code,
+            json.dumps(parsed).encode() if parsed is not None else b"",
+            resp.headers.get("content-type", "application/json"),
+        ))
 
     return JSONResponse(
         status_code=resp.status_code,
@@ -1190,10 +1275,14 @@ async def _handle_stream(
             if stream_error:
                 logger.warning("SSE stream error from %s: %s", ctx.provider, stream_error[:512])
             response_meta = json.dumps(usage_data, ensure_ascii=False) if usage_data else None
-            await _record_usage(ctx, usage=usage_data, status_code=resp.status_code,
-                                latency_ms=latency_ms,
-                                error_message=stream_error[:512] if stream_error else None,
-                                response_body=response_meta)
+            # 用独立 task 记录用量：finally 块在请求 cancel scope 内运行，
+            # 直接 await DB 会因 asyncpg 连接终止时 cancel scope 已激活而抛 CancelledError
+            asyncio.create_task(_record_usage(
+                ctx, usage=usage_data, status_code=resp.status_code,
+                latency_ms=latency_ms,
+                error_message=stream_error[:512] if stream_error else None,
+                response_body=response_meta,
+            ))
 
     resp_headers = {}
     for k, v in resp.headers.items():
@@ -1220,6 +1309,9 @@ async def _record_usage(
     error_message: str | None = None,
     response_body: str | None = None,
 ):
+    # 探测请求（API 类型探测 GET）无需记录 usage，避免大量无意义 DB 写入
+    if ctx.is_probe:
+        return
     try:
         request_body = None
         if settings.LLM_LOG_CONTENT:

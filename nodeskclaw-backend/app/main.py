@@ -566,6 +566,10 @@ async def lifespan(app: FastAPI):
     from app.services.audit_retention_runner import audit_retention_runner
     audit_retention_runner.start()
 
+    from app.services.automation_runner import AutomationRunner
+    automation_runner = AutomationRunner(async_session_factory)
+    automation_runner.start()
+
     # ── 启动飞书 WebSocket 长链接 ──
     from app.services.channel_adapters.feishu_ws_client import FeishuWSClient
     feishu_ws_clients: list[FeishuWSClient] = []
@@ -872,6 +876,7 @@ async def lifespan(app: FastAPI):
     logger.info("Agent Tunnel 连接将随进程退出自动关闭")
     await summary_job.stop()
     await schedule_runner.stop()
+    await automation_runner.stop()
     await audit_retention_runner.stop()
     await instance_health_checker.stop()
     await health_checker.stop()

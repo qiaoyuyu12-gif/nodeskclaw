@@ -1836,7 +1836,14 @@ async def agent_chat(
                     conversation_id=data.conversation_id,
                 )
 
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # 关闭 nginx 缓冲，确保 SSE chunk 即时透传
+        },
+    )
 
 
 # ── SSE Event Stream ─────────────────────────────────
