@@ -4,12 +4,17 @@ import { useRouter } from 'vue-router'
 import { BookOpen, Plus, Trash2, Pencil, RefreshCw, CheckCircle2, XCircle, Circle } from 'lucide-vue-next'
 import { useSkillStore } from '@/stores/skills'
 import { kbApi } from '@/services/skills'
+import type { KnowledgeBase } from '@/services/skills'
 import KbSyncStatus from '@/components/skills/KbSyncStatus.vue'
+import KnowledgeBasePreviewDrawer from '@/components/skills/KnowledgeBasePreviewDrawer.vue'
 
 const router = useRouter()
 const skillStore = useSkillStore()
 const deleting = ref<string | null>(null)
 const syncing = ref<string | null>(null)
+
+// 预览 drawer 状态
+const previewKb = ref<KnowledgeBase | null>(null)
 
 onMounted(() => skillStore.fetchKnowledgeBases())
 
@@ -33,6 +38,12 @@ async function sync(id: string) {
   } finally {
     syncing.value = null
   }
+}
+
+function openPreview(kb: KnowledgeBase) {
+  // 仅已连接的知识库支持预览
+  if (!kb.is_reachable) return
+  previewKb.value = kb
 }
 </script>
 
@@ -67,9 +78,14 @@ async function sync(id: string) {
         :key="kb.id"
         class="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4"
       >
-        <div class="flex items-center gap-4">
+        <!-- 点击左侧内容区打开预览，已连接时显示手形光标 -->
+        <div
+          class="flex items-center gap-4 flex-1 min-w-0"
+          :class="kb.is_reachable ? 'cursor-pointer hover:opacity-80 transition-opacity' : 'cursor-default'"
+          @click="openPreview(kb)"
+        >
           <BookOpen class="w-5 h-5 text-muted-foreground shrink-0" />
-          <div>
+          <div class="min-w-0">
             <p class="font-medium text-foreground text-sm">{{ kb.name }}</p>
             <p class="text-xs text-muted-foreground mt-0.5">{{ kb.ragflow_endpoint }}</p>
             <!-- 连接状态：已验证时显示时间 -->
@@ -80,7 +96,7 @@ async function sync(id: string) {
           <KbSyncStatus :source-type="kb.source_type" />
           <!-- 连接状态标签 -->
           <span
-            class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium"
+            class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium shrink-0"
             :class="{
               'bg-green-100 text-green-700': kb.is_reachable === true,
               'bg-red-100 text-red-700': kb.is_reachable === false && kb.last_checked_at !== null,
@@ -95,26 +111,26 @@ async function sync(id: string) {
             <span v-else>未验证</span>
           </span>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 ml-3 shrink-0">
           <!-- 连接验证按钮 -->
           <button
             class="p-2 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 disabled:opacity-40"
             :disabled="syncing === kb.id"
             :title="'验证连接'"
-            @click="sync(kb.id)"
+            @click.stop="sync(kb.id)"
           >
             <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': syncing === kb.id }" />
           </button>
           <button
             class="p-2 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10"
-            @click="router.push(`/admin/knowledge-bases/${kb.id}/edit`)"
+            @click.stop="router.push(`/admin/knowledge-bases/${kb.id}/edit`)"
           >
             <Pencil class="w-4 h-4" />
           </button>
           <button
             class="p-2 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 disabled:opacity-40"
             :disabled="deleting === kb.id"
-            @click="remove(kb.id)"
+            @click.stop="remove(kb.id)"
           >
             <Trash2 class="w-4 h-4" />
           </button>
@@ -122,4 +138,7 @@ async function sync(id: string) {
       </div>
     </div>
   </div>
+
+  <!-- 知识库文档预览 drawer -->
+  <KnowledgeBasePreviewDrawer :kb="previewKb" @close="previewKb = null" />
 </template>

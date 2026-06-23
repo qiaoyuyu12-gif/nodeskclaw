@@ -83,6 +83,29 @@ export interface QueryResult {
   results: Array<{ content: string; score?: number; [key: string]: unknown }>
 }
 
+/** RAGFlow 文档列表单条记录 */
+export interface KbDocument {
+  id: string
+  name: string
+  /** 分片数量 */
+  chunk_num?: number
+  /** 兼容旧字段名 */
+  chunk_count?: number
+  token_num?: number
+  /** 解析进度 0-1 */
+  progress?: number
+  /** 解析状态：0 未开始、1 解析中、2 完成、3 失败 */
+  run?: string
+  /** 文件大小（字节） */
+  size?: number
+  create_time?: string | number
+}
+
+export interface KbDocumentListData {
+  docs: KbDocument[]
+  total: number
+}
+
 export const kbApi = {
   list: () =>
     api.get<{ data: KnowledgeBase[] }>('/knowledge-bases').then((r) => r.data.data),
@@ -97,6 +120,13 @@ export const kbApi = {
 
   sync: (id: string) =>
     api.post<{ data: { reachable: boolean; kb_id: string } }>(`/knowledge-bases/${id}/sync`).then((r) => r.data.data),
+
+  documents: (id: string, page = 1, pageSize = 30) =>
+    api
+      .get<{ data: KbDocumentListData }>(`/knowledge-bases/${id}/documents`, {
+        params: { page, page_size: pageSize },
+      })
+      .then((r) => r.data.data),
 }
 
 export const instanceKbApi = {
