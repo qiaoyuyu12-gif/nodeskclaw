@@ -28,6 +28,34 @@ async def create_node_card(
     tags: list | None = None,
     metadata: dict | None = None,
 ) -> NodeCard:
+    # 幂等：同一 (node_id, workspace_id) 可能已存在卡片——可能是活跃的孤儿，
+    # 也可能是上一轮 add/remove 周期遗留的软删除记录。直接 INSERT 会撞上
+    # 部分唯一索引 uq_node_card_node_workspace（WHERE deleted_at IS NULL），
+    # 因此优先复用/复活既有行，避免 UniqueViolationError。
+    existing = await get_node_card(db, node_id=node_id, workspace_id=workspace_id)
+    if existing is None:
+        result = await db.execute(
+            select(NodeCard)
+            .where(
+                NodeCard.node_id == node_id,
+                NodeCard.workspace_id == workspace_id,
+            )
+            .order_by(NodeCard.created_at.desc())
+        )
+        existing = result.scalars().first()
+
+    if existing is not None:
+        existing.deleted_at = None
+        existing.node_type = node_type
+        existing.hex_q = hex_q
+        existing.hex_r = hex_r
+        existing.name = name
+        existing.status = status
+        existing.description = description
+        existing.tags = tags
+        existing.metadata_ = metadata
+        return existing
+
     card = NodeCard(
         id=str(uuid.uuid4()),
         node_type=node_type,
