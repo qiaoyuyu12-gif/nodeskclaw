@@ -40,16 +40,17 @@
 | attachments | JSONB | nullable，格式见下 |
 | created_at | TIMESTAMP | |
 
-`attachments` 元素结构：
+`attachments` 元素结构（**只存 `storage_key`，不存 URL**）：
 ```json
 {
   "name": "chart.png",
   "size": 102400,
   "content_type": "image/png",
-  "storage_key": "external-agents/org1/uuid/chart.png",
-  "url": "https://..."
+  "storage_key": "external-agents/org1/uuid/chart.png"
 }
 ```
+
+presigned URL 不持久化，原因：presigned URL 有有效期，存入 DB 后历史记录加载时 URL 已失效。`GET /sessions/{id}/messages` 返回消息时，后端遍历每条 user message 的 attachments，调 `storage_service.generate_presigned_url(storage_key)` 实时生成 URL 注入响应，前端始终拿到有效 URL。
 
 无软删除字段（跟随 session 级联删除）。
 
@@ -71,7 +72,7 @@ Response 200:
   "name": "chart.png",
   "size": 102400,
   "content_type": "image/png",
-  "url": "https://presigned-url..."
+  "url": "https://presigned-url..."   // 仅供本次发送使用，不持久化到 DB
 }
 ```
 
@@ -106,13 +107,13 @@ Body:
 {
   "message": "帮我分析这张图",
   "session_id": "<UUID>",           // 必填，关联到数据库 session
-  "attachments": [                   // 新增，可为空数组
+  "attachments": [                   // 新增，可为空数组；url 由前端上传后临时持有
     {
       "name": "chart.png",
       "size": 102400,
       "content_type": "image/png",
       "storage_key": "...",
-      "url": "https://..."
+      "url": "https://..."           // 用于本次转发给外部 Agent，不写入 DB
     }
   ]
 }
@@ -181,7 +182,7 @@ Body:
 - 用户气泡：消息文本上方展示附件列表
   - 图片：缩略图，点击放大（lightbox）
   - 文件：图标 + 文件名，点击下载（跳转 URL）
-- Assistant 气泡：不变
+- Assistant 气泡：渲染为 Markdown，文本中的 URL 自动 linkify 为可点击链接（外部 Agent 返回的文件地址直接可访问）
 
 ---
 
@@ -189,7 +190,8 @@ Body:
 
 - 文件大小上限：20MB（与现有 workspace 上传一致）
 - 附件上传接口权限：已登录用户（无需 org admin）
-- 附件 presigned URL 有效期：沿用 storage_service 默认配置
+- 附件 presigned URL **不存 DB**，由 `GET /sessions/{id}/messages` 返回时实时生成
+- 外部 Agent 响应文本中包含的文件 URL 为直接可访问地址，前端 Markdown 渲染时 linkify 即可，无需特殊处理
 - 聊天接口 `session_id` 变为必填（前端进入页面时自动创建 session）
 - 软删除 session 后，其 messages 不物理删除，仅通过 `deleted_at` 过滤
 
@@ -199,5 +201,5 @@ Body:
 
 - 附件管理（批量删除、用量统计）
 - 会话搜索 / 关键词过滤
-- 附件 URL 失效后的重新生成逻辑
+- storage_key 对应 S3 对象的生命周期管理（当前不主动删除）
 - NAP / custom 协议专属的 attachments 字段（当前统一用文本 URL）
