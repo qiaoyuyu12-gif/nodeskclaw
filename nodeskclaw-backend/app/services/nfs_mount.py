@@ -318,7 +318,16 @@ async def _find_running_pod(
 
 
 class DockerFS:
-    """Host filesystem proxy for Docker instances — files at DOCKER_DATA_DIR/{slug}/data/."""
+    """Filesystem proxy for Docker instances.
+
+    容器运行中时，所有 I/O 都走 ``docker exec <slug>`` **在容器内以 root 执行**
+    （与 PodFS 的 kubectl exec 对齐）。这是必须的：openclaw 容器 entrypoint 会把
+    ``.openclaw`` 目录权限收紧到 root:700，非 root 的后端进程直接读写宿主机 bind-mount
+    路径会 EACCES（原生 Linux/WSL 开发模式下尤甚）。
+
+    容器未运行时回退到宿主机路径直读直写（Mac/可读场景的兜底），文件位于
+    ``DOCKER_DATA_DIR/{slug}/data/``。
+    """
 
     def __init__(self, slug: str, home_prefix: str = ".openclaw"):
         from app.services.docker_constants import DOCKER_DATA_DIR
@@ -326,10 +335,25 @@ class DockerFS:
         self._base = DOCKER_DATA_DIR / slug / "data"
         self._home_prefix = home_prefix.strip("/")
         self._abs_prefix = f"/root/{self._home_prefix}"
+        self._running: bool | None = None
         import os
         os.makedirs(str(self._base), exist_ok=True)
 
-    def _resolve(self, remote_path: str) -> pathlib.Path:
+    async def _is_running(self) -> bool:
+        """容器是否在运行（结果在本 FS 实例生命周期内 memoize）。"""
+        if self._running is None:
+            from app.services.runtime.compute.docker_provider import _run_docker
+            try:
+                rc, stdout, _ = await _run_docker(
+                    "docker", "inspect", "--format", "{{.State.Status}}", self._slug,
+                )
+                self._running = rc == 0 and stdout.decode().strip() == "running"
+            except Exception:
+                logger.warning("DockerFS._is_running inspect failed for %s", self._slug, exc_info=True)
+                self._running = False
+        return self._running
+
+    def _rel(self, remote_path: str) -> str:
         # 兼容 Path 对象和 Windows 反斜杠（str(Path)在 Windows 产生 \，as_posix 统一为 /）
         if isinstance(remote_path, pathlib.Path):
             remote_path = remote_path.as_posix()
@@ -337,54 +361,157 @@ class DockerFS:
             remote_path = str(remote_path).replace("\\", "/")
         abs_slash = self._abs_prefix + "/"
         if remote_path.startswith(abs_slash):
-            rel = remote_path[len(abs_slash):]
+            return remote_path[len(abs_slash):]
         elif remote_path.startswith(self._abs_prefix):
-            rel = remote_path[len(self._abs_prefix):]
+            return remote_path[len(self._abs_prefix):].lstrip("/")
         elif remote_path.startswith(self._home_prefix + "/"):
-            rel = remote_path[len(self._home_prefix) + 1:]
+            return remote_path[len(self._home_prefix) + 1:]
         elif remote_path == self._home_prefix:
-            rel = ""
+            return ""
         else:
-            rel = remote_path.lstrip("/")
-        return self._base / rel
+            return remote_path.lstrip("/")
+
+    def _resolve(self, remote_path: str) -> pathlib.Path:
+        """宿主机绝对路径（用于容器未运行时的回退分支）。"""
+        return self._base / self._rel(remote_path)
+
+    def _container_path(self, remote_path: str) -> str:
+        """容器内绝对路径（用于 docker exec 分支，恒为 posix）。"""
+        rel = self._rel(remote_path)
+        return f"{self._abs_prefix}/{rel}" if rel else self._abs_prefix
 
     async def read_text(self, remote_path: str) -> str | None:
-        """Read a file from local Docker data dir. Returns None if file does not exist."""
+        """Read a file. Returns None if file does not exist."""
+        if await self._is_running():
+            cp = self._container_path(remote_path)
+            try:
+                result = await self.exec_command(["bash", "-c", f"cat '{cp}' 2>/dev/null || true"])
+            except Exception:
+                return None
+            return result if result else None
         p = self._resolve(remote_path)
         if not p.exists():
             return None
         return p.read_text(encoding="utf-8")
 
     async def write_text(self, remote_path: str, content: str) -> None:
+        if await self._is_running():
+            cp = self._container_path(remote_path)
+            encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+            if len(encoded) < CHUNK_SIZE:
+                await self.exec_command(
+                    ["bash", "-c",
+                     f"mkdir -p \"$(dirname '{cp}')\" && "
+                     f"printf '%s' '{encoded}' | base64 -d > '{cp}'"]
+                )
+            else:
+                await self._chunked_write(cp, encoded)
+            return
         p = self._resolve(remote_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
 
+    async def _chunked_write(self, container_path: str, encoded: str) -> None:
+        tmp = "/tmp/_ndk_upload.b64"
+        await self.exec_command(["rm", "-f", tmp])
+        for i in range(0, len(encoded), CHUNK_SIZE):
+            chunk = encoded[i:i + CHUNK_SIZE]
+            await self.exec_command(["bash", "-c", f"printf '%s' '{chunk}' >> {tmp}"])
+        await self.exec_command(
+            ["bash", "-c",
+             f"mkdir -p \"$(dirname '{container_path}')\" && "
+             f"base64 -d {tmp} > '{container_path}' && rm -f {tmp}"]
+        )
+
     async def read_binary(self, remote_path: str) -> bytes | None:
         """Read a file as raw bytes. Returns None if file does not exist."""
+        if await self._is_running():
+            cp = self._container_path(remote_path)
+            try:
+                result = await self.exec_command(["bash", "-c", f"base64 '{cp}' 2>/dev/null"])
+            except Exception:
+                return None
+            if not result:
+                return None
+            return base64.b64decode(result)
         p = self._resolve(remote_path)
         if not p.exists():
             return None
         return p.read_bytes()
 
     async def write_binary(self, remote_path: str, data: bytes) -> None:
+        if await self._is_running():
+            cp = self._container_path(remote_path)
+            encoded = base64.b64encode(data).decode("ascii")
+            if len(encoded) < CHUNK_SIZE:
+                await self.exec_command(
+                    ["bash", "-c",
+                     f"mkdir -p \"$(dirname '{cp}')\" && "
+                     f"printf '%s' '{encoded}' | base64 -d > '{cp}'"]
+                )
+            else:
+                await self._chunked_write(cp, encoded)
+            return
         p = self._resolve(remote_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(data)
 
     async def remove(self, remote_path: str) -> None:
+        if await self._is_running():
+            await self.exec_command(["rm", "-rf", self._container_path(remote_path)])
+            return
         p = self._resolve(remote_path)
         if p.exists():
             p.unlink()
 
     async def exists(self, remote_path: str) -> bool:
+        if await self._is_running():
+            try:
+                await self.exec_command(["test", "-e", self._container_path(remote_path)])
+                return True
+            except Exception:
+                return False
         return self._resolve(remote_path).exists()
 
     async def mkdir(self, remote_path: str) -> None:
+        if await self._is_running():
+            await self.exec_command(["mkdir", "-p", self._container_path(remote_path)])
+            return
         p = self._resolve(remote_path)
         p.mkdir(parents=True, exist_ok=True)
 
     async def list_dir(self, remote_path: str) -> list[dict] | None:
+        if await self._is_running():
+            cp = self._container_path(remote_path)
+            try:
+                result = await self.exec_command(
+                    ["bash", "-c",
+                     f"if [ -d '{cp}' ]; then "
+                     f"find '{cp}' -maxdepth 1 -mindepth 1 "
+                     f"-printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null; "
+                     f"echo '__DIR_OK__'; "
+                     f"else echo '__NOT_FOUND__'; fi"]
+                )
+            except Exception:
+                return None
+            if not result or "__NOT_FOUND__" in result:
+                return None
+            items: list[dict] = []
+            for line in result.strip().splitlines():
+                if line == "__DIR_OK__":
+                    continue
+                parts = line.split("\t", 3)
+                if len(parts) < 4:
+                    continue
+                ftype, size_str, mtime_str, name = parts
+                items.append({
+                    "name": name,
+                    "is_dir": ftype == "d",
+                    "size": int(size_str) if size_str.isdigit() else 0,
+                    "modified_at": float(mtime_str) if mtime_str.replace(".", "", 1).isdigit() else 0.0,
+                })
+            items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+            return items
         p = self._resolve(remote_path)
         if not p.exists():
             return None
@@ -401,7 +528,40 @@ class DockerFS:
         return items
 
     async def scan_skills(self, skills_dir_rel: str) -> list[dict]:
-        """Scan skills directory — returns [{name, content, file_count}]."""
+        """Scan skills directory — returns [{name, content, file_count}].
+
+        容器运行时走与 PodFS 相同的 base64 node 脚本单次 exec；失败时抛
+        SkillScanError（调用方据此区分"空"与"扫描失败"）。
+        """
+        if await self._is_running():
+            abs_dir = self._container_path(skills_dir_rel)
+            js = (
+                'const fs=require("fs"),path=require("path");'
+                f'const dir="{abs_dir}";'
+                'const r=[];'
+                'if(fs.existsSync(dir)){'
+                'for(const n of fs.readdirSync(dir).sort()){'
+                'const d=path.join(dir,n);'
+                'if(!fs.statSync(d).isDirectory())continue;'
+                'const md=path.join(d,"SKILL.md");'
+                'let c="";'
+                'if(fs.existsSync(md))c=fs.readFileSync(md,"utf8");'
+                'const fc=fs.readdirSync(d).filter(f=>fs.statSync(path.join(d,f)).isFile()).length;'
+                'r.push({name:n,content:c,file_count:fc});'
+                '}}'
+                'process.stdout.write(Buffer.from(JSON.stringify(r)).toString("base64"));'
+            )
+            encoded = base64.b64encode(js.encode()).decode("ascii")
+            try:
+                raw = await self.exec_command(
+                    ["bash", "-c", f"printf '%s' '{encoded}' | base64 -d | node"]
+                )
+                if not raw:
+                    return []
+                return json.loads(base64.b64decode(raw).decode("utf-8"))
+            except Exception as exc:
+                logger.warning("scan_skills failed for %s", self._slug, exc_info=True)
+                raise SkillScanError(f"scan_skills failed: {exc}") from exc
         skills_dir = self._resolve(skills_dir_rel)
         if not skills_dir.exists():
             return []
@@ -416,6 +576,31 @@ class DockerFS:
         return results
 
     async def file_stat(self, path: str) -> dict | None:
+        if await self._is_running():
+            cp = self._container_path(path)
+            try:
+                result = await self.exec_command(
+                    ["bash", "-c",
+                     f"if stat -c '%s|%Y' '{cp}' 2>/dev/null; then "
+                     f"file -bi '{cp}' 2>/dev/null || echo 'application/octet-stream'; "
+                     f"else echo '__NOT_FOUND__'; fi"]
+                )
+            except Exception:
+                return None
+            if not result or "__NOT_FOUND__" in result:
+                return None
+            lines = result.strip().splitlines()
+            if len(lines) < 1:
+                return None
+            stat_parts = lines[0].split("|")
+            if len(stat_parts) < 2:
+                return None
+            mime = lines[1].strip().split(";")[0] if len(lines) > 1 else "application/octet-stream"
+            return {
+                "size": int(stat_parts[0]) if stat_parts[0].isdigit() else 0,
+                "modified_at": float(stat_parts[1]) if stat_parts[1].isdigit() else 0.0,
+                "mime_type": mime,
+            }
         import mimetypes
         p = self._resolve(path)
         if not p.exists():
@@ -429,12 +614,31 @@ class DockerFS:
         }
 
     async def append_text(self, remote_path: str, content: str) -> None:
+        if await self._is_running():
+            cp = self._container_path(remote_path)
+            encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+            await self.exec_command(
+                ["bash", "-c",
+                 f"mkdir -p \"$(dirname '{cp}')\" && "
+                 f"printf '%s' '{encoded}' | base64 -d >> '{cp}'"]
+            )
+            return
         p = self._resolve(remote_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
             f.write(content)
 
     async def read_last_line(self, remote_path: str) -> str | None:
+        if await self._is_running():
+            cp = self._container_path(remote_path)
+            try:
+                result = await self.exec_command(["bash", "-c", f"tail -1 '{cp}' 2>/dev/null || true"])
+            except Exception:
+                return None
+            if not result:
+                return None
+            stripped = result.strip()
+            return stripped or None
         p = self._resolve(remote_path)
         if not p.exists():
             return None
@@ -487,7 +691,7 @@ def _home_prefix_for_runtime(runtime: str) -> str:
 async def remote_fs(instance: Instance, db: AsyncSession) -> AsyncIterator[RemoteFS]:
     """Yield a filesystem proxy connected to the instance.
 
-    Docker instances use DockerFS (direct host path access).
+    Docker instances use DockerFS (docker exec when running, host path fallback when stopped).
     K8s instances use PodFS (kubectl exec).
     """
     if instance.compute_provider == "docker":
