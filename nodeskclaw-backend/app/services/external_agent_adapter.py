@@ -10,6 +10,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -21,6 +22,47 @@ _VERIFY_TIMEOUT = 10.0
 _CHAT_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=5.0)
 
 
+def _resolve_wsl_endpoint(endpoint: str) -> str:
+    """WSL 环境下将 127.0.0.1/localhost 映射到 Windows 宿主机 IP。
+
+    WSL 内的 127.0.0.1 是 WSL loopback，无法访问 Windows 上运行的服务。
+    Windows 宿主机 IP 从 /etc/resolv.conf 的 nameserver 行读取。
+    """
+    # 检测是否在 WSL 环境中运行
+    try:
+        with open("/proc/sys/kernel/osrelease") as f:
+            osrelease = f.read().lower()
+    except OSError:
+        return endpoint
+
+    if "microsoft" not in osrelease and "wsl" not in osrelease:
+        return endpoint
+
+    parsed = urlparse(endpoint)
+    if parsed.hostname not in ("127.0.0.1", "localhost"):
+        return endpoint
+
+    # 从 /etc/resolv.conf 读取 Windows 宿主机 IP
+    host_ip = None
+    try:
+        with open("/etc/resolv.conf") as f:
+            for line in f:
+                if line.startswith("nameserver"):
+                    host_ip = line.split()[1].strip()
+                    break
+    except OSError:
+        return endpoint
+
+    if not host_ip:
+        return endpoint
+
+    port = f":{parsed.port}" if parsed.port else ""
+    new_netloc = f"{host_ip}{port}"
+    resolved = urlunparse(parsed._replace(netloc=new_netloc))
+    logger.info("WSL 环境：将 %s 重映射为 %s", endpoint, resolved)
+    return resolved
+
+
 async def verify_connection(endpoint: str, api_key: str | None, protocol: str) -> bool:
     """验证外部 Agent 服务是否可达。
 
@@ -28,6 +70,8 @@ async def verify_connection(endpoint: str, api_key: str | None, protocol: str) -
     custom：调用 GET {endpoint}/health，期望 200
     nap：调用 GET {endpoint}/health，期望响应体 {"status": "ok"}
     """
+    # WSL 环境下自动将 127.0.0.1/localhost 映射到 Windows 宿主机 IP
+    endpoint = _resolve_wsl_endpoint(endpoint)
     headers = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -67,6 +111,8 @@ async def fetch_meta(endpoint: str, api_key: str | None) -> dict:
 
     用于 sync 端点自动同步 capabilities / description 等字段。
     """
+    # WSL 环境下自动将 127.0.0.1/localhost 映射到 Windows 宿主机 IP
+    endpoint = _resolve_wsl_endpoint(endpoint)
     headers = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -97,6 +143,8 @@ async def chat_stream(
       请求：完整 NAP Request Schema（protocol_version / request_id / session_id / ...）
       响应：event: message / event: done / event: error（SSE 命名事件）
     """
+    # WSL 环境下自动将 127.0.0.1/localhost 映射到 Windows 宿主机 IP
+    endpoint = _resolve_wsl_endpoint(endpoint)
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
