@@ -1,285 +1,487 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Bot, Send, Loader2, AlertCircle, RefreshCw } from 'lucide-vue-next'
-import { externalAgentApi, type ExternalAgent } from '@/services/externalAgents'
-import { useAuthStore } from '@/stores/auth'
+import { ref, computed, nextTick, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
+import {
+  ChevronLeft,
+  Plus,
+  Trash2,
+  Paperclip,
+  X,
+  Send,
+  FileText,
+} from 'lucide-vue-next'
+import { externalAgentApi } from '@/services/externalAgents'
+import type {
+  AttachmentItemWithUrl,
+  AttachmentUploadResponse,
+  ChatMessage,
+  ChatSession,
+} from '@/services/externalAgents'
+import { useExternalAgentStore } from '@/stores/externalAgents'
 
+// ── 路由 ─────────────────────────────────────────────────────────────────────
 const route = useRoute()
-const router = useRouter()
-const authStore = useAuthStore()
-const agentId = computed(() => route.params.id as string)
+const agentId = route.params.id as string
 
-// ── Agent 信息 ────────────────────────────────
-const agent = ref<ExternalAgent | null>(null)
-const agentLoading = ref(true)
-const agentError = ref('')
+// ── Store ────────────────────────────────────────────────────────────────────
+const agentStore = useExternalAgentStore()
 
-// ── 消息列表 ─────────────────────────────────
-interface Msg {
-  id: string
+const agent = computed(() => agentStore.agents.find((a) => a.id === agentId) ?? null)
+
+// ── 会话状态 ──────────────────────────────────────────────────────────────────
+const sessions = ref<ChatSession[]>([])
+const currentSessionId = ref<string | null>(null)
+const sessionsLoading = ref(false)
+
+// ── 消息状态 ──────────────────────────────────────────────────────────────────
+interface LocalMessage {
+  id?: string
   role: 'user' | 'assistant'
   content: string
+  attachments?: AttachmentItemWithUrl[]
   streaming?: boolean
 }
 
-const messages = ref<Msg[]>([])
-const input = ref('')
-const sending = ref(false)
-const scrollEl = ref<HTMLDivElement>()
+const messages = ref<LocalMessage[]>([])
+const messagesLoading = ref(false)
+const isStreaming = ref(false)
+const inputText = ref('')
+const messagesEndRef = ref<HTMLElement | null>(null)
 
-// custom 协议（mom_agent）使用稳定 session_id 维持多轮记忆
-// 每次进入聊天页生成一个新 session，刷新/清除后重新生成
-const chatSessionId = ref(crypto.randomUUID())
+// ── 附件状态 ──────────────────────────────────────────────────────────────────
+interface PendingAttachment extends AttachmentUploadResponse {
+  previewUrl?: string
+}
 
-// 历史记录（发送给 API）
-const history = computed<Array<{ role: string; content: string }>>(() =>
-  messages.value.map((m) => ({ role: m.role, content: m.content })),
-)
+const pendingAttachments = ref<PendingAttachment[]>([])
+const isUploading = ref(false)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 
+// ── 初始化 ────────────────────────────────────────────────────────────────────
 onMounted(async () => {
-  try {
-    const list = await externalAgentApi.list()
-    agent.value = list.find((a) => a.id === agentId.value) ?? null
-    if (!agent.value) agentError.value = 'Agent 不存在或已被删除'
-  } catch (e: unknown) {
-    agentError.value = e instanceof Error ? e.message : '加载 Agent 失败'
-  } finally {
-    agentLoading.value = false
+  if (!agentStore.agents.length) {
+    await agentStore.fetchAgents()
   }
+  await loadSessions()
 })
 
-async function scrollToBottom() {
-  await nextTick()
-  if (scrollEl.value) {
-    scrollEl.value.scrollTop = scrollEl.value.scrollHeight
+// ── 会话操作 ──────────────────────────────────────────────────────────────────
+async function loadSessions() {
+  sessionsLoading.value = true
+  try {
+    sessions.value = await externalAgentApi.listSessions(agentId)
+    if (sessions.value.length > 0) {
+      await switchSession(sessions.value[0].id)
+    }
+  } catch (e) {
+    console.error('加载会话列表失败', e)
+  } finally {
+    sessionsLoading.value = false
   }
 }
 
-async function send() {
-  const text = input.value.trim()
-  if (!text || sending.value || !agent.value) return
+async function newSession() {
+  const session = await externalAgentApi.createSession(agentId)
+  sessions.value.unshift(session)
+  await switchSession(session.id)
+}
 
+async function switchSession(sessionId: string) {
+  if (currentSessionId.value === sessionId) return
+  currentSessionId.value = sessionId
+  messages.value = []
+  messagesLoading.value = true
+  try {
+    const history = await externalAgentApi.getMessages(agentId, sessionId)
+    messages.value = history.map((m: ChatMessage) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      attachments: m.attachments ?? undefined,
+    }))
+    await scrollToBottom()
+  } catch (e) {
+    console.error('加载消息历史失败', e)
+  } finally {
+    messagesLoading.value = false
+  }
+}
+
+async function deleteSession(sessionId: string, e: Event) {
+  e.stopPropagation()
+  await externalAgentApi.deleteSession(agentId, sessionId)
+  sessions.value = sessions.value.filter((s) => s.id !== sessionId)
+  if (currentSessionId.value === sessionId) {
+    messages.value = []
+    currentSessionId.value = null
+    if (sessions.value.length > 0) {
+      await switchSession(sessions.value[0].id)
+    }
+  }
+}
+
+// ── 附件操作 ──────────────────────────────────────────────────────────────────
+function openFilePicker() {
+  fileInputRef.value?.click()
+}
+
+async function handleFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
   input.value = ''
-  sending.value = true
+  if (!files.length || !currentSessionId.value) return
 
-  // 追加用户消息
-  messages.value.push({ id: Date.now().toString(), role: 'user', content: text })
-  await scrollToBottom()
+  isUploading.value = true
+  for (const file of files) {
+    try {
+      const result = await externalAgentApi.uploadAttachment(agentId, file)
+      const pending: PendingAttachment = { ...result }
+      if (file.type.startsWith('image/')) {
+        pending.previewUrl = URL.createObjectURL(file)
+      }
+      pendingAttachments.value.push(pending)
+    } catch (err) {
+      console.error('附件上传失败', err)
+    }
+  }
+  isUploading.value = false
+}
 
-  // 创建占位 assistant 消息（流式追加）
-  const assistantId = (Date.now() + 1).toString()
-  messages.value.push({ id: assistantId, role: 'assistant', content: '', streaming: true })
+function removePendingAttachment(index: number) {
+  const att = pendingAttachments.value[index]
+  if (att.previewUrl) URL.revokeObjectURL(att.previewUrl)
+  pendingAttachments.value.splice(index, 1)
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+}
+
+// ── 发送消息 ──────────────────────────────────────────────────────────────────
+async function send() {
+  const text = inputText.value.trim()
+  if ((!text && !pendingAttachments.value.length) || isStreaming.value) return
+  if (!currentSessionId.value) {
+    await newSession()
+    if (!currentSessionId.value) return
+  }
+
+  const attachmentsToSend: AttachmentItemWithUrl[] = pendingAttachments.value.map((a) => ({
+    name: a.name,
+    size: a.size,
+    content_type: a.content_type,
+    storage_key: a.storage_key,
+    url: a.url,
+  }))
+
+  messages.value.push({
+    role: 'user',
+    content: text,
+    attachments: attachmentsToSend.length ? attachmentsToSend : undefined,
+  })
+
+  inputText.value = ''
+  pendingAttachments.value = []
+  isStreaming.value = true
+
+  const assistantIndex = messages.value.length
+  messages.value.push({ role: 'assistant', content: '', streaming: true })
   await scrollToBottom()
 
   try {
-    const messagesForApi = [
-      ...history.value.slice(0, -1), // 去掉刚加入的空 assistant 占位
-      { role: 'user', content: text },
-    ]
-    const resp = await externalAgentApi.chatStream(agentId.value, messagesForApi, chatSessionId.value)
+    const res = await externalAgentApi.chatStream(
+      agentId,
+      text,
+      currentSessionId.value,
+      attachmentsToSend.length ? attachmentsToSend : undefined,
+    )
 
-    if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`)
-    }
-
-    const reader = resp.body?.getReader()
+    if (!res.body) throw new Error('响应无 body')
+    const reader = res.body.getReader()
     const decoder = new TextDecoder()
 
-    if (!reader) throw new Error('无法读取响应流')
-
-    let buffer = ''
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      // 按 SSE 行解析
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        if (!line.startsWith('data:')) continue
-        const raw = line.slice(5).trim()
+      const raw = decoder.decode(value, { stream: true })
+      for (const line of raw.split('\n')) {
+        if (!line.startsWith('data: ')) continue
         try {
-          const payload = JSON.parse(raw)
-          if (payload.done) {
-            break
-          }
-          if (payload.error) {
-            const msg = messages.value.find((m) => m.id === assistantId)
-            if (msg) msg.content = `[错误] ${payload.error}`
-          } else if (payload.chunk) {
-            const msg = messages.value.find((m) => m.id === assistantId)
-            if (msg) {
-              msg.content += payload.chunk
-              await scrollToBottom()
-            }
+          const payload = JSON.parse(line.slice(6))
+          if (payload.chunk) {
+            messages.value[assistantIndex].content += payload.chunk
+            await scrollToBottom()
+          } else if (payload.error) {
+            messages.value[assistantIndex].content += `[错误: ${payload.error}]`
           }
         } catch {
           // 忽略非 JSON 行
         }
       }
     }
-  } catch (e: unknown) {
-    const msg = messages.value.find((m) => m.id === assistantId)
-    if (msg) msg.content = `[连接失败] ${e instanceof Error ? e.message : '未知错误'}`
+  } catch (e) {
+    messages.value[assistantIndex].content += '[连接失败]'
   } finally {
-    const msg = messages.value.find((m) => m.id === assistantId)
-    if (msg) msg.streaming = false
-    sending.value = false
-    await scrollToBottom()
+    messages.value[assistantIndex].streaming = false
+    isStreaming.value = false
+
+    const session = sessions.value.find((s) => s.id === currentSessionId.value)
+    if (session && !session.title && text) {
+      session.title = text.slice(0, 50)
+    }
+    if (session) {
+      sessions.value = [session, ...sessions.value.filter((s) => s.id !== session.id)]
+    }
   }
 }
 
-function clearMessages() {
-  if (!confirm('确定清除所有对话记录吗？')) return
-  messages.value = []
-  // 重置 session_id，下次对话在 agent 侧也是全新会话
-  chatSessionId.value = crypto.randomUUID()
+async function scrollToBottom() {
+  await nextTick()
+  messagesEndRef.value?.scrollIntoView({ behavior: 'smooth' })
 }
 
-function onKeydown(e: KeyboardEvent) {
+function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     send()
   }
 }
+
+// ── 内容渲染（linkify）────────────────────────────────────────────────────────
+function renderContent(text: string): string {
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/\n/g, '<br>')
+  return escaped.replace(
+    /(https?:\/\/[^\s&<>"]+)/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-blue-600 underline break-all">$1</a>',
+  )
+}
+
+function formatRelativeTime(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const minutes = Math.floor(diff / 60000)
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes}分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}小时前`
+  return `${Math.floor(hours / 24)}天前`
+}
 </script>
 
 <template>
-  <div class="flex flex-col h-screen bg-background">
-    <!-- 顶部导航栏 -->
-    <header class="h-14 flex items-center gap-3 px-4 border-b border-border bg-card/80 backdrop-blur-sm shrink-0">
-      <button
-        class="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50"
-        @click="router.push('/agents')"
-      >
-        <ArrowLeft class="w-4 h-4" />
-      </button>
-      <div class="flex items-center gap-2 flex-1 min-w-0">
-        <span v-if="agent?.icon_emoji" class="text-xl leading-none">{{ agent.icon_emoji }}</span>
-        <Bot v-else class="w-5 h-5 text-muted-foreground shrink-0" />
-        <span class="font-semibold text-foreground text-sm truncate">
-          {{ agent?.name ?? '...' }}
-        </span>
-        <!-- 连接状态小点 -->
-        <span
-          v-if="agent"
-          class="w-2 h-2 rounded-full shrink-0"
-          :class="agent.is_reachable ? 'bg-green-500' : 'bg-gray-300'"
-          :title="agent.is_reachable ? '已连接' : '未验证或连接失败'"
-        />
-      </div>
-      <button
-        v-if="messages.length"
-        class="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50"
-        title="清除对话"
-        @click="clearMessages"
-      >
-        <RefreshCw class="w-4 h-4" />
-      </button>
-    </header>
-
-    <!-- 加载中 / 错误 -->
-    <div v-if="agentLoading" class="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-      <Loader2 class="w-5 h-5 animate-spin mr-2" />
-      加载中...
-    </div>
-    <div
-      v-else-if="agentError"
-      class="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground"
-    >
-      <AlertCircle class="w-8 h-8 text-destructive" />
-      <p class="text-sm">{{ agentError }}</p>
-      <button
-        class="text-xs text-primary hover:underline"
-        @click="router.push('/agents')"
-      >
-        返回 Agent 列表
-      </button>
-    </div>
-
-    <!-- 聊天区域 -->
-    <template v-else>
-      <!-- 消息列表 -->
-      <div ref="scrollEl" class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
-        <!-- 欢迎语 -->
-        <div v-if="messages.length === 0" class="flex flex-col items-center justify-center h-full text-center">
-          <span v-if="agent?.icon_emoji" class="text-5xl mb-4">{{ agent.icon_emoji }}</span>
-          <Bot v-else class="w-12 h-12 text-muted-foreground/40 mb-4" />
-          <p class="font-semibold text-foreground mb-1">{{ agent?.name }}</p>
-          <p v-if="agent?.description" class="text-sm text-muted-foreground max-w-sm">
-            {{ agent.description }}
-          </p>
-          <div v-if="agent?.capabilities.length" class="flex flex-wrap justify-center gap-1.5 mt-3">
-            <span
-              v-for="cap in agent.capabilities"
-              :key="cap"
-              class="text-xs px-2.5 py-0.5 rounded-full bg-secondary text-secondary-foreground"
-            >
-              {{ cap }}
-            </span>
-          </div>
-          <p class="text-xs text-muted-foreground mt-6">发送消息开始对话</p>
-        </div>
-
-        <!-- 消息气泡 -->
-        <div
-          v-for="msg in messages"
-          :key="msg.id"
-          class="flex"
-          :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
+  <div class="flex h-screen bg-white">
+    <!-- 左侧会话列表 -->
+    <aside class="w-60 flex-shrink-0 border-r border-gray-200 flex flex-col">
+      <div class="flex items-center justify-between px-3 py-3 border-b border-gray-100">
+        <button
+          class="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+          @click="$router.back()"
         >
-          <!-- assistant 头像 -->
-          <div v-if="msg.role === 'assistant'" class="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mr-2 mt-0.5">
-            <span v-if="agent?.icon_emoji" class="text-sm leading-none">{{ agent.icon_emoji }}</span>
-            <Bot v-else class="w-3.5 h-3.5 text-primary" />
-          </div>
+          <ChevronLeft :size="16" />
+          返回
+        </button>
+        <button
+          class="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-700"
+          @click="newSession"
+        >
+          <Plus :size="16" />
+          新建
+        </button>
+      </div>
 
-          <div
-            class="max-w-[72%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap"
-            :class="
-              msg.role === 'user'
-                ? 'bg-primary text-primary-foreground rounded-br-sm'
-                : 'bg-card border border-border text-foreground rounded-bl-sm'
-            "
-          >
-            <span>{{ msg.content }}</span>
-            <!-- 流式光标 -->
-            <span v-if="msg.streaming" class="inline-block w-0.5 h-4 bg-current animate-pulse ml-0.5 align-middle" />
-          </div>
-
-          <!-- 用户头像 -->
-          <div v-if="msg.role === 'user'" class="w-7 h-7 rounded-full bg-primary flex items-center justify-center shrink-0 ml-2 mt-0.5">
-            <span class="text-[10px] text-primary-foreground font-bold">
-              {{ authStore.user?.name?.[0]?.toUpperCase() ?? 'U' }}
-            </span>
-          </div>
+      <div class="px-3 py-2 border-b border-gray-100">
+        <div class="flex items-center gap-2">
+          <span v-if="agent?.icon_emoji" class="text-lg">{{ agent.icon_emoji }}</span>
+          <span class="text-sm font-medium text-gray-800 truncate">{{ agent?.name }}</span>
+        </div>
+        <div class="flex items-center gap-1 mt-0.5">
+          <span
+            class="w-1.5 h-1.5 rounded-full"
+            :class="agent?.is_reachable ? 'bg-green-500' : 'bg-gray-300'"
+          />
+          <span class="text-xs text-gray-400">
+            {{ agent?.is_reachable ? '已连接' : '未连接' }}
+          </span>
         </div>
       </div>
 
-      <!-- 输入框 -->
-      <div class="px-4 py-3 border-t border-border bg-card/80 backdrop-blur-sm shrink-0">
-        <div class="flex items-end gap-2 rounded-xl border border-input bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-primary/30">
-          <textarea
-            v-model="input"
-            rows="1"
-            class="flex-1 bg-transparent text-sm text-foreground resize-none focus:outline-none max-h-32"
-            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-            :disabled="sending"
-            @keydown="onKeydown"
-          />
+      <div class="flex-1 overflow-y-auto py-1">
+        <div v-if="sessionsLoading" class="px-3 py-4 text-xs text-gray-400 text-center">
+          加载中...
+        </div>
+        <div v-else-if="!sessions.length" class="px-3 py-4 text-xs text-gray-400 text-center">
+          暂无对话，点击「新建」开始
+        </div>
+        <button
+          v-for="s in sessions"
+          :key="s.id"
+          class="w-full text-left px-3 py-2 group flex items-start justify-between gap-1 hover:bg-gray-50 transition-colors"
+          :class="s.id === currentSessionId ? 'bg-indigo-50' : ''"
+          @click="switchSession(s.id)"
+        >
+          <div class="flex-1 min-w-0">
+            <p class="text-sm text-gray-800 truncate">
+              {{ s.title || '新对话' }}
+            </p>
+            <p class="text-xs text-gray-400">{{ formatRelativeTime(s.updated_at) }}</p>
+          </div>
           <button
-            class="p-1.5 rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 shrink-0"
-            :disabled="!input.trim() || sending"
+            class="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-red-500 transition-opacity"
+            @click="deleteSession(s.id, $event)"
+          >
+            <Trash2 :size="13" />
+          </button>
+        </button>
+      </div>
+    </aside>
+
+    <!-- 右侧聊天区 -->
+    <div class="flex-1 flex flex-col min-w-0">
+      <div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        <div
+          v-if="!currentSessionId && !messagesLoading"
+          class="flex flex-col items-center justify-center h-full gap-3 text-gray-400"
+        >
+          <span v-if="agent?.icon_emoji" class="text-4xl">{{ agent.icon_emoji }}</span>
+          <p class="text-sm">{{ agent?.description || '开始与 Agent 对话' }}</p>
+        </div>
+
+        <div v-if="messagesLoading" class="flex justify-center py-8">
+          <span class="text-sm text-gray-400">加载历史消息...</span>
+        </div>
+
+        <template v-if="!messagesLoading">
+          <div
+            v-for="(msg, i) in messages"
+            :key="i"
+            class="flex"
+            :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
+          >
+            <div v-if="msg.role === 'user'" class="max-w-[70%] space-y-1">
+              <div v-if="msg.attachments?.length" class="flex flex-wrap gap-2 justify-end">
+                <a
+                  v-for="att in msg.attachments"
+                  :key="att.storage_key"
+                  :href="att.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="block"
+                >
+                  <img
+                    v-if="att.content_type.startsWith('image/')"
+                    :src="att.url"
+                    :alt="att.name"
+                    class="h-24 w-auto rounded-lg object-cover border border-gray-200"
+                  />
+                  <div
+                    v-else
+                    class="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs text-gray-600"
+                  >
+                    <FileText :size="14" />
+                    <span class="truncate max-w-[160px]">{{ att.name }}</span>
+                    <span class="text-gray-400">{{ formatFileSize(att.size) }}</span>
+                  </div>
+                </a>
+              </div>
+              <div
+                v-if="msg.content"
+                class="px-4 py-2.5 bg-indigo-600 text-white text-sm rounded-2xl rounded-tr-sm whitespace-pre-wrap"
+              >
+                {{ msg.content }}
+              </div>
+            </div>
+
+            <div v-else class="max-w-[70%]">
+              <div
+                class="px-4 py-2.5 bg-gray-100 text-gray-800 text-sm rounded-2xl rounded-tl-sm"
+              >
+                <!-- eslint-disable-next-line vue/no-v-html -->
+                <span v-html="renderContent(msg.content)" />
+                <span
+                  v-if="msg.streaming"
+                  class="inline-block w-0.5 h-3.5 bg-gray-500 ml-0.5 animate-pulse"
+                />
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <div ref="messagesEndRef" />
+      </div>
+
+      <div class="border-t border-gray-200 px-4 py-3">
+        <div v-if="pendingAttachments.length" class="flex flex-wrap gap-2 mb-2">
+          <div
+            v-for="(att, idx) in pendingAttachments"
+            :key="att.storage_key"
+            class="relative group"
+          >
+            <img
+              v-if="att.content_type.startsWith('image/')"
+              :src="att.previewUrl ?? att.url"
+              :alt="att.name"
+              class="h-16 w-auto rounded-lg object-cover border border-gray-200"
+            />
+            <div
+              v-else
+              class="flex items-center gap-2 px-3 py-2 bg-gray-100 rounded-lg text-xs text-gray-600 border border-gray-200"
+            >
+              <FileText :size="14" />
+              <span class="truncate max-w-[100px]">{{ att.name }}</span>
+            </div>
+            <button
+              class="absolute -top-1.5 -right-1.5 w-4 h-4 bg-gray-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              @click="removePendingAttachment(idx)"
+            >
+              <X :size="10" />
+            </button>
+          </div>
+          <div v-if="isUploading" class="flex items-center px-3 py-2 text-xs text-gray-400">
+            上传中...
+          </div>
+        </div>
+
+        <div class="flex items-end gap-2">
+          <button
+            class="p-2 text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
+            :disabled="!currentSessionId || isStreaming"
+            @click="openFilePicker"
+          >
+            <Paperclip :size="18" />
+          </button>
+          <input
+            ref="fileInputRef"
+            type="file"
+            multiple
+            class="hidden"
+            @change="handleFileChange"
+          />
+
+          <textarea
+            v-model="inputText"
+            rows="1"
+            class="flex-1 resize-none rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 max-h-32 overflow-y-auto"
+            :class="{ 'opacity-50': !currentSessionId }"
+            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+            :disabled="!currentSessionId || isStreaming"
+            @keydown="handleKeydown"
+          />
+
+          <button
+            class="p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            :disabled="(!inputText.trim() && !pendingAttachments.length) || isStreaming || !currentSessionId"
             @click="send"
           >
-            <Loader2 v-if="sending" class="w-4 h-4 animate-spin" />
-            <Send v-else class="w-4 h-4" />
+            <Send :size="16" />
           </button>
         </div>
       </div>
-    </template>
+    </div>
   </div>
 </template>
