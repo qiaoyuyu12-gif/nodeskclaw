@@ -487,19 +487,20 @@ function formatRelativeTime(dateStr: string): string {
 </template>
 
 <style scoped>
-/* 直接绑定 CSS 变量，绕过 Tailwind v4 oklch 链路解析问题 */
 .ea-chat-root {
-  background-color: var(--background);
-  color: var(--foreground);
+  background-color: #0a0a0a !important;
+  color: #ffffff;
 }
 
 .ea-msg-assistant {
-  background-color: var(--secondary);
-  color: var(--secondary-foreground);
+  background-color: #1a1a1a !important;
+  color: #ffffff;
 }
 
+/* 防止浏览器用系统色覆盖 textarea */
 .ea-textarea {
-  background-color: var(--background);
-  color: var(--foreground);
+  background-color: #111111 !important;
+  color: #ffffff !important;
+  color-scheme: dark;
 }
 </style>
