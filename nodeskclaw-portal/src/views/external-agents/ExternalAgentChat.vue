@@ -275,7 +275,7 @@ function formatRelativeTime(dateStr: string): string {
 </script>
 
 <template>
-  <div class="flex h-screen bg-background">
+  <div class="flex h-screen ea-chat-root">
     <!-- 左侧会话列表 -->
     <aside class="w-60 flex-shrink-0 border-r border-border flex flex-col">
       <div class="flex items-center justify-between px-3 py-3 border-b border-border">
@@ -399,7 +399,7 @@ function formatRelativeTime(dateStr: string): string {
 
             <div v-else class="max-w-[70%]">
               <div
-                class="px-4 py-2.5 bg-secondary text-secondary-foreground text-sm rounded-2xl rounded-tl-sm"
+                class="px-4 py-2.5 bg-secondary text-secondary-foreground text-sm rounded-2xl rounded-tl-sm ea-msg-assistant"
               >
                 <!-- eslint-disable-next-line vue/no-v-html -->
                 <span v-html="renderContent(msg.content)" />
@@ -466,7 +466,7 @@ function formatRelativeTime(dateStr: string): string {
           <textarea
             v-model="inputText"
             rows="1"
-            class="flex-1 resize-none rounded-xl border border-border bg-background text-foreground placeholder:text-muted-foreground px-3 py-2 text-sm focus:outline-none focus:border-primary/50 max-h-32 overflow-y-auto"
+            class="flex-1 resize-none rounded-xl border border-border bg-background text-foreground placeholder:text-muted-foreground px-3 py-2 text-sm focus:outline-none focus:border-primary/50 max-h-32 overflow-y-auto ea-textarea"
             :class="{ 'opacity-50': !currentSessionId }"
             placeholder="输入消息，Enter 发送，Shift+Enter 换行"
             :disabled="!currentSessionId || isStreaming"
@@ -485,3 +485,21 @@ function formatRelativeTime(dateStr: string): string {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 直接绑定 CSS 变量，绕过 Tailwind v4 oklch 链路解析问题 */
+.ea-chat-root {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+.ea-msg-assistant {
+  background-color: var(--secondary);
+  color: var(--secondary-foreground);
+}
+
+.ea-textarea {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+</style>
