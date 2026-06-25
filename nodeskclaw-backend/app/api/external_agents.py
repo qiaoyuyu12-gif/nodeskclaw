@@ -4,23 +4,31 @@ CRUD 操作需要 org admin 权限；
 聊天端点（SSE）仅需普通登录用户。
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_org, get_db, require_org_admin
+from app.core.deps import async_session_factory, get_current_org, get_db, require_org_admin
 from app.schemas.common import ApiResponse
 from app.schemas.external_agent import (
+    AttachmentItem,
+    AttachmentItemWithUrl,
+    ChatRequest,
+    ChatSessionResponse,
     ExternalAgentCreate,
     ExternalAgentResponse,
     ExternalAgentUpdate,
+    MessageResponse,
 )
 from app.services import external_agent_adapter, external_agent_service
+from app.services import external_agent_chat_service
+from app.services import storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +146,135 @@ async def sync_agent(
 
     await db.commit()
     return ApiResponse(data={"reachable": reachable, "agent_id": agent_id})
+
+
+# ── Attachments ────────────────────────────────────────────────────────────────
+
+MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024  # 20MB
+
+
+@router.post("/{agent_id}/attachments/upload", response_model=ApiResponse[dict])
+async def upload_attachment(
+    agent_id: str,
+    file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+    auth=Depends(get_current_org),
+):
+    """上传聊天附件（图片或文件），返回 storage_key 和临时预签名 URL。
+
+    URL 仅供本次发送使用，不会持久化到数据库。
+    """
+    _, org = auth
+    await external_agent_service.get_external_agent(agent_id=agent_id, org_id=org.id, db=db)
+
+    content = await file.read()
+    if len(content) > MAX_ATTACHMENT_SIZE:
+        raise HTTPException(status_code=413, detail="文件超过 20MB 限制")
+
+    storage_key = await storage_service.upload_external_agent_file(
+        file_content=content,
+        filename=file.filename or "attachment",
+        content_type=file.content_type or "application/octet-stream",
+        org_id=org.id,
+    )
+    url = await storage_service.get_presigned_url(storage_key)
+
+    return ApiResponse(data={
+        "storage_key": storage_key,
+        "name": file.filename,
+        "size": len(content),
+        "content_type": file.content_type,
+        "url": url,
+    })
+
+
+# ── Sessions ────────────────────────────────────────────────────────────────────
+
+@router.get("/{agent_id}/sessions", response_model=ApiResponse[list[ChatSessionResponse]])
+async def list_sessions(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    auth=Depends(get_current_org),
+):
+    """列出当前用户在指定 Agent 下的所有会话，按最后更新时间倒序。"""
+    user, org = auth
+    await external_agent_service.get_external_agent(agent_id=agent_id, org_id=org.id, db=db)
+    sessions = await external_agent_chat_service.list_sessions(
+        agent_id=agent_id, user_id=str(user.id), db=db
+    )
+    return ApiResponse(data=[ChatSessionResponse.model_validate(s) for s in sessions])
+
+
+@router.post("/{agent_id}/sessions", response_model=ApiResponse[ChatSessionResponse])
+async def create_session(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    auth=Depends(get_current_org),
+):
+    """创建新聊天会话（title 为空，发送首条消息后自动填充）。"""
+    user, org = auth
+    await external_agent_service.get_external_agent(agent_id=agent_id, org_id=org.id, db=db)
+    session = await external_agent_chat_service.create_session(
+        agent_id=agent_id, org_id=org.id, user_id=str(user.id), db=db
+    )
+    return ApiResponse(data=ChatSessionResponse.model_validate(session))
+
+
+@router.delete("/{agent_id}/sessions/{session_id}", response_model=ApiResponse[None])
+async def delete_session(
+    agent_id: str,
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    auth=Depends(get_current_org),
+):
+    """软删除指定会话（仅会话归属用户可操作）。"""
+    user, _ = auth
+    await external_agent_chat_service.delete_session(
+        session_id=session_id, user_id=str(user.id), db=db
+    )
+    return ApiResponse(data=None)
+
+
+# ── Messages ────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/{agent_id}/sessions/{session_id}/messages",
+    response_model=ApiResponse[list[MessageResponse]],
+)
+async def list_messages(
+    agent_id: str,
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    auth=Depends(get_current_org),
+):
+    """返回会话内全部消息，用户消息的附件实时注入预签名 URL。"""
+    user, _ = auth
+    chat_session = await external_agent_chat_service.get_session(
+        session_id=session_id, user_id=str(user.id), db=db
+    )
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    messages = await external_agent_chat_service.get_messages(session_id=session_id, db=db)
+
+    result: list[MessageResponse] = []
+    for msg in messages:
+        attachments_with_url: list[AttachmentItemWithUrl] | None = None
+        if msg.attachments:
+            attachments_with_url = []
+            for att in msg.attachments:
+                url = await storage_service.get_presigned_url(att["storage_key"])
+                attachments_with_url.append(AttachmentItemWithUrl(**att, url=url))
+        result.append(MessageResponse(
+            id=msg.id,
+            session_id=msg.session_id,
+            role=msg.role,
+            content=msg.content,
+            attachments=attachments_with_url,
+            created_at=msg.created_at,
+        ))
+
+    return ApiResponse(data=result)
 
 
 # ── Chat（SSE 代理）───────────────────────────────────────────────────────────
