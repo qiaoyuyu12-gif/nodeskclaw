@@ -275,10 +275,10 @@ function formatRelativeTime(dateStr: string): string {
 </script>
 
 <template>
-  <div class="flex h-screen bg-white">
+  <div class="flex h-screen bg-background">
     <!-- 左侧会话列表 -->
-    <aside class="w-60 flex-shrink-0 border-r border-gray-200 flex flex-col">
-      <div class="flex items-center justify-between px-3 py-3 border-b border-gray-100">
+    <aside class="w-60 flex-shrink-0 border-r border-border flex flex-col">
+      <div class="flex items-center justify-between px-3 py-3 border-b border-border">
         <button
           class="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
           @click="$router.back()"
@@ -295,7 +295,7 @@ function formatRelativeTime(dateStr: string): string {
         </button>
       </div>
 
-      <div class="px-3 py-2 border-b border-gray-100">
+      <div class="px-3 py-2 border-b border-border">
         <div class="flex items-center gap-2">
           <span v-if="agent?.icon_emoji" class="text-lg">{{ agent.icon_emoji }}</span>
           <span class="text-sm font-medium text-gray-800 truncate">{{ agent?.name }}</span>
@@ -415,7 +415,7 @@ function formatRelativeTime(dateStr: string): string {
         <div ref="messagesEndRef" />
       </div>
 
-      <div class="border-t border-gray-200 px-4 py-3">
+      <div class="border-t border-border px-4 py-3">
         <div v-if="pendingAttachments.length" class="flex flex-wrap gap-2 mb-2">
           <div
             v-for="(att, idx) in pendingAttachments"
