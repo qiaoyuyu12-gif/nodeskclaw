@@ -8,6 +8,7 @@
 
 import json
 import logging
+import subprocess
 import uuid
 from collections.abc import AsyncIterator
 from urllib.parse import urlparse, urlunparse
@@ -22,11 +23,47 @@ _VERIFY_TIMEOUT = 10.0
 _CHAT_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=5.0)
 
 
+def _get_wsl_host_ip() -> str | None:
+    """获取 WSL 宿主机（Windows）的可路由 IP 地址。
+
+    优先从默认路由网关获取：`ip route show default` → 第三字段（via <IP>）。
+    这是 WSL2 NAT 网络下 Windows 宿主机的实际地址（通常 172.x.x.1）。
+    /etc/resolv.conf nameserver 是 DNS 虚拟 IP，不能用于建立 TCP 连接，仅作备用。
+    """
+    # 方法1：从默认路由网关获取（最可靠）
+    try:
+        result = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True, text=True, timeout=2,
+        )
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            # 格式：default via <gateway_ip> dev eth0 ...
+            if len(parts) >= 3 and parts[0] == "default" and parts[1] == "via":
+                return parts[2]
+    except Exception:
+        pass
+
+    # 方法2：回退到 /etc/resolv.conf nameserver（旧版 WSL 或 mirrored 模式）
+    try:
+        with open("/etc/resolv.conf") as f:
+            for line in f:
+                if line.startswith("nameserver"):
+                    ip = line.split()[1].strip()
+                    # 过滤掉 WSL2 DNS stub（10.255.255.254）
+                    if ip != "10.255.255.254":
+                        return ip
+    except OSError:
+        pass
+
+    return None
+
+
 def _resolve_wsl_endpoint(endpoint: str) -> str:
     """WSL 环境下将 127.0.0.1/localhost 映射到 Windows 宿主机 IP。
 
-    WSL 内的 127.0.0.1 是 WSL loopback，无法访问 Windows 上运行的服务。
-    Windows 宿主机 IP 从 /etc/resolv.conf 的 nameserver 行读取。
+    WSL2 NAT 模式下，127.0.0.1 是 WSL loopback，无法访问 Windows 服务。
+    宿主机 IP 通过默认路由网关获取（`ip route show default`）。
     """
     # 检测是否在 WSL 环境中运行
     try:
@@ -42,17 +79,7 @@ def _resolve_wsl_endpoint(endpoint: str) -> str:
     if parsed.hostname not in ("127.0.0.1", "localhost"):
         return endpoint
 
-    # 从 /etc/resolv.conf 读取 Windows 宿主机 IP
-    host_ip = None
-    try:
-        with open("/etc/resolv.conf") as f:
-            for line in f:
-                if line.startswith("nameserver"):
-                    host_ip = line.split()[1].strip()
-                    break
-    except OSError:
-        return endpoint
-
+    host_ip = _get_wsl_host_ip()
     if not host_ip:
         return endpoint
 
