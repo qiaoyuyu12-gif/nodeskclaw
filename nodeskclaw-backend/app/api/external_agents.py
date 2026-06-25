@@ -35,6 +35,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _persist_messages(
+    session_id: str,
+    user_content: str,
+    user_attachments: list[dict] | None,
+    assistant_content: str,
+) -> None:
+    """SSE 流结束后异步持久化消息，使用独立 DB Session 避免与请求 Session 竞争。"""
+    try:
+        async with async_session_factory() as db:
+            await external_agent_chat_service.save_messages(
+                session_id=session_id,
+                user_content=user_content,
+                user_attachments=user_attachments,
+                assistant_content=assistant_content,
+                db=db,
+            )
+    except Exception as exc:
+        logger.warning("Failed to persist chat messages for session %s: %s", session_id, exc)
+
+
 def _to_response(agent) -> ExternalAgentResponse:
     """将 ORM 对象转换为响应体（capabilities 由 Schema validator 自动解析）。"""
     return ExternalAgentResponse.model_validate(agent)
@@ -289,7 +309,7 @@ async def chat_with_agent(
     """向外部 Agent 发起聊天，通过 SSE 流式返回响应（所有登录用户可用）。
 
     请求体：
-      { "messages": [{"role": "user"|"assistant", "content": "..."}], "session_id": "..." }
+      { "message": "用户消息", "session_id": "UUID", "attachments": [...] }
 
     SSE 事件格式：
       data: {"chunk": "文本片段"}\n\n
@@ -298,14 +318,43 @@ async def chat_with_agent(
     """
     user, org = auth
     body = await request.json()
-    messages: list[dict] = body.get("messages", [])
-    # session_id 用于维持多轮记忆（custom / nap 协议均需要）
-    session_id: str | None = body.get("session_id")
+    message: str = body.get("message", "")
+    session_id: str = body.get("session_id", "")
+    attachments: list[dict] | None = body.get("attachments")
 
     agent = await external_agent_service.get_external_agent(
         agent_id=agent_id, org_id=org.id, db=db
     )
     api_key = external_agent_service.get_decrypted_api_key(agent)
+
+    # 构建发给外部 Agent 的用户消息内容（附件以 URL 引用追加）
+    user_content = message
+    if attachments:
+        file_lines = [
+            f"- {a['name']} ({a['content_type']}, {a['size'] // 1024}KB): {a['url']}"
+            for a in attachments
+        ]
+        user_content += "\n\n附件:\n" + "\n".join(file_lines)
+
+    # 从 DB 加载历史消息，构建完整 messages 列表
+    history = await external_agent_chat_service.get_messages(session_id=session_id, db=db)
+    messages_for_agent = [{"role": m.role, "content": m.content} for m in history]
+    messages_for_agent.append({"role": "user", "content": user_content})
+
+    # 仅保存 storage_key，不保存 URL（URL 有有效期）
+    attachments_to_save: list[dict] | None = None
+    if attachments:
+        attachments_to_save = [
+            {
+                "name": a["name"],
+                "size": a["size"],
+                "content_type": a["content_type"],
+                "storage_key": a["storage_key"],
+            }
+            for a in attachments
+        ]
+
+    collected_chunks: list[str] = []
 
     async def event_stream():
         try:
@@ -313,23 +362,34 @@ async def chat_with_agent(
                 endpoint=agent.endpoint,
                 api_key=api_key,
                 protocol=agent.protocol,
-                messages=messages,
+                messages=messages_for_agent,
                 session_id=session_id,
                 user_id=str(user.id),
                 organization_id=str(org.id),
             ):
+                collected_chunks.append(chunk)
                 yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
         except Exception as exc:
             logger.warning("External agent chat error: %s %s", agent_id, exc)
             yield f"data: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
         finally:
             yield f"data: {json.dumps({'done': True})}\n\n"
+            assistant_content = "".join(collected_chunks)
+            if session_id and message:
+                asyncio.create_task(
+                    _persist_messages(
+                        session_id=session_id,
+                        user_content=message,
+                        user_attachments=attachments_to_save,
+                        assistant_content=assistant_content,
+                    )
+                )
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲，确保实时推送
+            "X-Accel-Buffering": "no",
         },
     )
