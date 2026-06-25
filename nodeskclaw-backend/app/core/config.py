@@ -156,6 +156,19 @@ class Settings(BaseSettings):
 
     # ── CORS ─────────────────────────────────────────────
     CORS_ORIGINS: list[str] = ["http://localhost:4517", "http://localhost:4518"]
+    # 局域网跨设备访问：默认放行 localhost 及私网网段（10/192.168/172.16-31）的任意端口
+    # 来源，免去其他设备访问时逐个 IP 手填 CORS_ORIGINS。私网地址仅局域网内可达，
+    # 且 allow_credentials=True 时中间件回显具体 Origin 而非 *，不会放开公网。
+    # 如需对外网严格收紧，将本项置为空字符串即可关闭正则匹配。
+    CORS_ORIGIN_REGEX: str = (
+        r"^https?://("
+        r"localhost"
+        r"|127(?:\.\d{1,3}){3}"
+        r"|10(?:\.\d{1,3}){3}"
+        r"|192\.168(?:\.\d{1,3}){2}"
+        r"|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}"
+        r")(?::\d+)?$"
+    )
 
     # ── RBAC（第一期，参考 docs/rfcs/0001-rbac-phase1.md）──────
     # 是否启用权限决策审计写入 permission_audit_logs；默认关闭避免写放大，
