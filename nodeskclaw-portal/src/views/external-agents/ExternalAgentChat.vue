@@ -280,14 +280,14 @@ function formatRelativeTime(dateStr: string): string {
     <aside class="w-60 flex-shrink-0 border-r border-border flex flex-col">
       <div class="flex items-center justify-between px-3 py-3 border-b border-border">
         <button
-          class="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+          class="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           @click="$router.back()"
         >
           <ChevronLeft :size="16" />
           返回
         </button>
         <button
-          class="flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-700"
+          class="flex items-center gap-1 text-sm text-primary hover:text-primary/80"
           @click="newSession"
         >
           <Plus :size="16" />
@@ -298,41 +298,41 @@ function formatRelativeTime(dateStr: string): string {
       <div class="px-3 py-2 border-b border-border">
         <div class="flex items-center gap-2">
           <span v-if="agent?.icon_emoji" class="text-lg">{{ agent.icon_emoji }}</span>
-          <span class="text-sm font-medium text-gray-800 truncate">{{ agent?.name }}</span>
+          <span class="text-sm font-medium text-foreground truncate">{{ agent?.name }}</span>
         </div>
         <div class="flex items-center gap-1 mt-0.5">
           <span
             class="w-1.5 h-1.5 rounded-full"
-            :class="agent?.is_reachable ? 'bg-green-500' : 'bg-gray-300'"
+            :class="agent?.is_reachable ? 'bg-green-500' : 'bg-muted-foreground'"
           />
-          <span class="text-xs text-gray-400">
+          <span class="text-xs text-muted-foreground">
             {{ agent?.is_reachable ? '已连接' : '未连接' }}
           </span>
         </div>
       </div>
 
       <div class="flex-1 overflow-y-auto py-1">
-        <div v-if="sessionsLoading" class="px-3 py-4 text-xs text-gray-400 text-center">
+        <div v-if="sessionsLoading" class="px-3 py-4 text-xs text-muted-foreground text-center">
           加载中...
         </div>
-        <div v-else-if="!sessions.length" class="px-3 py-4 text-xs text-gray-400 text-center">
+        <div v-else-if="!sessions.length" class="px-3 py-4 text-xs text-muted-foreground text-center">
           暂无对话，点击「新建」开始
         </div>
         <button
           v-for="s in sessions"
           :key="s.id"
-          class="w-full text-left px-3 py-2 group flex items-start justify-between gap-1 hover:bg-gray-50 transition-colors"
-          :class="s.id === currentSessionId ? 'bg-indigo-50' : ''"
+          class="w-full text-left px-3 py-2 group flex items-start justify-between gap-1 hover:bg-muted/50 transition-colors"
+          :class="s.id === currentSessionId ? 'bg-primary/10' : ''"
           @click="switchSession(s.id)"
         >
           <div class="flex-1 min-w-0">
-            <p class="text-sm text-gray-800 truncate">
+            <p class="text-sm text-foreground truncate">
               {{ s.title || '新对话' }}
             </p>
-            <p class="text-xs text-gray-400">{{ formatRelativeTime(s.updated_at) }}</p>
+            <p class="text-xs text-muted-foreground">{{ formatRelativeTime(s.updated_at) }}</p>
           </div>
           <button
-            class="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-red-500 transition-opacity"
+            class="opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground hover:text-red-400 transition-opacity"
             @click="deleteSession(s.id, $event)"
           >
             <Trash2 :size="13" />
@@ -346,14 +346,14 @@ function formatRelativeTime(dateStr: string): string {
       <div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
         <div
           v-if="!currentSessionId && !messagesLoading"
-          class="flex flex-col items-center justify-center h-full gap-3 text-gray-400"
+          class="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground"
         >
           <span v-if="agent?.icon_emoji" class="text-4xl">{{ agent.icon_emoji }}</span>
           <p class="text-sm">{{ agent?.description || '开始与 Agent 对话' }}</p>
         </div>
 
         <div v-if="messagesLoading" class="flex justify-center py-8">
-          <span class="text-sm text-gray-400">加载历史消息...</span>
+          <span class="text-sm text-muted-foreground">加载历史消息...</span>
         </div>
 
         <template v-if="!messagesLoading">
@@ -377,21 +377,21 @@ function formatRelativeTime(dateStr: string): string {
                     v-if="att.content_type.startsWith('image/')"
                     :src="att.url"
                     :alt="att.name"
-                    class="h-24 w-auto rounded-lg object-cover border border-gray-200"
+                    class="h-24 w-auto rounded-lg object-cover border border-border"
                   />
                   <div
                     v-else
-                    class="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs text-gray-600"
+                    class="flex items-center gap-2 px-3 py-2 bg-card border border-border rounded-lg text-xs text-muted-foreground"
                   >
                     <FileText :size="14" />
                     <span class="truncate max-w-[160px]">{{ att.name }}</span>
-                    <span class="text-gray-400">{{ formatFileSize(att.size) }}</span>
+                    <span class="text-muted-foreground/60">{{ formatFileSize(att.size) }}</span>
                   </div>
                 </a>
               </div>
               <div
                 v-if="msg.content"
-                class="px-4 py-2.5 bg-indigo-600 text-white text-sm rounded-2xl rounded-tr-sm whitespace-pre-wrap"
+                class="px-4 py-2.5 bg-primary text-primary-foreground text-sm rounded-2xl rounded-tr-sm whitespace-pre-wrap"
               >
                 {{ msg.content }}
               </div>
@@ -399,13 +399,13 @@ function formatRelativeTime(dateStr: string): string {
 
             <div v-else class="max-w-[70%]">
               <div
-                class="px-4 py-2.5 bg-gray-100 text-gray-800 text-sm rounded-2xl rounded-tl-sm"
+                class="px-4 py-2.5 bg-secondary text-secondary-foreground text-sm rounded-2xl rounded-tl-sm"
               >
                 <!-- eslint-disable-next-line vue/no-v-html -->
                 <span v-html="renderContent(msg.content)" />
                 <span
                   v-if="msg.streaming"
-                  class="inline-block w-0.5 h-3.5 bg-gray-500 ml-0.5 animate-pulse"
+                  class="inline-block w-0.5 h-3.5 bg-muted-foreground ml-0.5 animate-pulse"
                 />
               </div>
             </div>
@@ -426,30 +426,30 @@ function formatRelativeTime(dateStr: string): string {
               v-if="att.content_type.startsWith('image/')"
               :src="att.previewUrl ?? att.url"
               :alt="att.name"
-              class="h-16 w-auto rounded-lg object-cover border border-gray-200"
+              class="h-16 w-auto rounded-lg object-cover border border-border"
             />
             <div
               v-else
-              class="flex items-center gap-2 px-3 py-2 bg-gray-100 rounded-lg text-xs text-gray-600 border border-gray-200"
+              class="flex items-center gap-2 px-3 py-2 bg-muted rounded-lg text-xs text-muted-foreground border border-border"
             >
               <FileText :size="14" />
               <span class="truncate max-w-[100px]">{{ att.name }}</span>
             </div>
             <button
-              class="absolute -top-1.5 -right-1.5 w-4 h-4 bg-gray-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              class="absolute -top-1.5 -right-1.5 w-4 h-4 bg-foreground text-background rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
               @click="removePendingAttachment(idx)"
             >
               <X :size="10" />
             </button>
           </div>
-          <div v-if="isUploading" class="flex items-center px-3 py-2 text-xs text-gray-400">
+          <div v-if="isUploading" class="flex items-center px-3 py-2 text-xs text-muted-foreground">
             上传中...
           </div>
         </div>
 
         <div class="flex items-end gap-2">
           <button
-            class="p-2 text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
+            class="p-2 text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
             :disabled="!currentSessionId || isStreaming"
             @click="openFilePicker"
           >
@@ -466,7 +466,7 @@ function formatRelativeTime(dateStr: string): string {
           <textarea
             v-model="inputText"
             rows="1"
-            class="flex-1 resize-none rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 max-h-32 overflow-y-auto"
+            class="flex-1 resize-none rounded-xl border border-border bg-background text-foreground placeholder:text-muted-foreground px-3 py-2 text-sm focus:outline-none focus:border-primary/50 max-h-32 overflow-y-auto"
             :class="{ 'opacity-50': !currentSessionId }"
             placeholder="输入消息，Enter 发送，Shift+Enter 换行"
             :disabled="!currentSessionId || isStreaming"
@@ -474,7 +474,7 @@ function formatRelativeTime(dateStr: string): string {
           />
 
           <button
-            class="p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            class="p-2 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             :disabled="(!inputText.trim() && !pendingAttachments.length) || isStreaming || !currentSessionId"
             @click="send"
           >
