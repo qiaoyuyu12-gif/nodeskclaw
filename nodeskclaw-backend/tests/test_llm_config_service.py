@@ -1,5 +1,8 @@
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from app.services import llm_config_service
 
@@ -242,3 +245,85 @@ async def test_restart_runtime_recovers_hermes_pending_without_openclaw_force(mo
     k8s.remove_deployment_env.assert_not_awaited()
     assert instance.llm_config_pending is False
     db.commit.assert_awaited_once()
+
+
+def _ipc_write_mocks(monkeypatch, *, write_side_effect):
+    """Stub out the heavy dependencies of write_instance_llm_configs.
+
+    Returns the configs list; caller sets up db + instance.
+    """
+    monkeypatch.setattr(llm_config_service, "normalize_selected_models", lambda provider, models: models)
+    monkeypatch.setattr(llm_config_service, "_docker_rewrite_urls", lambda providers: providers)
+    monkeypatch.setattr(llm_config_service, "_ensure_gateway_config", lambda config, instance: None)
+    monkeypatch.setattr(llm_config_service, "_read_config_file", AsyncMock(return_value={}))
+    monkeypatch.setattr(llm_config_service, "_write_config_file", AsyncMock(side_effect=write_side_effect))
+
+    @asynccontextmanager
+    async def fake_remote_fs(_instance, _db):
+        yield object()
+
+    monkeypatch.setattr(llm_config_service, "remote_fs", fake_remote_fs)
+
+
+def _build_db(monkeypatch):
+    """db.execute 顺序：existing InstanceProviderConfig 查询、cluster 查询。"""
+    existing_res = MagicMock()
+    existing_res.scalars.return_value.all.return_value = []
+    cluster_res = MagicMock()
+    cluster_res.scalar_one_or_none.return_value = None  # use_external=False
+    db = AsyncMock()
+    db.add = MagicMock()  # add 是同步方法，避免 AsyncMock 产生未 await 的协程警告
+    db.execute = AsyncMock(side_effect=[existing_res, cluster_res])
+    return db
+
+
+async def test_write_instance_llm_configs_marks_pending_on_write_oserror(monkeypatch) -> None:
+    """运行时写入抛 OSError/PermissionError 时，配置存 DB 并标记 pending（不应 500）。
+
+    复现真实事故：原生 Linux 下写容器 root:700 的 openclaw.json 抛 PermissionError，
+    旧代码 except 只认 NFSMountError → 直接 500，DB 与容器静默不一致。
+    """
+    instance = SimpleNamespace(
+        id="inst-1", org_id="org-1", cluster_id="cl-1",
+        runtime="openclaw", compute_provider="docker",
+        name="t1", wp_api_key="wp-key", llm_config_pending=False,
+    )
+    db = _build_db(monkeypatch)
+    monkeypatch.setattr(
+        llm_config_service, "_build_providers_config",
+        lambda *a, **k: {"minimax-openai": {"baseUrl": "x", "apiKey": "y", "models": [{"id": "MiniMax-M2.5"}]}},
+    )
+    _ipc_write_mocks(monkeypatch, write_side_effect=PermissionError("Permission denied"))
+
+    configs = [SimpleNamespace(
+        provider="minimax-openai", key_source="team",
+        selected_models=[{"id": "MiniMax-M2.5"}], base_url=None, api_type=None,
+    )]
+
+    applied = await llm_config_service.write_instance_llm_configs(instance, db, configs, "user-1")
+
+    assert applied is False
+    assert instance.llm_config_pending is True
+
+
+async def test_write_instance_llm_configs_propagates_validation_error(monkeypatch) -> None:
+    """校验类错误（未生成任何 Provider）必须抛 AppException 给用户，不能被吞成 pending。"""
+    instance = SimpleNamespace(
+        id="inst-1", org_id="org-1", cluster_id="cl-1",
+        runtime="openclaw", compute_provider="docker",
+        name="t1", wp_api_key="wp-key", llm_config_pending=False,
+    )
+    db = _build_db(monkeypatch)
+    # 模拟"配了 provider 但没生成任何 entry（key 缺失）" -> 触发 AppException
+    monkeypatch.setattr(llm_config_service, "_build_providers_config", lambda *a, **k: {})
+    _ipc_write_mocks(monkeypatch, write_side_effect=PermissionError("should not reach"))
+
+    configs = [SimpleNamespace(
+        provider="minimax-openai", key_source="team",
+        selected_models=[{"id": "MiniMax-M2.5"}], base_url=None, api_type=None,
+    )]
+
+    with pytest.raises(llm_config_service.AppException):
+        await llm_config_service.write_instance_llm_configs(instance, db, configs, "user-1")
+
+    assert instance.llm_config_pending is False  # 未被误标 pending
