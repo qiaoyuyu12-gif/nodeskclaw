@@ -230,3 +230,43 @@ async def delete_raw(key: str) -> None:
         await asyncio.to_thread(_s3_delete_raw, key)
     else:
         await asyncio.to_thread(_local_delete_raw, key)
+
+
+# ── External Agent Attachments ────────────────────────────
+
+def _s3_upload_ea(file_content: bytes, filename: str, content_type: str, org_id: str) -> str:
+    """上传外部 Agent 附件到 S3，返回含 prefix 的完整 storage key。"""
+    client = _get_s3_client()
+    prefix = settings.S3_KEY_PREFIX.strip("/")
+    safe_name = Path(filename).name  # 取 basename，防止路径穿越
+    base = f"external-agent-files/{org_id}/{uuid.uuid4().hex}/{safe_name}"
+    key = f"{prefix}/{base}" if prefix else base
+    client.put_object(
+        Bucket=settings.S3_BUCKET,
+        Key=key,
+        Body=file_content,
+        ContentType=content_type,
+    )
+    return key
+
+
+def _local_upload_ea(file_content: bytes, filename: str, _content_type: str, org_id: str) -> str:
+    """上传外部 Agent 附件到本地文件系统，返回相对路径 key。"""
+    safe_name = Path(filename).name  # 取 basename，防止路径穿越
+    base = f"external-agent-files/{org_id}/{uuid.uuid4().hex}/{safe_name}"
+    local_dir = _get_local_dir()
+    file_path = local_dir / base
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    if not str(file_path.resolve()).startswith(str(local_dir.resolve())):
+        raise ValueError(f"非法文件路径: {file_path}")
+    file_path.write_bytes(file_content)
+    return base
+
+
+async def upload_external_agent_file(
+    file_content: bytes, filename: str, content_type: str, org_id: str
+) -> str:
+    """上传外部 Agent 附件，返回 storage key（可直接传入 get_presigned_url）。"""
+    if _use_s3():
+        return await asyncio.to_thread(_s3_upload_ea, file_content, filename, content_type, org_id)
+    return await asyncio.to_thread(_local_upload_ea, file_content, filename, content_type, org_id)
