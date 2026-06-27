@@ -1,10 +1,15 @@
 """Gene Evolution Ecosystem API routes."""
 
+import io
+import json
 import logging
 import re
+import zipfile
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -220,6 +225,57 @@ async def get_gene(
     await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
     gene = await gene_service.get_gene(db, gene_slug)
     return ApiResponse(data=gene)
+
+
+@router.get("/genes/{gene_slug}/download")
+async def download_gene(
+    gene_slug: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """将技能打包为 ZIP 文件供下载，目录结构与 upload-folder 接口对称。"""
+    # 权限校验：沿用 get_gene 的跨组织隔离规则
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
+
+    # 从数据库查询 Gene ORM 对象（需直接读取 manifest 原始字段）
+    from app.models.base import not_deleted
+    from app.models.gene import Gene
+
+    result = await db.execute(
+        select(Gene).where(Gene.slug == gene_slug, not_deleted(Gene))
+    )
+    gene = result.scalars().first()
+    if not gene:
+        raise NotFoundError("技能不存在", "errors.gene.not_found")
+
+    # 解析 manifest JSON（字段为 Text 列，存储为 JSON 字符串）
+    manifest: dict = json.loads(gene.manifest or "{}")
+
+    # 在内存中构建 ZIP，避免临时文件 I/O
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # SKILL.md：来自 manifest.skill.content
+        skill_content: str = manifest.get("skill", {}).get("content", "")
+        zf.writestr(f"{gene_slug}/SKILL.md", skill_content.encode("utf-8"))
+
+        # scripts：键为纯文件名（如 main.py），放在 {slug}/ 根目录
+        for fname, content in manifest.get("scripts", {}).items():
+            zf.writestr(f"{gene_slug}/{fname}", content.encode("utf-8"))
+
+        # assets：键为带子目录的相对路径（如 assets/data.json）
+        for rel_path, content in manifest.get("assets", {}).items():
+            zf.writestr(f"{gene_slug}/{rel_path}", content.encode("utf-8"))
+
+        # references：键为带子目录的相对路径（如 reference/guide.md）
+        for rel_path, content in manifest.get("references", {}).items():
+            zf.writestr(f"{gene_slug}/{rel_path}", content.encode("utf-8"))
+
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{gene_slug}.zip"'},
+    )
 
 
 @router.get("/genes/{gene_slug}/variants")
