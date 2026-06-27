@@ -304,12 +304,14 @@ async function onForkGene(gene: GeneItem, target: 'personal' | 'org' | 'public')
  * 调用 store.downloadGene，下载期间显示 loading 状态，防止重复触发。
  */
 async function onDownloadGene(gene: GeneItem) {
-  if (downloadingSlug.value) return
+  // 仅阻止同一个 gene 的重复下载，不影响其他 gene 并发下载
+  if (downloadingSlug.value === gene.slug) return
   downloadingSlug.value = gene.slug
   try {
     await store.downloadGene(gene.slug)
   } catch (e) {
-    console.error('下载技能失败', e)
+    // 与其他操作保持一致，用 toast 展示错误信息
+    toast.error(resolveApiErrorMessage(e, t('geneMarket.downloadFailed')))
   } finally {
     downloadingSlug.value = null
   }
