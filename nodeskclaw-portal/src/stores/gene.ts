@@ -399,22 +399,28 @@ export const useGeneStore = defineStore('gene', () => {
   /**
    * 下载指定 slug 的 Gene 压缩包（ZIP）。
    * responseType blob 让 axios 返回二进制数据，
-   * 通过创建临时 <a> 标签触发浏览器下载，下载完毕后立即清理临时 URL。
+   * 通过创建临时 <a> 标签触发浏览器下载，下载完毕后在 finally 中统一清理临时 URL 和 DOM 节点。
    */
   async function downloadGene(slug: string): Promise<void> {
-    // 以 blob 格式请求，确保 axios 返回二进制数据而非文本
     const response = await api.get(`/genes/${slug}/download`, { responseType: 'blob' })
-    // 创建临时对象 URL，供 <a> 标签 href 使用
-    const url = URL.createObjectURL(response.data as Blob)
+    const blob = response.data
+    // 类型守卫：确保服务器返回 Blob 格式，防止格式异常导致 createObjectURL 报错
+    if (!(blob instanceof Blob)) {
+      throw new Error('服务器返回格式异常')
+    }
+    const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
     a.download = `${slug}.zip`
     document.body.appendChild(a)
-    // 模拟点击触发下载
-    a.click()
-    // 移除临时节点，释放内存
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    try {
+      // 模拟点击触发下载
+      a.click()
+    } finally {
+      // 无论点击是否成功，都清理临时 DOM 节点和对象 URL，避免内存泄漏
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }
   }
 
   // ── Instance Templates ──────────────────────────

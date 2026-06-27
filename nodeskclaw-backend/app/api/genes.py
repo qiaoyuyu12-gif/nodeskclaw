@@ -3,6 +3,7 @@
 import io
 import json
 import logging
+import posixpath
 import re
 import zipfile
 
@@ -257,7 +258,11 @@ async def download_gene(
         raise NotFoundError("技能不存在", "errors.gene.not_found")
 
     # 解析 manifest JSON（字段为 Text 列，存储为 JSON 字符串）
-    manifest: dict = json.loads(gene.manifest or "{}")
+    try:
+        manifest: dict = json.loads(gene.manifest or "{}")
+    except json.JSONDecodeError:
+        from app.core.exceptions import BadRequestError
+        raise BadRequestError("技能数据格式损坏，无法下载", "errors.gene.manifest_corrupt")
 
     # 在内存中构建 ZIP，避免临时文件 I/O
     buf = io.BytesIO()
@@ -268,22 +273,28 @@ async def download_gene(
 
         # scripts：键为纯文件名（如 main.py），放在 {slug}/ 根目录
         for fname, content in manifest.get("scripts", {}).items():
-            zf.writestr(f"{gene_slug}/{fname}", _to_bytes(content))
+            safe_name = posixpath.basename(fname)
+            if safe_name and safe_name != ".":
+                zf.writestr(f"{gene_slug}/{safe_name}", _to_bytes(content))
 
         # assets：键为带子目录的相对路径（如 assets/data.json）
         for rel_path, content in manifest.get("assets", {}).items():
-            zf.writestr(f"{gene_slug}/{rel_path}", _to_bytes(content))
+            safe_path = posixpath.normpath(rel_path).lstrip("/")
+            if ".." not in safe_path.split("/"):
+                zf.writestr(f"{gene_slug}/{safe_path}", _to_bytes(content))
 
         # references：键为带子目录的相对路径（如 reference/guide.md）
         for rel_path, content in manifest.get("references", {}).items():
-            zf.writestr(f"{gene_slug}/{rel_path}", _to_bytes(content))
+            safe_path = posixpath.normpath(rel_path).lstrip("/")
+            if ".." not in safe_path.split("/"):
+                zf.writestr(f"{gene_slug}/{safe_path}", _to_bytes(content))
 
     # 计算 ZIP 大小并重置读取位置，用于填写 Content-Length 响应头
     buf.seek(0, 2)
     zip_size = buf.tell()
     buf.seek(0)
-    # 对 slug 做安全处理，防止 Content-Disposition 注入
-    safe_slug = gene_slug.replace('"', "").replace("\\", "")
+    # 对 slug 做安全处理，防止 Content-Disposition 注入，仅保留 slug 规范允许字符
+    safe_slug = re.sub(r"[^a-zA-Z0-9_-]", "_", gene_slug)
     return StreamingResponse(
         buf,
         media_type="application/zip",
