@@ -89,13 +89,26 @@ def apply_accessible_filter(query, user_id: str, org_id: str | None, db: AsyncSe
     """Add a WHERE clause so only instances the user can access are returned.
 
     同 org 的任意成员均可看到该组织下的所有实例。
+    org_id 为 None 时无 org 上下文，回退到只返回显式 InstanceMember 的实例（fail-safe）。
     """
+    if not org_id:
+        # 没有 org 上下文时安全兜底：只返回用户被显式加入的实例
+        member_subq = (
+            select(InstanceMember.instance_id)
+            .where(
+                InstanceMember.user_id == user_id,
+                not_deleted(InstanceMember),
+            )
+        )
+        query = query.where(Instance.id.in_(member_subq))
+        return query
+
     org_member_subq = (
         select(OrgMembership.user_id)
         .where(
             OrgMembership.user_id == user_id,
+            OrgMembership.org_id == org_id,
             not_deleted(OrgMembership),
-            *([OrgMembership.org_id == org_id] if org_id else []),
         )
         .exists()
     )

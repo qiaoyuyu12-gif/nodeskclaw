@@ -417,8 +417,8 @@ async def accept_invitation(
             granted_reason="accept_invitation",
         )
 
-    if not user.current_org_id:
-        user.current_org_id = invitation.org_id
+    # 始终将 current_org_id 切换到刚接受邀请的组织，确保用户能立即看到新组织的资源
+    user.current_org_id = invitation.org_id
 
     invitation.status = InvitationStatus.accepted
     invitation.accepted_by = user.id
