@@ -362,20 +362,16 @@ async def list_workspaces(
     )
 
     if user_id:
-        is_org_admin = (await db.execute(
-            select(OrgMembership.role).where(
+        # 验证用户是 org 成员即可，所有成员可见组织内全部工作区
+        is_org_member = (await db.execute(
+            select(OrgMembership.user_id).where(
                 OrgMembership.user_id == user_id,
                 OrgMembership.org_id == org_id,
                 OrgMembership.deleted_at.is_(None),
             )
         )).scalar_one_or_none()
-
-        if is_org_admin != OrgRole.admin:
-            member_ws_ids = select(WorkspaceMember.workspace_id).where(
-                WorkspaceMember.user_id == user_id,
-                WorkspaceMember.deleted_at.is_(None),
-            )
-            stmt = stmt.where(Workspace.id.in_(member_ws_ids))
+        if not is_org_member:
+            return []
 
     result = await db.execute(stmt.order_by(Workspace.created_at.desc()))
     workspaces = result.scalars().all()

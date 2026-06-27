@@ -86,11 +86,15 @@ async def list_instances(
             inst.health_status = "healthy"
             health_corrected = True
         info = InstanceInfo.model_validate(inst)
-        info.my_role = member_role or (
-            InstanceRole.admin
-            if await _is_org_admin(current_user.id, inst.org_id, db)
-            else None
-        )
+        is_creator = inst.created_by == current_user.id
+        is_admin = await _is_org_admin(current_user.id, inst.org_id, db)
+        if is_creator or is_admin:
+            info.my_role = InstanceRole.admin
+        elif member_role:
+            info.my_role = member_role
+        else:
+            # 同 org 普通成员：可查看/使用，无配置权限
+            info.my_role = InstanceRole.viewer if inst.org_id else None
         items.append(info)
 
     if health_corrected:
