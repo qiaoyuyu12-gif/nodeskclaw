@@ -1868,6 +1868,11 @@ const zhCN = {
       docker_check_timeout: "Docker 环境检查超时，请确认 Docker Desktop 或 Docker daemon 正在运行",
       docker_unavailable: "Docker Compose 不可用",
     },
+    kb: {
+      ragflow_error: "知识库服务返回错误：{detail}",
+      ragflow_unreachable: "无法连接知识库服务，请检查服务地址",
+      ragflow_auth_failed: "知识库服务鉴权失败，请检查 API Key",
+    },
     deploy: {
       localhost_not_reachable: "AGENT_API_BASE_URL 当前为 localhost，K8s 集群中的 AI 员工无法通过此地址连接后端。请在后端 .env 中将 AGENT_API_BASE_URL 设置为 K8s Pod 可达的外部地址后重启后端。",
       ingress_base_domain_required: "K8s 部署需要配置访问域名（ingress_base_domain），请在系统设置中配置后再部署。",

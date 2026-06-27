@@ -13,6 +13,7 @@ import {
 } from 'lucide-vue-next'
 import { kbApi } from '@/services/skills'
 import type { KnowledgeBase, KbDocument } from '@/services/skills'
+import { resolveApiErrorMessage } from '@/i18n/error'
 
 const props = defineProps<{
   kb: KnowledgeBase | null
@@ -61,8 +62,8 @@ async function load() {
     const result = await kbApi.documents(props.kb.id, page.value, PAGE_SIZE)
     docs.value = result.docs ?? []
     total.value = result.total ?? 0
-  } catch {
-    error.value = '加载文档列表失败，请确认知识库连接正常'
+  } catch (e) {
+    error.value = resolveApiErrorMessage(e, '加载文档列表失败，请确认知识库连接正常')
   } finally {
     loading.value = false
   }

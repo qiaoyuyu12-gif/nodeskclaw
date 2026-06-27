@@ -818,10 +818,14 @@ async def write_instance_llm_configs(
             )
         else:
             logger.info("实例 %s runtime=%s 暂不支持运行时 LLM 配置注入", instance.name, instance.runtime)
-    except NFSMountError:
+    except (NFSMountError, OSError) as e:
+        # 运行时不可写时（容器/Pod 未就绪 -> NFSMountError；宿主机回退写权限/IO 失败
+        # -> OSError/PermissionError）一律保存到 DB 并标记 pending，下次写入时清除。
+        # 注意：上方对"未生成 Provider""配置解析失败"主动抛的是 AppException，
+        # 不属于这里，会正常向上抛给用户，不会被误吞成 pending。
         logger.warning(
-            "Pod 不可用，LLM 配置已保存到 DB，标记 pending: instance=%s",
-            instance.name,
+            "运行时 LLM 配置写入失败（%s），已保存到 DB 并标记 pending: instance=%s",
+            type(e).__name__, instance.name,
         )
         instance.llm_config_pending = True
         await db.commit()
@@ -1078,7 +1082,7 @@ def _get_plugin_source_dir() -> Path:
     )
 
 
-async def _fix_docker_plugin_permissions(fs: "DockerFS", dir_name: str) -> str | None:
+async def _fix_docker_plugin_permissions(fs: DockerFS, dir_name: str) -> str | None:
     """通过 docker exec 将 world-writable 插件复制到 npm global extensions 路径。
 
     Windows NTFS bind-mount 中的文件在容器内显示为 mode=777，OpenClaw 安全检查

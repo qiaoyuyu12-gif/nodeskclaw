@@ -76,7 +76,9 @@ async def sync_kb(
     user, org = auth
     kb = await kb_service.get_knowledge_base(kb_id=kb_id, org_id=org.id, db=db)
     api_key = kb_service.get_decrypted_api_key(kb)
-    reachable = await ragflow_adapter.verify_connection(kb.ragflow_endpoint, api_key)
+    reachable = await ragflow_adapter.verify_connection(
+        kb.ragflow_endpoint, api_key, kb.ragflow_kb_id
+    )
     # 持久化 sync 结果，供 agent KB 选择器过滤「已连接」状态
     kb.is_reachable = reachable
     kb.last_checked_at = datetime.now(timezone.utc)

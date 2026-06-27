@@ -545,6 +545,11 @@ async def add_agent(db: AsyncSession, workspace_id: str, data: AddAgentRequest, 
             except Exception as e:
                 logger.error("基因安装失败，回滚工作区加入: instance=%s gene=%s error=%s", inst.name, slug, e)
                 wa.soft_delete()
+                # 同步软删除 node_card，否则会遗留活跃孤儿卡片，
+                # 导致下次加入时撞上 uq_node_card_node_workspace 唯一约束
+                await node_card_service.soft_delete_node_card(
+                    db, node_id=inst.id, workspace_id=workspace_id,
+                )
                 await db.commit()
                 raise ValueError(f"基因 {slug} 安装失败: {e}") from e
 
