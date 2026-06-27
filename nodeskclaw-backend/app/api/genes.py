@@ -16,6 +16,8 @@ from app.core.config import settings
 from app.core.deps import get_current_org, get_db
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.security import get_current_user
+from app.models.base import not_deleted
+from app.models.gene import Gene
 from app.models.user import User
 from app.schemas.common import ApiResponse, PaginatedResponse, Pagination
 from app.schemas.gene import (
@@ -227,6 +229,15 @@ async def get_gene(
     return ApiResponse(data=gene)
 
 
+def _to_bytes(value) -> bytes:
+    """将 manifest 字段值安全转换为 bytes，容忍 None 和非字符串类型。"""
+    if isinstance(value, bytes):
+        return value
+    if value is None:
+        return b""
+    return str(value).encode("utf-8")
+
+
 @router.get("/genes/{gene_slug}/download")
 async def download_gene(
     gene_slug: str,
@@ -238,9 +249,6 @@ async def download_gene(
     await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
 
     # 从数据库查询 Gene ORM 对象（需直接读取 manifest 原始字段）
-    from app.models.base import not_deleted
-    from app.models.gene import Gene
-
     result = await db.execute(
         select(Gene).where(Gene.slug == gene_slug, not_deleted(Gene))
     )
@@ -256,25 +264,33 @@ async def download_gene(
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         # SKILL.md：来自 manifest.skill.content
         skill_content: str = manifest.get("skill", {}).get("content", "")
-        zf.writestr(f"{gene_slug}/SKILL.md", skill_content.encode("utf-8"))
+        zf.writestr(f"{gene_slug}/SKILL.md", _to_bytes(skill_content))
 
         # scripts：键为纯文件名（如 main.py），放在 {slug}/ 根目录
         for fname, content in manifest.get("scripts", {}).items():
-            zf.writestr(f"{gene_slug}/{fname}", content.encode("utf-8"))
+            zf.writestr(f"{gene_slug}/{fname}", _to_bytes(content))
 
         # assets：键为带子目录的相对路径（如 assets/data.json）
         for rel_path, content in manifest.get("assets", {}).items():
-            zf.writestr(f"{gene_slug}/{rel_path}", content.encode("utf-8"))
+            zf.writestr(f"{gene_slug}/{rel_path}", _to_bytes(content))
 
         # references：键为带子目录的相对路径（如 reference/guide.md）
         for rel_path, content in manifest.get("references", {}).items():
-            zf.writestr(f"{gene_slug}/{rel_path}", content.encode("utf-8"))
+            zf.writestr(f"{gene_slug}/{rel_path}", _to_bytes(content))
 
+    # 计算 ZIP 大小并重置读取位置，用于填写 Content-Length 响应头
+    buf.seek(0, 2)
+    zip_size = buf.tell()
     buf.seek(0)
+    # 对 slug 做安全处理，防止 Content-Disposition 注入
+    safe_slug = gene_slug.replace('"', "").replace("\\", "")
     return StreamingResponse(
         buf,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{gene_slug}.zip"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_slug}.zip"',
+            "Content-Length": str(zip_size),
+        },
     )
 
 
