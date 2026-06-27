@@ -396,6 +396,27 @@ export const useGeneStore = defineStore('gene', () => {
     return res.data.data
   }
 
+  /**
+   * 下载指定 slug 的 Gene 压缩包（ZIP）。
+   * responseType blob 让 axios 返回二进制数据，
+   * 通过创建临时 <a> 标签触发浏览器下载，下载完毕后立即清理临时 URL。
+   */
+  async function downloadGene(slug: string): Promise<void> {
+    // 以 blob 格式请求，确保 axios 返回二进制数据而非文本
+    const response = await api.get(`/genes/${slug}/download`, { responseType: 'blob' })
+    // 创建临时对象 URL，供 <a> 标签 href 使用
+    const url = URL.createObjectURL(response.data as Blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${slug}.zip`
+    document.body.appendChild(a)
+    // 模拟点击触发下载
+    a.click()
+    // 移除临时节点，释放内存
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   // ── Instance Templates ──────────────────────────
 
   async function fetchTemplates(params: { keyword?: string; visibility?: string; page?: number; page_size?: number } = {}) {
@@ -561,6 +582,7 @@ export const useGeneStore = defineStore('gene', () => {
     createManualGene,
     publishGeneToMarket,
     forkGene,
+    downloadGene,
     fetchEvolutionLog,
 
     fetchGeneStats,
