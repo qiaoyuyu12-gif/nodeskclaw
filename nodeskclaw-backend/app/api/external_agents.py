@@ -9,6 +9,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import Depends, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRouter
@@ -374,8 +375,15 @@ async def chat_with_agent(
         except Exception as exc:
             # exc_info=True 打印完整堆栈，便于排查协议解析失败等问题
             logger.warning("External agent chat error: %s %s", agent_id, exc, exc_info=True)
-            # str(exc) 可能为空（如 RuntimeError("")、NotImplementedError()），需要兜底
-            error_msg = str(exc) or "外部 Agent 通信异常（无错误详情）"
+            # httpx 超时类异常的 str() 为空，给出人类可读的提示
+            if isinstance(exc, httpx.ConnectTimeout):
+                error_msg = f"连接超时：无法在 10s 内连接到外部 Agent（{agent.endpoint}），请确认服务是否运行"
+            elif isinstance(exc, httpx.ReadTimeout):
+                error_msg = "读取超时：外部 Agent 响应超过 120s"
+            elif isinstance(exc, httpx.ConnectError):
+                error_msg = f"连接失败：无法连接到外部 Agent（{agent.endpoint}）"
+            else:
+                error_msg = str(exc) or "外部 Agent 通信异常（无错误详情）"
             yield f"data: {json.dumps({'error': error_msg}, ensure_ascii=False)}\n\n"
         finally:
             yield f"data: {json.dumps({'done': True})}\n\n"
