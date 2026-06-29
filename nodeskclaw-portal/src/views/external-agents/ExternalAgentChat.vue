@@ -198,6 +198,19 @@ async function send() {
       attachmentsToSend.length ? attachmentsToSend : undefined,
     )
 
+    // 后端在 SSE 流开始前遇到错误（如 agent 不存在）会返回非 200，
+    // 此时 body 是 JSON 错误体而非 SSE 流，需要单独处理。
+    if (!res.ok) {
+      let detail = `请求失败: HTTP ${res.status}`
+      try {
+        const err = await res.json()
+        if (err?.detail) detail = err.detail
+      } catch {
+        // 无法解析响应体，使用默认错误信息
+      }
+      throw new Error(detail)
+    }
+
     if (!res.body) throw new Error('响应无 body')
     const reader = res.body.getReader()
     const decoder = new TextDecoder()

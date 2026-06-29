@@ -337,8 +337,10 @@ async def chat_with_agent(
         user_content += "\n\n附件:\n" + "\n".join(file_lines)
 
     # 从 DB 加载历史消息，构建完整 messages 列表
+    # 跳过空 content 消息——上一轮 agent 无返回时会留下空 assistant 记录，
+    # 发给 OpenAI-compatible API 会触发 "content cannot be empty" 拒绝。
     history = await external_agent_chat_service.get_messages(session_id=session_id, db=db)
-    messages_for_agent = [{"role": m.role, "content": m.content} for m in history]
+    messages_for_agent = [{"role": m.role, "content": m.content} for m in history if m.content]
     messages_for_agent.append({"role": "user", "content": user_content})
 
     # 仅保存 storage_key，不保存 URL（URL 有有效期）
@@ -375,7 +377,8 @@ async def chat_with_agent(
         finally:
             yield f"data: {json.dumps({'done': True})}\n\n"
             assistant_content = "".join(collected_chunks)
-            if session_id and message:
+            # 只在 agent 有实际返回内容时才持久化，避免空 assistant 消息污染历史记录
+            if session_id and message and assistant_content:
                 asyncio.create_task(
                     _persist_messages(
                         session_id=session_id,
