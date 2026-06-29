@@ -372,8 +372,11 @@ async def chat_with_agent(
                 collected_chunks.append(chunk)
                 yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
         except Exception as exc:
-            logger.warning("External agent chat error: %s %s", agent_id, exc)
-            yield f"data: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
+            # exc_info=True 打印完整堆栈，便于排查协议解析失败等问题
+            logger.warning("External agent chat error: %s %s", agent_id, exc, exc_info=True)
+            # str(exc) 可能为空（如 RuntimeError("")、NotImplementedError()），需要兜底
+            error_msg = str(exc) or "外部 Agent 通信异常（无错误详情）"
+            yield f"data: {json.dumps({'error': error_msg}, ensure_ascii=False)}\n\n"
         finally:
             yield f"data: {json.dumps({'done': True})}\n\n"
             assistant_content = "".join(collected_chunks)

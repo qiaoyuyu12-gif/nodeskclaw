@@ -226,8 +226,9 @@ async function send() {
           if (payload.chunk) {
             messages.value[assistantIndex].content += payload.chunk
             await scrollToBottom()
-          } else if (payload.error) {
-            messages.value[assistantIndex].content += `[错误: ${payload.error}]`
+          } else if (payload.error !== undefined) {
+            // error 可能是空字符串，用 !== undefined 而非 truthy 检查
+            messages.value[assistantIndex].content += `[错误: ${payload.error || '未知错误'}]`
           }
         } catch {
           // 忽略非 JSON 行
