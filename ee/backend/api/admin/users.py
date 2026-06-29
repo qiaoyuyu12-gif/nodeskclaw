@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_db, require_super_admin_dep
 from app.models.org_membership import OrgMembership
+from app.models.organization import Organization
 from app.models.user import User
 from app.schemas.common import ApiResponse, PaginatedResponse, Pagination
 from ee.backend.services.admin import user_admin_service
@@ -43,6 +44,16 @@ class AdminUserPatch(BaseModel):
 
     is_active: bool | None = None
     is_super_admin: bool | None = None
+
+
+class AdminUserOrgInfo(BaseModel):
+    """用户在某组织的成员信息。"""
+
+    org_id: str
+    org_name: str
+    org_slug: str
+    role: str
+    joined_at: datetime | None = None
 
 
 @router.get("", response_model=PaginatedResponse[AdminUserInfo])
@@ -173,3 +184,33 @@ async def delete_user(
     await user_admin_service.delete_user(db, admin=admin, user_id=user_id)
     await db.commit()
     return ApiResponse[dict](data={"deleted": True})
+
+
+@router.get("/{user_id}/orgs", response_model=ApiResponse[list[AdminUserOrgInfo]])
+async def list_user_orgs(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_super_admin_dep),
+):
+    """查询指定用户所属的所有组织及其角色。"""
+    result = await db.execute(
+        select(OrgMembership, Organization)
+        .join(Organization, OrgMembership.org_id == Organization.id)
+        .where(
+            OrgMembership.user_id == user_id,
+            OrgMembership.deleted_at.is_(None),
+            Organization.deleted_at.is_(None),
+        )
+        .order_by(OrgMembership.created_at.asc())
+    )
+    data = [
+        AdminUserOrgInfo(
+            org_id=org.id,
+            org_name=org.name,
+            org_slug=org.slug,
+            role=membership.role,
+            joined_at=membership.created_at,
+        )
+        for membership, org in result.all()
+    ]
+    return ApiResponse[list[AdminUserOrgInfo]](data=data)
