@@ -271,6 +271,8 @@ async def _parse_nap_sse(resp: httpx.Response) -> AsyncIterator[str]:
 
         if line.startswith("data:"):
             raw = line[len("data:"):].strip()
+            # 临时调试：记录所有收到的事件类型和原始数据，用于排查推理链路格式
+            logger.warning("NAP SSE event=%r data=%r", current_event, raw[:200] if raw else "")
 
             if current_event == "message":
                 if raw:
