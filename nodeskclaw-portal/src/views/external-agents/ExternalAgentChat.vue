@@ -215,11 +215,17 @@ async function send() {
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
 
+    // lineBuffer 保存跨 reader.read() 切块的不完整行，
+    // 避免 JSON 被截断后 parse 失败导致 chunk 丢失（截断现象）。
+    let lineBuffer = ''
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      const raw = decoder.decode(value, { stream: true })
-      for (const line of raw.split('\n')) {
+      lineBuffer += decoder.decode(value, { stream: true })
+      // 只处理已完整到达的行，末尾不完整的部分留在 buffer 等下次拼接
+      const lines = lineBuffer.split('\n')
+      lineBuffer = lines.pop() ?? ''
+      for (const line of lines) {
         if (!line.startsWith('data: ')) continue
         try {
           const payload = JSON.parse(line.slice(6))
