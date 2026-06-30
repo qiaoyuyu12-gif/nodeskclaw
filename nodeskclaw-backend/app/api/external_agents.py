@@ -41,6 +41,7 @@ async def _persist_messages(
     user_content: str,
     user_attachments: list[dict] | None,
     assistant_content: str,
+    assistant_thinking: str | None = None,
 ) -> None:
     """SSE 流结束后异步持久化消息，使用独立 DB Session 避免与请求 Session 竞争。"""
     try:
@@ -50,6 +51,7 @@ async def _persist_messages(
                 user_content=user_content,
                 user_attachments=user_attachments,
                 assistant_content=assistant_content,
+                assistant_thinking=assistant_thinking,
                 db=db,
             )
     except Exception as exc:
@@ -291,6 +293,7 @@ async def list_messages(
             session_id=msg.session_id,
             role=msg.role,
             content=msg.content,
+            thinking=msg.thinking,
             attachments=attachments_with_url,
             created_at=msg.created_at,
         ))
@@ -358,6 +361,7 @@ async def chat_with_agent(
         ]
 
     collected_chunks: list[str] = []
+    collected_thinking: list[str] = []
 
     async def event_stream():
         try:
@@ -371,7 +375,8 @@ async def chat_with_agent(
                 organization_id=str(org.id),
             ):
                 if event_type == "thinking":
-                    # 推理链路不计入 assistant 正式回复，单独发给前端展示
+                    # 推理链路不计入 assistant 正式回复，单独发给前端展示并持久化
+                    collected_thinking.append(content)
                     yield f"data: {json.dumps({'thinking': content}, ensure_ascii=False)}\n\n"
                 else:
                     collected_chunks.append(content)
@@ -392,6 +397,7 @@ async def chat_with_agent(
         finally:
             yield f"data: {json.dumps({'done': True})}\n\n"
             assistant_content = "".join(collected_chunks)
+            assistant_thinking = "".join(collected_thinking) or None
             # 只在 agent 有实际返回内容时才持久化，避免空 assistant 消息污染历史记录
             if session_id and message and assistant_content:
                 asyncio.create_task(
@@ -400,6 +406,7 @@ async def chat_with_agent(
                         user_content=message,
                         user_attachments=attachments_to_save,
                         assistant_content=assistant_content,
+                        assistant_thinking=assistant_thinking,
                     )
                 )
 

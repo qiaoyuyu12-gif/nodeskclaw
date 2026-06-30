@@ -78,6 +78,7 @@ async def save_messages(
     user_content: str,
     user_attachments: list[dict] | None,
     assistant_content: str,
+    assistant_thinking: str | None = None,
     db: AsyncSession,
 ) -> None:
     """批量写入用户消息和 Agent 响应，同时更新 session 的 updated_at 和 title。"""
@@ -91,6 +92,7 @@ async def save_messages(
         session_id=session_id,
         role="assistant",
         content=assistant_content,
+        thinking=assistant_thinking or None,
     ))
 
     result = await db.execute(

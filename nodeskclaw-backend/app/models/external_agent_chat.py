@@ -40,4 +40,5 @@ class ExternalAgentMessage(BaseModel):
     )
     role: Mapped[str] = mapped_column(String(16), nullable=False)  # user | assistant
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    thinking: Mapped[str | None] = mapped_column(Text, nullable=True)  # 推理/思考过程，仅 assistant 消息有值
     attachments: Mapped[list | None] = mapped_column(JSONB, nullable=True)

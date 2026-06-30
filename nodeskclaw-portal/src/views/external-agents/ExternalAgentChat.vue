@@ -98,6 +98,7 @@ async function switchSession(sessionId: string) {
       id: m.id,
       role: m.role,
       content: m.content,
+      thinking: m.thinking ?? undefined,
       attachments: m.attachments ?? undefined,
     }))
     await scrollToBottom()

@@ -99,6 +99,7 @@ class MessageResponse(PydanticBase):
     session_id: str
     role: str
     content: str
+    thinking: str | None = None
     attachments: list[AttachmentItemWithUrl] | None
     created_at: datetime
 
