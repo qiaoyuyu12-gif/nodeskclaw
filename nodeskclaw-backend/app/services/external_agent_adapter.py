@@ -215,14 +215,16 @@ async def chat_stream(
         url = f"{endpoint}/chat"
         payload = {
             "session_id": session_id or str(uuid.uuid4()),
+            "user_id": user_id or "anonymous",
             "message": last_user_msg,
+            "thinking": True,   # 启用推理链路，agent 返回 event: thought 片段
         }
         # trust_env=False：不走系统代理，直连 Agent 服务
         async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT, trust_env=False) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
-                async for chunk in _parse_named_sse(resp):
-                    yield ("message", chunk)
+                async for event_type, chunk in _parse_named_sse(resp):
+                    yield (event_type, chunk)
 
 
 async def _parse_openai_sse(resp: httpx.Response) -> AsyncIterator[str]:
@@ -298,15 +300,18 @@ async def _parse_nap_sse(resp: httpx.Response) -> AsyncIterator[tuple[str, str]]
                     raise RuntimeError(raw)
 
 
-async def _parse_named_sse(resp: httpx.Response) -> AsyncIterator[str]:
-    """解析命名 SSE 事件（mom_agent 格式）。
+async def _parse_named_sse(resp: httpx.Response) -> AsyncIterator[tuple[str, str]]:
+    """解析命名 SSE 事件（mom_agent / custom 格式），yield (event_type, content) 元组。
 
     格式：
-        event: meta
-        data: {...}
+        event: thought
+        data: 思考过程文本片段  ← 透传为 thinking 类型
 
         event: answer
-        data: 文本片段
+        data: 回答文本片段
+
+        event: status
+        data: {"stage": "...", "label": "...", "ok": true}  ← 忽略
 
         event: done
         data: {...}
@@ -328,10 +333,15 @@ async def _parse_named_sse(resp: httpx.Response) -> AsyncIterator[str]:
         if line.startswith("data:"):
             raw = line[len("data:"):].strip()
 
-            if current_event == "answer":
+            if current_event == "thought":
+                # 推理/思考过程，透传为 thinking 类型供平台折叠展示
+                if raw:
+                    yield ("thinking", raw)
+
+            elif current_event == "answer":
                 # answer 事件的 data 直接是文本片段（非 JSON）
                 if raw:
-                    yield raw
+                    yield ("message", raw)
 
             elif current_event == "done":
                 return
@@ -351,7 +361,7 @@ async def _parse_named_sse(resp: httpx.Response) -> AsyncIterator[str]:
                     chunk = json.loads(raw)
                     text = chunk.get("content", "")
                     if text:
-                        yield text
+                        yield ("message", text)
                 except Exception:
                     if raw:
-                        yield raw
+                        yield ("message", raw)
