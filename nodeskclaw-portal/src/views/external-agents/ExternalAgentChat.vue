@@ -342,12 +342,15 @@ function formatRelativeTime(dateStr: string): string {
         <div v-else-if="!sessions.length" class="px-3 py-4 text-xs text-muted-foreground text-center">
           暂无对话，点击「新建」开始
         </div>
-        <button
+        <div
           v-for="s in sessions"
           :key="s.id"
-          class="w-full text-left px-3 py-2 group flex items-start justify-between gap-1 hover:bg-muted/50 transition-colors"
+          role="button"
+          tabindex="0"
+          class="w-full text-left px-3 py-2 group flex items-start justify-between gap-1 hover:bg-muted/50 transition-colors cursor-pointer"
           :class="s.id === currentSessionId ? 'bg-primary/10' : ''"
           @click="switchSession(s.id)"
+          @keydown.enter="switchSession(s.id)"
         >
           <div class="flex-1 min-w-0">
             <p class="text-sm text-foreground truncate">
@@ -361,7 +364,7 @@ function formatRelativeTime(dateStr: string): string {
           >
             <Trash2 :size="13" />
           </button>
-        </button>
+        </div>
       </div>
     </aside>
 
