@@ -333,6 +333,22 @@ SSE
 
 ## Event Types
 
+### Thinking Event (Optional)
+
+Sent before `message` events to expose the agent's reasoning process. The platform displays thinking content in a collapsible section.
+
+```text
+event: thinking
+data: Analyzing user request and querying ERP data...
+```
+
+Rules:
+- All `thinking` events MUST be sent before any `message` event
+- Data is plain text, not JSON
+- Optional — agents without reasoning chains can omit it
+
+---
+
 ### Message Event
 
 ```text
@@ -354,6 +370,39 @@ data: {...}
 ### Done Event
 
 ```text
+event: done
+data: complete
+```
+
+---
+
+### Error Event
+
+```text
+event: error
+data: {"code": "MODEL_TIMEOUT", "message": "LLM request timeout"}
+```
+
+---
+
+### Complete Streaming Example (with reasoning)
+
+```text
+event: thinking
+data: User is asking about inventory. Querying ERP system...
+
+event: thinking
+data: Found 3 materials with insufficient stock.
+
+event: message
+data: Based on your data,
+
+event: message
+data: I found the following issues:
+
+event: message
+data: 3 materials have insufficient inventory.
+
 event: done
 data: complete
 ```

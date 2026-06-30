@@ -106,19 +106,38 @@ data: complete
 
 #### 事件类型
 
-| 事件 | data 格式 | 说明 |
-|---|---|---|
-| `message` | 纯文本字符串 | 回复文本片段，平台逐块拼接展示 |
-| `done` | 任意（如 `complete`） | 结束信号，必须发送 |
-| `error` | `{"code": "ERROR_CODE", "message": "错误描述"}` | 错误时发送，平台展示 message |
+| 事件 | data 格式 | 必须 | 说明 |
+|---|---|---|---|
+| `thinking` | 纯文本字符串 | 否 | 推理/思考过程文本片段，平台折叠展示；必须在所有 `message` 事件之前发送 |
+| `message` | 纯文本字符串 | 是 | 回复文本片段，平台逐块拼接展示 |
+| `done` | 任意（如 `complete`） | 是 | 结束信号，必须发送 |
+| `error` | `{"code": "ERROR_CODE", "message": "错误描述"}` | — | 错误时发送，平台展示 message |
 
-**注意：`message` 事件的 data 是纯文本，不是 JSON。**
+**注意：`thinking` 和 `message` 事件的 data 均为纯文本，不是 JSON。**
 
-#### 完整示例
+#### 完整示例（含推理链路）
 
 ```
+event: thinking
+data: 用户询问库存问题，需要先查询 ERP 数据...
+
+event: thinking
+data: 已获取数据，发现 3 项物料库存不足。
+
 event: message
 data: 根据您的数据，
+
+event: message
+data: 我发现以下问题：
+
+event: message
+data: 库存不足的物料有 3 项。
+
+event: done
+data: complete
+```
+
+#### 无推理链路的最简示例
 
 event: message
 data: 我发现以下问题：
@@ -168,6 +187,8 @@ async def meta():
 async def stream(payload: dict):
     async def generate():
         messages = payload.get("messages", [])
+        # 可选：先发送推理过程（thinking 事件必须早于 message 事件）
+        yield "event: thinking\ndata: 正在分析用户问题...\n\n"
         # 在这里调用你的 LLM / 业务逻辑
         reply = "这是来自外部 Agent 的回复"
         for chunk in reply.split("，"):

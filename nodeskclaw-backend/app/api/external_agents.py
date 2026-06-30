@@ -361,7 +361,7 @@ async def chat_with_agent(
 
     async def event_stream():
         try:
-            async for chunk in external_agent_adapter.chat_stream(
+            async for event_type, content in external_agent_adapter.chat_stream(
                 endpoint=agent.endpoint,
                 api_key=api_key,
                 protocol=agent.protocol,
@@ -370,8 +370,12 @@ async def chat_with_agent(
                 user_id=str(user.id),
                 organization_id=str(org.id),
             ):
-                collected_chunks.append(chunk)
-                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+                if event_type == "thinking":
+                    # 推理链路不计入 assistant 正式回复，单独发给前端展示
+                    yield f"data: {json.dumps({'thinking': content}, ensure_ascii=False)}\n\n"
+                else:
+                    collected_chunks.append(content)
+                    yield f"data: {json.dumps({'chunk': content}, ensure_ascii=False)}\n\n"
         except Exception as exc:
             # exc_info=True 打印完整堆栈，便于排查协议解析失败等问题
             logger.warning("External agent chat error: %s %s", agent_id, exc, exc_info=True)

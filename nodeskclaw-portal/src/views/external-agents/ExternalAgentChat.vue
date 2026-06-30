@@ -38,6 +38,7 @@ interface LocalMessage {
   id?: string
   role: 'user' | 'assistant'
   content: string
+  thinking?: string
   attachments?: AttachmentItemWithUrl[]
   streaming?: boolean
 }
@@ -232,6 +233,9 @@ async function send() {
           if (payload.chunk) {
             messages.value[assistantIndex].content += payload.chunk
             await scrollToBottom()
+          } else if (payload.thinking) {
+            // 推理链路追加到 thinking 字段，不计入正式回复内容
+            messages.value[assistantIndex].thinking = (messages.value[assistantIndex].thinking ?? '') + payload.thinking
           } else if (payload.error !== undefined) {
             // error 可能是空字符串，用 !== undefined 而非 truthy 检查
             messages.value[assistantIndex].content += `[错误: ${payload.error || '未知错误'}]`
@@ -418,6 +422,18 @@ function formatRelativeTime(dateStr: string): string {
             </div>
 
             <div v-else class="max-w-[70%]">
+              <!-- 推理链路：可折叠展示，在正式回复上方 -->
+              <details
+                v-if="msg.thinking"
+                class="mb-1.5 rounded-xl border border-border/40 bg-muted/20 text-xs text-muted-foreground"
+              >
+                <summary class="cursor-pointer select-none px-3 py-1.5 hover:text-foreground">
+                  思考过程
+                </summary>
+                <div class="px-3 pb-2 pt-1 whitespace-pre-wrap leading-relaxed">
+                  {{ msg.thinking }}
+                </div>
+              </details>
               <div
                 class="px-4 py-2.5 bg-secondary text-secondary-foreground text-sm rounded-2xl rounded-tl-sm ea-msg-assistant"
               >

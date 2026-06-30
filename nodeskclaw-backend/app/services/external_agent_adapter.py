@@ -159,16 +159,17 @@ async def chat_stream(
     session_id: str | None = None,
     user_id: str | None = None,
     organization_id: str | None = None,
-) -> AsyncIterator[str]:
-    """向外部 Agent 发起流式聊天，逐块 yield 文本内容。
+) -> AsyncIterator[tuple[str, str]]:
+    """向外部 Agent 发起流式聊天，逐块 yield (event_type, content) 元组。
+
+    event_type 取值：
+      "message"  — 正式回复文本片段
+      "thinking" — 推理/思考过程片段（NAP 协议专属，其他协议不产生）
 
     openai_compatible：POST /v1/chat/completions，stream=True
     custom：POST {endpoint}/chat，兼容 mom_agent 命名 SSE 事件格式
-      请求：{"session_id": "...", "message": "最后一条用户消息"}
-      响应：event: answer / event: done / event: error（SSE 命名事件）
     nap：POST {endpoint}/stream，NAP v1.0 标准格式
-      请求：完整 NAP Request Schema（protocol_version / request_id / session_id / ...）
-      响应：event: message / event: done / event: error（SSE 命名事件）
+      响应支持 event: thinking（推理链路）/ event: message / event: done / event: error
     """
     # WSL 环境下自动将 127.0.0.1/localhost 映射到 Windows 宿主机 IP
     endpoint = _resolve_wsl_endpoint(endpoint)
@@ -184,7 +185,7 @@ async def chat_stream(
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
                 async for chunk in _parse_openai_sse(resp):
-                    yield chunk
+                    yield ("message", chunk)
 
     elif protocol == "nap":
         url = f"{endpoint}/stream"
@@ -201,8 +202,8 @@ async def chat_stream(
         async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT, trust_env=False) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
-                async for chunk in _parse_nap_sse(resp):
-                    yield chunk
+                async for event_type, chunk in _parse_nap_sse(resp):
+                    yield (event_type, chunk)
 
     else:
         # custom 协议（mom_agent 格式）
@@ -221,7 +222,7 @@ async def chat_stream(
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
                 async for chunk in _parse_named_sse(resp):
-                    yield chunk
+                    yield ("message", chunk)
 
 
 async def _parse_openai_sse(resp: httpx.Response) -> AsyncIterator[str]:
@@ -242,15 +243,18 @@ async def _parse_openai_sse(resp: httpx.Response) -> AsyncIterator[str]:
                 yield raw
 
 
-async def _parse_nap_sse(resp: httpx.Response) -> AsyncIterator[str]:
-    """解析 NAP v1.0 SSE 命名事件。
+async def _parse_nap_sse(resp: httpx.Response) -> AsyncIterator[tuple[str, str]]:
+    """解析 NAP v1.0 SSE 命名事件，yield (event_type, content) 元组。
 
     格式：
+        event: thinking
+        data: 推理/思考过程文本片段  ← 透传给平台折叠展示
+
         event: message
         data: 文本片段
 
         event: tool_call
-        data: {...}   ← 忽略，仅透传 message 事件
+        data: {...}   ← 忽略，仅透传 thinking / message 事件
 
         event: done
         data: complete
@@ -272,9 +276,14 @@ async def _parse_nap_sse(resp: httpx.Response) -> AsyncIterator[str]:
         if line.startswith("data:"):
             raw = line[len("data:"):].strip()
 
-            if current_event == "message":
+            if current_event == "thinking":
+                # 推理/思考过程，透传给平台折叠展示（不计入正式回复）
                 if raw:
-                    yield raw
+                    yield ("thinking", raw)
+
+            elif current_event == "message":
+                if raw:
+                    yield ("message", raw)
 
             elif current_event == "done":
                 return
