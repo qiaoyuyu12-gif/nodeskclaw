@@ -5,7 +5,7 @@ metadata:
   labels:
     app: nodeskclaw-portal
 spec:
-  replicas: 1
+  replicas: 2                          # 前端也至少 2 副本
   selector:
     matchLabels:
       app: nodeskclaw-portal
@@ -15,10 +15,10 @@ spec:
         app: nodeskclaw-portal
     spec:
       imagePullSecrets:
-        - name: cr-pull-secret
+        - name: aliyun-registry        # 对应 6.3 步创建的 Secret
       containers:
         - name: nodeskclaw-portal
-          image: <YOUR_REGISTRY>/<YOUR_NAMESPACE>/nodeskclaw-portal:20260227-ab67cbf
+          image: registry.cn-hangzhou.aliyuncs.com/nodeskclaw/nodeskclaw-portal:v1.0.0   # 改成你的镜像地址
           ports:
             - containerPort: 80
           resources:
