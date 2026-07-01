@@ -330,6 +330,11 @@ export const useGeneStore = defineStore('gene', () => {
     return res.data.data
   }
 
+  async function deleteSkillByName(instanceId: string, skillName: string) {
+    const res = await api.delete(`/instances/${instanceId}/skills/${skillName}`)
+    return res.data.data
+  }
+
   async function applyGenome(instanceId: string, genomeId: string) {
     const res = await api.post(`/instances/${instanceId}/genomes/apply`, { genome_id: genomeId })
     return res.data.data
@@ -581,6 +586,7 @@ export const useGeneStore = defineStore('gene', () => {
     fetchInstanceSkills,
     installGene,
     uninstallGene,
+    deleteSkillByName,
     applyGenome,
     publishVariant,
     logEffectiveness,
