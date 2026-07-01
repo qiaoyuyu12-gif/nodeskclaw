@@ -3599,11 +3599,18 @@ async def delete_skill_by_name(
     ig: InstanceGene | None = row[0] if row else None
     gene: Gene | None = row[1] if row else None
 
-    # 3. 删除 Pod 文件系统中的技能目录
+    # 3. 删除 Pod 文件系统中的技能目录（FS 失败时不执行 DB 更新）
     adapter = _get_gene_install_adapter(instance.runtime)
-    async with remote_fs(instance, db) as fs:
-        await adapter.remove_skill(fs, skill_name)
-        await adapter.post_remove_cleanup(fs, skill_name)
+    try:
+        async with remote_fs(instance, db) as fs:
+            await adapter.remove_skill(fs, skill_name)
+            await adapter.post_remove_cleanup(fs, skill_name)
+    except Exception as e:
+        logger.error(
+            "delete_skill_by_name: fs error skill=%s instance=%s: %s",
+            skill_name, instance_id, e,
+        )
+        raise BadRequestError("Pod 文件系统不可达，遗忘操作失败")
 
     # 4. 清理 DB 记录（若存在活跃 InstanceGene）
     if ig is not None and gene is not None:
