@@ -122,4 +122,5 @@ async def test_delete_skill_without_instance_gene():
 
     assert result == {"deleted": True, "skill_name": "emerged-skill"}
     mock_adapter.remove_skill.assert_awaited_once_with(mock_fs, "emerged-skill")
+    mock_adapter.post_remove_cleanup.assert_awaited_once_with(mock_fs, "emerged-skill")
     db.commit.assert_awaited()
