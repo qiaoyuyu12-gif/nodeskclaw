@@ -502,6 +502,21 @@ async def update_skill_content(
     return ApiResponse(data={"skill_name": skill_name, "updated": True})
 
 
+@router.delete("/instances/{instance_id}/skills/{skill_name}")
+async def delete_skill_by_name(
+    instance_id: str,
+    skill_name: str,
+    db: AsyncSession = Depends(get_db),
+    org_ctx=Depends(get_current_org),
+):
+    """按技能名称从 Pod 删除技能目录（支持 emerged 和无 InstanceGene 的 hub 技能）。"""
+    if not _SAFE_SKILL_NAME.match(skill_name):
+        raise BadRequestError(message="skill_name 包含非法字符")
+    _current_user, org = org_ctx
+    result = await gene_service.delete_skill_by_name(db, instance_id, skill_name, org_id=org.id)
+    return ApiResponse(data=result)
+
+
 @router.post("/instances/{instance_id}/genes/install")
 async def install_gene(
     instance_id: str,
