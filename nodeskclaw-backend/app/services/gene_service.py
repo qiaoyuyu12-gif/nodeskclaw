@@ -3542,3 +3542,92 @@ async def fork_gene_to_library(
     await db.commit()
     await db.refresh(fork)
     return _gene_to_dict(fork)
+
+
+async def _restart_instance_bg(instance_id: str) -> None:
+    """后台重启实例（独立 db session，避免使用请求上下文的 session）。"""
+    from app.core.deps import async_session_factory
+    from app.services.instance_service import restart_instance
+
+    async with async_session_factory() as db:
+        await restart_instance(instance_id, db)
+
+
+# 模块级引用，供 delete_skill_by_name 调用并允许单元测试 patch
+# instance_service 不导入 gene_service，无循环导入风险
+from app.services.instance_service import get_instance  # noqa: E402
+
+
+async def delete_skill_by_name(
+    db: AsyncSession,
+    instance_id: str,
+    skill_name: str,
+    org_id: str | None = None,
+) -> dict:
+    """按技能名称直接从 Pod 删除技能目录，同时清理 DB 记录（若存在）。
+
+    用于 emerged 技能和无活跃 InstanceGene 的 hub 技能。
+
+    参数：
+        db          — 当前请求 db session
+        instance_id — 目标 AI 员工实例 ID
+        skill_name  — 技能目录名（即 gene.slug）
+        org_id      — 可选的组织 ID，用于实例鉴权
+    返回：
+        {"deleted": True, "skill_name": skill_name}
+    """
+    # 1. 鉴权并获取实例对象（内部抛 NotFoundError / ForbiddenError）
+    instance = await get_instance(instance_id, db, org_id)
+
+    # 2. 查找匹配 skill_name 的 InstanceGene（通过 gene.slug == skill_name）
+    ig_result = await db.execute(
+        select(InstanceGene, Gene)
+        .join(Gene, InstanceGene.gene_id == Gene.id)
+        .where(
+            InstanceGene.instance_id == instance_id,
+            Gene.slug == skill_name,
+            not_deleted(InstanceGene),
+            Gene.deleted_at.is_(None),
+        )
+    )
+    row = ig_result.first()
+    ig: InstanceGene | None = row[0] if row else None
+    gene: Gene | None = row[1] if row else None
+
+    # 3. 删除 Pod 文件系统中的技能目录
+    adapter = _get_gene_install_adapter(instance.runtime)
+    async with remote_fs(instance, db) as fs:
+        await adapter.remove_skill(fs, skill_name)
+        await adapter.post_remove_cleanup(fs, skill_name)
+
+    # 4. 清理 DB 记录（若存在活跃 InstanceGene）
+    if ig is not None and gene is not None:
+        ig.soft_delete()
+        gene.install_count = max(0, gene.install_count - 1)
+
+    # 5. 记录 evolution 事件（无论 IG 是否存在）
+    gene_name = gene.name if gene else skill_name
+    await _record_evolution(
+        db, instance_id, EvolutionEventType.forgotten,
+        gene_name,
+        gene_slug=skill_name,
+        gene_id=gene.id if gene else None,
+        details={"method": "direct_by_name"},
+    )
+    await db.commit()
+
+    # 6. 广播 WebSocket 事件通知前端
+    ws_ids = await _get_instance_workspace_ids(db, instance_id)
+    from app.api.workspaces import broadcast_event
+
+    for ws_id in ws_ids:
+        broadcast_event(ws_id, "gene:forgotten", {
+            "instance_id": instance_id,
+            "skill_name": skill_name,
+            "gene_name": gene_name,
+        })
+
+    # 7. 后台重启实例使配置生效
+    _fire_task(_restart_instance_bg(instance_id))
+    logger.info("delete_skill_by_name: skill=%s instance=%s", skill_name, instance_id)
+    return {"deleted": True, "skill_name": skill_name}
