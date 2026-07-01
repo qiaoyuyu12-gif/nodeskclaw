@@ -3549,8 +3549,11 @@ async def _restart_instance_bg(instance_id: str) -> None:
     from app.core.deps import async_session_factory
     from app.services.instance_service import restart_instance
 
-    async with async_session_factory() as db:
-        await restart_instance(instance_id, db)
+    try:
+        async with async_session_factory() as db:
+            await restart_instance(instance_id, db)
+    except Exception as e:
+        logger.error("_restart_instance_bg: restart failed for instance=%s: %s", instance_id, e)
 
 
 # 模块级引用，供 delete_skill_by_name 调用并允许单元测试 patch
@@ -3576,6 +3579,8 @@ async def delete_skill_by_name(
     返回：
         {"deleted": True, "skill_name": skill_name}
     """
+    from app.api.workspaces import broadcast_event
+
     # 1. 鉴权并获取实例对象（内部抛 NotFoundError / ForbiddenError）
     instance = await get_instance(instance_id, db, org_id)
 
@@ -3618,8 +3623,6 @@ async def delete_skill_by_name(
 
     # 6. 广播 WebSocket 事件通知前端
     ws_ids = await _get_instance_workspace_ids(db, instance_id)
-    from app.api.workspaces import broadcast_event
-
     for ws_id in ws_ids:
         broadcast_event(ws_id, "gene:forgotten", {
             "instance_id": instance_id,
