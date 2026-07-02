@@ -1184,6 +1184,8 @@ const zhCN = {
     metricAgentSelfEval: "AI 员工自评",
     hasNativeTools: "含原生工具",
     tabTemplates: "AI 员工模板",
+    downloadGene: '下载到本地',
+    downloadFailed: '下载失败',
     deleteGene: "删除",
     deleteConfirm: "确认删除基因「{name}」？此操作不可撤销。",
     deleteSuccess: "基因已删除",
@@ -1898,6 +1900,8 @@ const zhCN = {
     },
     instance: {
       not_found: "实例不存在",
+      no_access: "您没有该实例的访问权限",
+      creator_required: "仅创建者或管理员可修改配置",
       slug_conflict: "实例标识已存在，请更换标识",
       in_transitional_state: "实例正在执行其他操作，请等待完成后再试",
     },
@@ -1956,6 +1960,8 @@ const zhCN = {
     workspace: {
       restart_no_instances: "该办公室没有可重启的实例",
       not_found: "办公室不存在",
+      no_access: "您不是该组织的成员",
+      creator_required: "仅创建者或管理员可修改配置",
       add_agent_invalid: "添加 AI 员工参数不合法",
       delete_invalid: "请先移除办公室内的所有 AI 员工，再删除办公室",
       agent_not_found: "AI 员工不存在",

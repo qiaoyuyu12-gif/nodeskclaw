@@ -1,58 +1,6 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: nodeskclaw-llm-proxy-ingress
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
-spec:
-  ingressClassName: nginx
-  rules:
-    - host: llm-proxy.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: nodeskclaw-llm-proxy
-                port:
-                  number: 80
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: nodeskclaw-admin-ingress
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
-spec:
-  ingressClassName: nginx
-  rules:
-    - host: admin.example.com
-      http:
-        paths:
-          - path: /api/
-            pathType: Prefix
-            backend:
-              service:
-                name: nodeskclaw-backend
-                port:
-                  number: 8000
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: nodeskclaw-admin
-                port:
-                  number: 80
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
   name: nodeskclaw-portal-ingress
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "50m"
@@ -62,7 +10,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: console.example.com
+    - host: your-domain.com            # 改成你的域名，如 deskclaw.youcompany.com
       http:
         paths:
           - path: /api/

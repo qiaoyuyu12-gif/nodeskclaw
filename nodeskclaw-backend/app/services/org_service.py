@@ -256,12 +256,12 @@ async def add_member(org_id: str, user_id: str, role: str, db: AsyncSession) -> 
 
 
 async def update_member_role(org_id: str, membership_id: str, role: str, db: AsyncSession) -> MemberInfo:
-    """修改成员角色。"""
+    """修改成员角色。membership_id 可以是 OrgMembership.id 或 user_id，两者均可匹配。"""
     result = await db.execute(
         select(OrgMembership, User)
         .join(User, OrgMembership.user_id == User.id)
         .where(
-            OrgMembership.id == membership_id,
+            or_(OrgMembership.id == membership_id, OrgMembership.user_id == membership_id),
             OrgMembership.org_id == org_id,
             not_deleted(OrgMembership),
             not_deleted(User),
@@ -289,10 +289,10 @@ async def update_member_role(org_id: str, membership_id: str, role: str, db: Asy
 
 
 async def remove_member(org_id: str, membership_id: str, db: AsyncSession) -> None:
-    """移除成员（软删除）。"""
+    """移除成员（软删除）。membership_id 可以是 OrgMembership.id 或 user_id，两者均可匹配。"""
     result = await db.execute(
         select(OrgMembership).where(
-            OrgMembership.id == membership_id,
+            or_(OrgMembership.id == membership_id, OrgMembership.user_id == membership_id),
             OrgMembership.org_id == org_id,
             not_deleted(OrgMembership),
         )

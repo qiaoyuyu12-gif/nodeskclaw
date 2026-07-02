@@ -38,6 +38,7 @@ interface LocalMessage {
   id?: string
   role: 'user' | 'assistant'
   content: string
+  thinking?: string
   attachments?: AttachmentItemWithUrl[]
   streaming?: boolean
 }
@@ -97,6 +98,7 @@ async function switchSession(sessionId: string) {
       id: m.id,
       role: m.role,
       content: m.content,
+      thinking: m.thinking ?? undefined,
       attachments: m.attachments ?? undefined,
     }))
     await scrollToBottom()
@@ -198,23 +200,46 @@ async function send() {
       attachmentsToSend.length ? attachmentsToSend : undefined,
     )
 
+    // 后端在 SSE 流开始前遇到错误（如 agent 不存在）会返回非 200，
+    // 此时 body 是 JSON 错误体而非 SSE 流，需要单独处理。
+    if (!res.ok) {
+      let detail = `请求失败: HTTP ${res.status}`
+      try {
+        const err = await res.json()
+        if (err?.detail) detail = err.detail
+      } catch {
+        // 无法解析响应体，使用默认错误信息
+      }
+      throw new Error(detail)
+    }
+
     if (!res.body) throw new Error('响应无 body')
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
 
+    // lineBuffer 保存跨 reader.read() 切块的不完整行，
+    // 避免 JSON 被截断后 parse 失败导致 chunk 丢失（截断现象）。
+    let lineBuffer = ''
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      const raw = decoder.decode(value, { stream: true })
-      for (const line of raw.split('\n')) {
+      lineBuffer += decoder.decode(value, { stream: true })
+      // 只处理已完整到达的行，末尾不完整的部分留在 buffer 等下次拼接
+      const lines = lineBuffer.split('\n')
+      lineBuffer = lines.pop() ?? ''
+      for (const line of lines) {
         if (!line.startsWith('data: ')) continue
         try {
           const payload = JSON.parse(line.slice(6))
           if (payload.chunk) {
             messages.value[assistantIndex].content += payload.chunk
             await scrollToBottom()
-          } else if (payload.error) {
-            messages.value[assistantIndex].content += `[错误: ${payload.error}]`
+          } else if (payload.thinking) {
+            // 推理链路追加到 thinking 字段，不计入正式回复内容
+            messages.value[assistantIndex].thinking = (messages.value[assistantIndex].thinking ?? '') + payload.thinking
+          } else if (payload.error !== undefined) {
+            // error 可能是空字符串，用 !== undefined 而非 truthy 检查
+            messages.value[assistantIndex].content += `[错误: ${payload.error || '未知错误'}]`
           }
         } catch {
           // 忽略非 JSON 行
@@ -318,12 +343,15 @@ function formatRelativeTime(dateStr: string): string {
         <div v-else-if="!sessions.length" class="px-3 py-4 text-xs text-muted-foreground text-center">
           暂无对话，点击「新建」开始
         </div>
-        <button
+        <div
           v-for="s in sessions"
           :key="s.id"
-          class="w-full text-left px-3 py-2 group flex items-start justify-between gap-1 hover:bg-muted/50 transition-colors"
+          role="button"
+          tabindex="0"
+          class="w-full text-left px-3 py-2 group flex items-start justify-between gap-1 hover:bg-muted/50 transition-colors cursor-pointer"
           :class="s.id === currentSessionId ? 'bg-primary/10' : ''"
           @click="switchSession(s.id)"
+          @keydown.enter="switchSession(s.id)"
         >
           <div class="flex-1 min-w-0">
             <p class="text-sm text-foreground truncate">
@@ -337,7 +365,7 @@ function formatRelativeTime(dateStr: string): string {
           >
             <Trash2 :size="13" />
           </button>
-        </button>
+        </div>
       </div>
     </aside>
 
@@ -398,6 +426,18 @@ function formatRelativeTime(dateStr: string): string {
             </div>
 
             <div v-else class="max-w-[70%]">
+              <!-- 推理链路：可折叠展示，在正式回复上方 -->
+              <details
+                v-if="msg.thinking"
+                class="mb-1.5 rounded-xl border border-border/40 bg-muted/20 text-xs text-muted-foreground"
+              >
+                <summary class="cursor-pointer select-none px-3 py-1.5 hover:text-foreground">
+                  思考过程
+                </summary>
+                <div class="px-3 pb-2 pt-1 whitespace-pre-wrap leading-relaxed">
+                  {{ msg.thinking }}
+                </div>
+              </details>
               <div
                 class="px-4 py-2.5 bg-secondary text-secondary-foreground text-sm rounded-2xl rounded-tl-sm ea-msg-assistant"
               >

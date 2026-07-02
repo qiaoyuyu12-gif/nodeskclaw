@@ -15,7 +15,7 @@
         v-for="t in tabs"
         :key="t.value"
         class="px-3 py-2 text-sm"
-        :class="active === t.value ? 'border-b-2 border-blue-600 text-blue-600' : 'text-muted-foreground'"
+        :class="active === t.value ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'"
         @click="active = t.value"
       >
         {{ t.label }}
@@ -36,45 +36,112 @@
 
     <!-- 成员：列表 + 角色下拉 + 移除按钮 -->
     <section v-else-if="active === 'members'">
-      <table class="w-full text-sm">
-        <thead><tr><th>用户</th><th>角色</th><th>加入时间</th><th>操作</th></tr></thead>
-        <tbody>
-          <tr v-for="m in members" :key="m.user_id">
-            <td>{{ m.user_email || m.user_id }}</td>
-            <td>
-              <!-- 角色下拉，变更即时保存 -->
-              <select :value="m.role" @change="onRoleChange(m, $event)">
-                <option value="admin">admin</option>
-                <option value="operator">operator</option>
-                <option value="member">member</option>
-              </select>
-            </td>
-            <td>{{ m.joined_at }}</td>
-            <td><button @click="onRemove(m)">移除</button></td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="rounded-lg border border-border overflow-hidden">
+        <table class="w-full text-sm border-collapse">
+          <thead class="bg-muted/50">
+            <tr>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[40%]">用户</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[15%]">角色</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[25%]">加入时间</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[20%]">操作</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border">
+            <tr v-for="m in members" :key="m.user_id" class="hover:bg-muted/30 transition-colors">
+              <td class="px-4 py-3">
+                <div class="font-medium">{{ m.user_name || '-' }}</div>
+                <div class="text-xs text-muted-foreground">{{ m.user_email || m.user_id }}</div>
+              </td>
+              <td class="px-4 py-3">
+                <select
+                  :value="m.role"
+                  class="text-sm border border-border rounded px-2 py-1 bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                  @change="onRoleChange(m, $event)"
+                >
+                  <option value="admin">admin</option>
+                  <option value="operator">operator</option>
+                  <option value="member">member</option>
+                </select>
+              </td>
+              <td class="px-4 py-3 text-muted-foreground">{{ m.joined_at }}</td>
+              <td class="px-4 py-3">
+                <button
+                  class="text-xs px-2.5 py-1 rounded border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors"
+                  @click="onRemove(m)"
+                >
+                  移除
+                </button>
+              </td>
+            </tr>
+            <tr v-if="members.length === 0">
+              <td colspan="4" class="px-4 py-8 text-center text-sm text-muted-foreground">暂无成员</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <!-- 功能开关：状态/来源/原因 + 强制开/关/恢复默认 -->
     <section v-else>
-      <table class="w-full text-sm">
-        <thead><tr><th>Feature</th><th>状态</th><th>来源</th><th>原因</th><th>操作</th></tr></thead>
-        <tbody>
-          <tr v-for="f in features" :key="f.feature_id">
-            <td>{{ f.feature_id }}</td>
-            <td>{{ f.enabled ? '开' : '关' }}</td>
-            <td>{{ f.source }}（默认 {{ f.default_enabled ? '开' : '关' }}）</td>
-            <td>{{ f.reason ?? '-' }}</td>
-            <td>
-              <button @click="onSetFeature(f, true)">强制开</button>
-              <button @click="onSetFeature(f, false)">强制关</button>
-              <!-- 仅 override 来源才可恢复默认 -->
-              <button v-if="f.source === 'override'" @click="onClearFeature(f)">恢复默认</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="rounded-lg border border-border overflow-hidden">
+        <table class="w-full text-sm border-collapse">
+          <thead class="bg-muted/50">
+            <tr>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[25%]">Feature</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[10%]">状态</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[20%]">来源</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[20%]">原因</th>
+              <th class="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wide w-[25%]">操作</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border">
+            <tr v-for="f in features" :key="f.feature_id" class="hover:bg-muted/30 transition-colors">
+              <td class="px-4 py-3 font-mono text-xs">{{ f.feature_id }}</td>
+              <td class="px-4 py-3">
+                <span
+                  class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+                  :class="f.enabled
+                    ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+                    : 'bg-muted text-muted-foreground'"
+                >
+                  {{ f.enabled ? '开' : '关' }}
+                </span>
+              </td>
+              <td class="px-4 py-3 text-muted-foreground">
+                <span>{{ f.source }}</span>
+                <span class="ml-1 text-xs">（默认 {{ f.default_enabled ? '开' : '关' }}）</span>
+              </td>
+              <td class="px-4 py-3 text-muted-foreground text-xs">{{ f.reason ?? '-' }}</td>
+              <td class="px-4 py-3">
+                <div class="flex items-center gap-1.5">
+                  <button
+                    class="text-xs px-2 py-1 rounded border border-border hover:border-primary/50 hover:text-primary transition-colors"
+                    @click="onSetFeature(f, true)"
+                  >
+                    强制开
+                  </button>
+                  <button
+                    class="text-xs px-2 py-1 rounded border border-border hover:border-destructive/50 hover:text-destructive transition-colors"
+                    @click="onSetFeature(f, false)"
+                  >
+                    强制关
+                  </button>
+                  <button
+                    v-if="f.source === 'override'"
+                    class="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
+                    @click="onClearFeature(f)"
+                  >
+                    恢复默认
+                  </button>
+                </div>
+              </td>
+            </tr>
+            <tr v-if="features.length === 0">
+              <td colspan="5" class="px-4 py-8 text-center text-sm text-muted-foreground">暂无功能开关数据</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </div>
 </template>

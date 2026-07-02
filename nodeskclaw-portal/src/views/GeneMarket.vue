@@ -33,6 +33,7 @@ import {
   AlertTriangle,
   Code2,
   Trash2,
+  FolderDown,
   type Component,
 } from 'lucide-vue-next'
 import { useGeneStore } from '@/stores/gene'
@@ -266,6 +267,8 @@ async function onDeleteGene(gene: GeneItem) {
  * - public：visibility=public 但 pending_owner，需组织 admin 审核
  */
 const forkingSlug = ref<string | null>(null)
+// 记录正在下载中的技能 slug，用于按钮 loading 状态控制
+const downloadingSlug = ref<string | null>(null)
 async function onForkGene(gene: GeneItem, target: 'personal' | 'org' | 'public') {
   forkingSlug.value = gene.slug
   try {
@@ -293,6 +296,24 @@ async function onForkGene(gene: GeneItem, target: 'personal' | 'org' | 'public')
     toast.error(resolveApiErrorMessage(e, t('geneMarket.forkFailed')))
   } finally {
     forkingSlug.value = null
+  }
+}
+
+/**
+ * 下载技能到本地文件系统。
+ * 调用 store.downloadGene，下载期间显示 loading 状态，防止重复触发。
+ */
+async function onDownloadGene(gene: GeneItem) {
+  // 仅阻止同一个 gene 的重复下载，不影响其他 gene 并发下载
+  if (downloadingSlug.value === gene.slug) return
+  downloadingSlug.value = gene.slug
+  try {
+    await store.downloadGene(gene.slug)
+  } catch (e) {
+    // 与其他操作保持一致，用 toast 展示错误信息
+    toast.error(resolveApiErrorMessage(e, t('geneMarket.downloadFailed')))
+  } finally {
+    downloadingSlug.value = null
   }
 }
 
@@ -493,14 +514,24 @@ function hasNativeTools(gene: GeneItem): boolean {
                 class="relative p-4 rounded-xl border border-border bg-card hover:border-primary/30 transition cursor-pointer"
                 @click="goToGene(gene.slug)"
               >
-                <!-- 删除按钮：仅本地上传 gene 且当前用户有权限时显示 -->
+                <!-- 删除按钮：仅本地上传 gene 且当前用户有权限时显示，右移为下载按钮腾出位置 -->
                 <button
                   v-if="canDeleteGene(gene)"
-                  class="absolute top-2 right-2 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition z-10"
+                  class="absolute top-2 right-9 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition z-10"
                   :title="t('geneMarket.deleteGene')"
                   @click.stop="onDeleteGene(gene)"
                 >
                   <Trash2 class="w-4 h-4" />
+                </button>
+                <!-- 下载按钮：始终显示，点击下载技能到本地文件系统 -->
+                <button
+                  class="absolute top-2 right-2 p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition z-10"
+                  :title="t('geneMarket.downloadGene')"
+                  :disabled="downloadingSlug === gene.slug"
+                  @click.stop="onDownloadGene(gene)"
+                >
+                  <Loader2 v-if="downloadingSlug === gene.slug" class="w-4 h-4 animate-spin" />
+                  <FolderDown v-else class="w-4 h-4" />
                 </button>
                 <div class="flex items-start gap-3 mb-2">
                   <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">

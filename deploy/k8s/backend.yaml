@@ -5,7 +5,7 @@ metadata:
   labels:
     app: nodeskclaw-backend
 spec:
-  replicas: 1
+  replicas: 2                          # 生产至少 2 副本保证高可用
   selector:
     matchLabels:
       app: nodeskclaw-backend
@@ -15,22 +15,22 @@ spec:
         app: nodeskclaw-backend
     spec:
       imagePullSecrets:
-        - name: cr-pull-secret
+        - name: aliyun-registry        # 对应 6.3 步创建的 Secret
       containers:
         - name: nodeskclaw-backend
-          image: <YOUR_REGISTRY>/<YOUR_NAMESPACE>/nodeskclaw-backend:20260227-a195b8d
+          image: registry.cn-hangzhou.aliyuncs.com/nodeskclaw/nodeskclaw-backend:v1.0.0  # 改成你的镜像地址
           ports:
             - containerPort: 8000
           envFrom:
             - secretRef:
-                name: nodeskclaw-backend-env
+                name: nodeskclaw-secrets   # 对应 6.2 步创建的 Secret
           resources:
             requests:
-              cpu: 250m
+              cpu: 500m
               memory: 512Mi
             limits:
-              cpu: "1"
-              memory: 1Gi
+              cpu: "2"
+              memory: 2Gi
           readinessProbe:
             httpGet:
               path: /api/v1/health

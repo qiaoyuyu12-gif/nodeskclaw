@@ -1,16 +1,24 @@
 """Gene Evolution Ecosystem API routes."""
 
+import io
+import json
 import logging
+import posixpath
 import re
+import zipfile
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import get_current_org, get_db
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.security import get_current_user
+from app.models.base import not_deleted
+from app.models.gene import Gene
 from app.models.user import User
 from app.schemas.common import ApiResponse, PaginatedResponse, Pagination
 from app.schemas.gene import (
@@ -222,6 +230,81 @@ async def get_gene(
     return ApiResponse(data=gene)
 
 
+def _to_bytes(value) -> bytes:
+    """将 manifest 字段值安全转换为 bytes，容忍 None 和非字符串类型。"""
+    if isinstance(value, bytes):
+        return value
+    if value is None:
+        return b""
+    return str(value).encode("utf-8")
+
+
+@router.get("/genes/{gene_slug}/download")
+async def download_gene(
+    gene_slug: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """将技能打包为 ZIP 文件供下载，目录结构与 upload-folder 接口对称。"""
+    # 权限校验：沿用 get_gene 的跨组织隔离规则
+    await gene_service._assert_user_can_view_gene_by_slug(db, gene_slug, current_user)
+
+    # 从数据库查询 Gene ORM 对象（需直接读取 manifest 原始字段）
+    result = await db.execute(
+        select(Gene).where(Gene.slug == gene_slug, not_deleted(Gene))
+    )
+    gene = result.scalars().first()
+    if not gene:
+        raise NotFoundError("技能不存在", "errors.gene.not_found")
+
+    # 解析 manifest JSON（字段为 Text 列，存储为 JSON 字符串）
+    try:
+        manifest: dict = json.loads(gene.manifest or "{}")
+    except json.JSONDecodeError:
+        from app.core.exceptions import BadRequestError
+        raise BadRequestError("技能数据格式损坏，无法下载", "errors.gene.manifest_corrupt")
+
+    # 在内存中构建 ZIP，避免临时文件 I/O
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # SKILL.md：来自 manifest.skill.content
+        skill_content: str = manifest.get("skill", {}).get("content", "")
+        zf.writestr(f"{gene_slug}/SKILL.md", _to_bytes(skill_content))
+
+        # scripts：键为纯文件名（如 main.py），放在 {slug}/ 根目录
+        for fname, content in manifest.get("scripts", {}).items():
+            safe_name = posixpath.basename(fname)
+            if safe_name and safe_name != ".":
+                zf.writestr(f"{gene_slug}/{safe_name}", _to_bytes(content))
+
+        # assets：键为带子目录的相对路径（如 assets/data.json）
+        for rel_path, content in manifest.get("assets", {}).items():
+            safe_path = posixpath.normpath(rel_path).lstrip("/")
+            if ".." not in safe_path.split("/"):
+                zf.writestr(f"{gene_slug}/{safe_path}", _to_bytes(content))
+
+        # references：键为带子目录的相对路径（如 reference/guide.md）
+        for rel_path, content in manifest.get("references", {}).items():
+            safe_path = posixpath.normpath(rel_path).lstrip("/")
+            if ".." not in safe_path.split("/"):
+                zf.writestr(f"{gene_slug}/{safe_path}", _to_bytes(content))
+
+    # 计算 ZIP 大小并重置读取位置，用于填写 Content-Length 响应头
+    buf.seek(0, 2)
+    zip_size = buf.tell()
+    buf.seek(0)
+    # 对 slug 做安全处理，防止 Content-Disposition 注入，仅保留 slug 规范允许字符
+    safe_slug = re.sub(r"[^a-zA-Z0-9_-]", "_", gene_slug)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_slug}.zip"',
+            "Content-Length": str(zip_size),
+        },
+    )
+
+
 @router.get("/genes/{gene_slug}/variants")
 async def gene_variants(
     gene_slug: str,
@@ -417,6 +500,21 @@ async def update_skill_content(
         await fs.write_text(f"{skills_dir}/{skill_name}/SKILL.md", body.content)
 
     return ApiResponse(data={"skill_name": skill_name, "updated": True})
+
+
+@router.delete("/instances/{instance_id}/skills/{skill_name}")
+async def delete_skill_by_name(
+    instance_id: str,
+    skill_name: str,
+    db: AsyncSession = Depends(get_db),
+    org_ctx=Depends(get_current_org),
+):
+    """按技能名称从 Pod 删除技能目录（支持 emerged 和无 InstanceGene 的 hub 技能）。"""
+    if not _SAFE_SKILL_NAME.match(skill_name):
+        raise BadRequestError(message="skill_name 包含非法字符")
+    _current_user, org = org_ctx
+    result = await gene_service.delete_skill_by_name(db, instance_id, skill_name, org_id=org.id)
+    return ApiResponse(data=result)
 
 
 @router.post("/instances/{instance_id}/genes/install")

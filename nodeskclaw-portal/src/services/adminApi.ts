@@ -26,7 +26,16 @@ export interface AdminUser {
 
 export interface AdminUserPatch {
   is_active?: boolean
-  is_super_admin?: boolean
+}
+
+// ── 用户组织成员关系 ────────────────────────────────────
+
+export interface AdminUserOrg {
+  org_id: string
+  org_name: string
+  org_slug: string
+  role: OrgMemberRole
+  joined_at: string
 }
 
 // ── 组织成员类型 ───────────────────────────────────────
@@ -237,6 +246,11 @@ export function useAdminApi(http?: AxiosInstance) {
     await client.delete(`/admin/users/${id}`)
   }
 
+  async function fetchUserOrgs(userId: string): Promise<AdminUserOrg[]> {
+    const res = await client.get(`/admin/users/${userId}/orgs`)
+    return res.data.data ?? []
+  }
+
   // ── 组织成员管理 ───────────────────────────────────────
 
   async function fetchOrgMembers(orgId: string): Promise<AdminOrgMember[]> {
@@ -337,6 +351,7 @@ export function useAdminApi(http?: AxiosInstance) {
     updateUser,
     resetUserPassword,
     deleteUser,
+    fetchUserOrgs,
     fetchOrgMembers,
     addOrgMember,
     updateOrgMember,

@@ -183,10 +183,15 @@ function openForgetDialog(item: InstanceSkillItem) {
 async function confirmForget() {
   if (!forgetTarget.value || !isConfirmed.value) return
   const ig = forgetTarget.value.instance_gene
-  if (!ig) return
   forgetting.value = true
   try {
-    await store.uninstallGene(instanceId.value, ig.gene_id)
+    if (ig?.gene_id) {
+      // Hub 技能：通过 gene_id 卸载
+      await store.uninstallGene(instanceId.value, ig.gene_id)
+    } else {
+      // Emerged 技能或无 IG 的 Hub 技能：通过 skill_name 删除
+      await store.deleteSkillByName(instanceId.value, forgetTarget.value.skill_name)
+    }
     forgetTarget.value = null
     await store.fetchInstanceSkills(instanceId.value)
     toast.success(t('instanceGenes.forgetSubmitted'))
@@ -476,6 +481,16 @@ onUnmounted(stopPolling)
               {{ item.instance_gene.status === 'simplified' ? t('instanceGenes.forgetFull') : t('instanceGenes.forget') }}
             </button>
           </div>
+          <!-- Hub 技能无 instance_gene 时（未安装状态）也提供遗忘按钮 -->
+          <div v-else class="flex items-center gap-2 shrink-0">
+            <button
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-destructive border border-destructive/30 hover:bg-destructive/10 transition-colors"
+              @click.stop="openForgetDialog(item)"
+            >
+              <Trash2 class="w-3.5 h-3.5" />
+              {{ t('instanceGenes.forget') }}
+            </button>
+          </div>
         </div>
 
         <!-- Emerged gene card -->
@@ -501,6 +516,16 @@ onUnmounted(stopPolling)
                 {{ t('instanceGenes.alwaysActive') }}
               </span>
             </div>
+          </div>
+          <!-- Emerged 技能遗忘按钮 -->
+          <div class="flex items-center gap-2 shrink-0">
+            <button
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-destructive border border-destructive/30 hover:bg-destructive/10 transition-colors"
+              @click.stop="openForgetDialog(item)"
+            >
+              <Trash2 class="w-3.5 h-3.5" />
+              {{ t('instanceGenes.forget') }}
+            </button>
           </div>
         </div>
       </div>

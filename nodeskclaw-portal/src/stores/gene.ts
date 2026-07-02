@@ -330,6 +330,11 @@ export const useGeneStore = defineStore('gene', () => {
     return res.data.data
   }
 
+  async function deleteSkillByName(instanceId: string, skillName: string) {
+    const res = await api.delete(`/instances/${instanceId}/skills/${skillName}`)
+    return res.data.data
+  }
+
   async function applyGenome(instanceId: string, genomeId: string) {
     const res = await api.post(`/instances/${instanceId}/genomes/apply`, { genome_id: genomeId })
     return res.data.data
@@ -394,6 +399,33 @@ export const useGeneStore = defineStore('gene', () => {
   async function forkGene(geneIdentifier: string, target: 'personal' | 'org' | 'public'): Promise<GeneItem> {
     const res = await api.post(`/genes/${geneIdentifier}/fork`, { target })
     return res.data.data
+  }
+
+  /**
+   * 下载指定 slug 的 Gene 压缩包（ZIP）。
+   * responseType blob 让 axios 返回二进制数据，
+   * 通过创建临时 <a> 标签触发浏览器下载，下载完毕后在 finally 中统一清理临时 URL 和 DOM 节点。
+   */
+  async function downloadGene(slug: string): Promise<void> {
+    const response = await api.get(`/genes/${slug}/download`, { responseType: 'blob' })
+    const blob = response.data
+    // 类型守卫：确保服务器返回 Blob 格式，防止格式异常导致 createObjectURL 报错
+    if (!(blob instanceof Blob)) {
+      throw new Error('服务器返回格式异常')
+    }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${slug}.zip`
+    document.body.appendChild(a)
+    try {
+      // 模拟点击触发下载
+      a.click()
+    } finally {
+      // 无论点击是否成功，都清理临时 DOM 节点和对象 URL，避免内存泄漏
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }
   }
 
   // ── Instance Templates ──────────────────────────
@@ -554,6 +586,7 @@ export const useGeneStore = defineStore('gene', () => {
     fetchInstanceSkills,
     installGene,
     uninstallGene,
+    deleteSkillByName,
     applyGenome,
     publishVariant,
     logEffectiveness,
@@ -561,6 +594,7 @@ export const useGeneStore = defineStore('gene', () => {
     createManualGene,
     publishGeneToMarket,
     forkGene,
+    downloadGene,
     fetchEvolutionLog,
 
     fetchGeneStats,

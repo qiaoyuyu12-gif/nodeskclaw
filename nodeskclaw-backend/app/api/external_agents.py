@@ -9,6 +9,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import Depends, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRouter
@@ -40,6 +41,7 @@ async def _persist_messages(
     user_content: str,
     user_attachments: list[dict] | None,
     assistant_content: str,
+    assistant_thinking: str | None = None,
 ) -> None:
     """SSE 流结束后异步持久化消息，使用独立 DB Session 避免与请求 Session 竞争。"""
     try:
@@ -49,6 +51,7 @@ async def _persist_messages(
                 user_content=user_content,
                 user_attachments=user_attachments,
                 assistant_content=assistant_content,
+                assistant_thinking=assistant_thinking,
                 db=db,
             )
     except Exception as exc:
@@ -290,6 +293,7 @@ async def list_messages(
             session_id=msg.session_id,
             role=msg.role,
             content=msg.content,
+            thinking=msg.thinking,
             attachments=attachments_with_url,
             created_at=msg.created_at,
         ))
@@ -337,8 +341,10 @@ async def chat_with_agent(
         user_content += "\n\n附件:\n" + "\n".join(file_lines)
 
     # 从 DB 加载历史消息，构建完整 messages 列表
+    # 跳过空 content 消息——上一轮 agent 无返回时会留下空 assistant 记录，
+    # 发给 OpenAI-compatible API 会触发 "content cannot be empty" 拒绝。
     history = await external_agent_chat_service.get_messages(session_id=session_id, db=db)
-    messages_for_agent = [{"role": m.role, "content": m.content} for m in history]
+    messages_for_agent = [{"role": m.role, "content": m.content} for m in history if m.content]
     messages_for_agent.append({"role": "user", "content": user_content})
 
     # 仅保存 storage_key，不保存 URL（URL 有有效期）
@@ -355,10 +361,11 @@ async def chat_with_agent(
         ]
 
     collected_chunks: list[str] = []
+    collected_thinking: list[str] = []
 
     async def event_stream():
         try:
-            async for chunk in external_agent_adapter.chat_stream(
+            async for event_type, content in external_agent_adapter.chat_stream(
                 endpoint=agent.endpoint,
                 api_key=api_key,
                 protocol=agent.protocol,
@@ -367,21 +374,39 @@ async def chat_with_agent(
                 user_id=str(user.id),
                 organization_id=str(org.id),
             ):
-                collected_chunks.append(chunk)
-                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+                if event_type == "thinking":
+                    # 推理链路不计入 assistant 正式回复，单独发给前端展示并持久化
+                    collected_thinking.append(content)
+                    yield f"data: {json.dumps({'thinking': content}, ensure_ascii=False)}\n\n"
+                else:
+                    collected_chunks.append(content)
+                    yield f"data: {json.dumps({'chunk': content}, ensure_ascii=False)}\n\n"
         except Exception as exc:
-            logger.warning("External agent chat error: %s %s", agent_id, exc)
-            yield f"data: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
+            # exc_info=True 打印完整堆栈，便于排查协议解析失败等问题
+            logger.warning("External agent chat error: %s %s", agent_id, exc, exc_info=True)
+            # httpx 超时类异常的 str() 为空，给出人类可读的提示
+            if isinstance(exc, httpx.ConnectTimeout):
+                error_msg = f"连接超时：无法在 10s 内连接到外部 Agent（{agent.endpoint}），请确认服务是否运行"
+            elif isinstance(exc, httpx.ReadTimeout):
+                error_msg = "读取超时：外部 Agent 响应超过 120s"
+            elif isinstance(exc, httpx.ConnectError):
+                error_msg = f"连接失败：无法连接到外部 Agent（{agent.endpoint}）"
+            else:
+                error_msg = str(exc) or "外部 Agent 通信异常（无错误详情）"
+            yield f"data: {json.dumps({'error': error_msg}, ensure_ascii=False)}\n\n"
         finally:
             yield f"data: {json.dumps({'done': True})}\n\n"
             assistant_content = "".join(collected_chunks)
-            if session_id and message:
+            assistant_thinking = "".join(collected_thinking) or None
+            # 只在 agent 有实际返回内容时才持久化，避免空 assistant 消息污染历史记录
+            if session_id and message and assistant_content:
                 asyncio.create_task(
                     _persist_messages(
                         session_id=session_id,
                         user_content=message,
                         user_attachments=attachments_to_save,
                         assistant_content=assistant_content,
+                        assistant_thinking=assistant_thinking,
                     )
                 )
 

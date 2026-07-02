@@ -39,6 +39,7 @@ export interface ChatMessage {
   session_id: string
   role: 'user' | 'assistant'
   content: string
+  thinking: string | null
   attachments: AttachmentItemWithUrl[] | null
   created_at: string
 }

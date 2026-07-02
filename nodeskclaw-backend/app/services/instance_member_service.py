@@ -35,9 +35,9 @@ async def check_instance_access(
 ) -> InstanceMember | None:
     """Check that *user* has at least *min_role* on the instance.
 
-    Returns the InstanceMember row when permission comes from membership,
-    or None when bypassed by org-admin status.
-    Raises ForbiddenError / NotFoundError.
+    viewer/user 级别（< editor）：同 org 任意成员均可通过。
+    editor/admin 级别（>= editor）：仅创建者或 org_admin 可通过。
+    返回 None 表示通过（无需成员记录），抛出 ForbiddenError / NotFoundError 表示拒绝。
     """
     instance = (await db.execute(
         select(Instance).where(Instance.id == instance_id, not_deleted(Instance))
@@ -47,30 +47,28 @@ async def check_instance_access(
 
     if instance.org_id:
         org_role = await _get_org_role(user.id, instance.org_id, db)
-        if org_role == OrgRole.admin:
+
+        # 查看/使用级别：同 org 成员均可
+        if INSTANCE_ROLE_LEVEL[min_role] < INSTANCE_ROLE_LEVEL[InstanceRole.editor]:
+            if org_role is not None:
+                return None
+            raise ForbiddenError("您没有该实例的访问权限", "errors.instance.no_access")
+
+        # 配置修改级别：仅创建者或 org_admin
+        if org_role == OrgRole.admin or instance.created_by == user.id:
             return None
+        raise ForbiddenError("仅创建者或管理员可修改配置", "errors.instance.creator_required")
 
-    member = (await db.execute(
-        select(InstanceMember).where(
-            InstanceMember.instance_id == instance_id,
-            InstanceMember.user_id == user.id,
-            not_deleted(InstanceMember),
-        )
-    )).scalar_one_or_none()
-
-    if not member:
-        raise ForbiddenError("您没有该实例的访问权限", "errors.instance.no_access")
-
-    if INSTANCE_ROLE_LEVEL.get(member.role, 0) < INSTANCE_ROLE_LEVEL[min_role]:
-        raise ForbiddenError("权限不足", "errors.instance.insufficient_role")
-
-    return member
+    raise ForbiddenError("您没有该实例的访问权限", "errors.instance.no_access")
 
 
 async def get_user_instance_role(
     instance_id: str, user: User, db: AsyncSession
 ) -> str | None:
-    """Return the effective role string for user on instance, or None."""
+    """Return the effective role string for user on instance, or None.
+
+    创建者或 org_admin → admin；同 org 普通成员 → viewer；非成员 → None。
+    """
     instance = (await db.execute(
         select(Instance).where(Instance.id == instance_id, not_deleted(Instance))
     )).scalar_one_or_none()
@@ -79,51 +77,42 @@ async def get_user_instance_role(
 
     if instance.org_id:
         org_role = await _get_org_role(user.id, instance.org_id, db)
-        if org_role == OrgRole.admin:
+        if org_role == OrgRole.admin or instance.created_by == user.id:
             return InstanceRole.admin
+        if org_role is not None:
+            return InstanceRole.viewer
 
-    member = (await db.execute(
-        select(InstanceMember).where(
-            InstanceMember.instance_id == instance_id,
-            InstanceMember.user_id == user.id,
-            not_deleted(InstanceMember),
-        )
-    )).scalar_one_or_none()
-    return member.role if member else None
+    return None
 
 
 def apply_accessible_filter(query, user_id: str, org_id: str | None, db: AsyncSession):
     """Add a WHERE clause so only instances the user can access are returned.
 
-    Org admins see everything in the org; others only see instances they are
-    a member of.
+    同 org 的任意成员均可看到该组织下的所有实例。
+    org_id 为 None 时无 org 上下文，回退到只返回显式 InstanceMember 的实例（fail-safe）。
     """
-    org_admin_subq = (
+    if not org_id:
+        # 没有 org 上下文时安全兜底：只返回用户被显式加入的实例
+        member_subq = (
+            select(InstanceMember.instance_id)
+            .where(
+                InstanceMember.user_id == user_id,
+                not_deleted(InstanceMember),
+            )
+        )
+        query = query.where(Instance.id.in_(member_subq))
+        return query
+
+    org_member_subq = (
         select(OrgMembership.user_id)
         .where(
             OrgMembership.user_id == user_id,
-            OrgMembership.role == OrgRole.admin,
+            OrgMembership.org_id == org_id,
             not_deleted(OrgMembership),
-            *([OrgMembership.org_id == org_id] if org_id else []),
         )
         .exists()
     )
-
-    member_subq = (
-        select(InstanceMember.instance_id)
-        .where(
-            InstanceMember.user_id == user_id,
-            not_deleted(InstanceMember),
-        )
-    )
-
-    from sqlalchemy import or_
-    query = query.where(
-        or_(
-            org_admin_subq,
-            Instance.id.in_(member_subq),
-        )
-    )
+    query = query.where(org_member_subq)
     return query
 
 

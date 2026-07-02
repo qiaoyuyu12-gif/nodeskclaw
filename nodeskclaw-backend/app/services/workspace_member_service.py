@@ -16,6 +16,14 @@ from app.models.workspace_member import (
     WorkspaceMember,
 )
 
+# 使用权限：同 org 任意成员均可执行
+WORKSPACE_USE_PERMISSIONS = {"send_chat", "edit_blackboard"}
+# 配置权限：仅创建者或 org_admin 可执行
+WORKSPACE_CONFIG_PERMISSIONS = {
+    "manage_settings", "manage_agents", "manage_members",
+    "delete_workspace", "edit_topology",
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +48,16 @@ async def _get_workspace_org_id(workspace_id: str, db: AsyncSession) -> str | No
     return result.scalar_one_or_none()
 
 
+async def _get_workspace(workspace_id: str, db: AsyncSession) -> Workspace | None:
+    result = await db.execute(
+        select(Workspace).where(
+            Workspace.id == workspace_id,
+            not_deleted(Workspace),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def check_workspace_access(
     workspace_id: str,
     user: User,
@@ -48,36 +66,32 @@ async def check_workspace_access(
 ) -> WorkspaceMember | None:
     """Check that *user* has *required_permission* on the workspace.
 
-    Returns the WorkspaceMember row, or None when bypassed by org-admin.
-    Raises ForbiddenError / NotFoundError.
+    使用权限（send_chat、edit_blackboard）：同 org 任意成员均可。
+    配置权限（manage_*、delete_workspace、edit_topology）：仅创建者或 org_admin。
+    返回 None 表示通过，抛出 ForbiddenError / NotFoundError 表示拒绝。
     """
-    org_id = await _get_workspace_org_id(workspace_id, db)
-    if org_id is None:
+    workspace = await _get_workspace(workspace_id, db)
+    if workspace is None:
         raise NotFoundError("办公室不存在", "errors.workspace.not_found")
 
-    org_role = await _get_org_role(user.id, org_id, db)
+    org_role = await _get_org_role(user.id, workspace.org_id, db)
+
+    # 配置权限：仅创建者或 org_admin
+    if required_permission in WORKSPACE_CONFIG_PERMISSIONS:
+        if org_role == OrgRole.admin or workspace.created_by == user.id:
+            return None
+        raise ForbiddenError("仅创建者或管理员可修改配置", "errors.workspace.creator_required")
+
+    # 使用权限：同 org 任意成员
+    if required_permission in WORKSPACE_USE_PERMISSIONS:
+        if org_role is not None:
+            return None
+        raise ForbiddenError("您不是该组织的成员", "errors.workspace.no_access")
+
+    # 未知权限兜底：仅 org_admin 通过
     if org_role == OrgRole.admin:
         return None
-
-    member = (await db.execute(
-        select(WorkspaceMember).where(
-            WorkspaceMember.workspace_id == workspace_id,
-            WorkspaceMember.user_id == user.id,
-            not_deleted(WorkspaceMember),
-        )
-    )).scalar_one_or_none()
-
-    if not member:
-        raise ForbiddenError("您不是该办公室的成员", "errors.workspace.no_access")
-
-    if member.is_admin:
-        return member
-
-    perms = member.permissions or []
-    if required_permission not in perms:
-        raise ForbiddenError("权限不足", "errors.workspace.insufficient_permission")
-
-    return member
+    raise ForbiddenError("权限不足", "errors.workspace.insufficient_permission")
 
 
 async def check_workspace_member(
@@ -87,29 +101,18 @@ async def check_workspace_member(
 ) -> WorkspaceMember | None:
     """Check that *user* is a member of the workspace (read-only access).
 
-    Returns the WorkspaceMember row, or None when bypassed by org-admin.
-    Raises ForbiddenError.
+    同 org 任意成员均可通过基础访问检查。
+    返回 None 表示通过，抛出 ForbiddenError 表示拒绝。
     """
     org_id = await _get_workspace_org_id(workspace_id, db)
     if org_id is None:
         raise NotFoundError("办公室不存在", "errors.workspace.not_found")
 
     org_role = await _get_org_role(user.id, org_id, db)
-    if org_role == OrgRole.admin:
+    if org_role is not None:
         return None
 
-    member = (await db.execute(
-        select(WorkspaceMember).where(
-            WorkspaceMember.workspace_id == workspace_id,
-            WorkspaceMember.user_id == user.id,
-            not_deleted(WorkspaceMember),
-        )
-    )).scalar_one_or_none()
-
-    if not member:
-        raise ForbiddenError("您不是该办公室的成员", "errors.workspace.no_access")
-
-    return member
+    raise ForbiddenError("您不是该组织的成员", "errors.workspace.no_access")
 
 
 async def get_my_permissions(
@@ -118,41 +121,29 @@ async def get_my_permissions(
     db: AsyncSession,
 ) -> dict:
     """Return the current user's permissions and admin status for the workspace."""
-    org_id = await _get_workspace_org_id(workspace_id, db)
-    if org_id is None:
+    workspace = await _get_workspace(workspace_id, db)
+    if workspace is None:
         raise NotFoundError("办公室不存在", "errors.workspace.not_found")
 
-    org_role = await _get_org_role(user.id, org_id, db)
-    if org_role == OrgRole.admin:
+    org_role = await _get_org_role(user.id, workspace.org_id, db)
+
+    # 创建者或 org_admin：拥有全部权限
+    if org_role == OrgRole.admin or workspace.created_by == user.id:
         return {
             "is_admin": True,
-            "is_org_admin": True,
+            "is_org_admin": org_role == OrgRole.admin,
             "permissions": list(WORKSPACE_PERMISSIONS),
         }
 
-    member = (await db.execute(
-        select(WorkspaceMember).where(
-            WorkspaceMember.workspace_id == workspace_id,
-            WorkspaceMember.user_id == user.id,
-            not_deleted(WorkspaceMember),
-        )
-    )).scalar_one_or_none()
-
-    if not member:
-        raise ForbiddenError("您不是该办公室的成员", "errors.workspace.no_access")
-
-    if member.is_admin:
+    # 同 org 普通成员：使用权限（聊天、黑板）
+    if org_role is not None:
         return {
-            "is_admin": True,
+            "is_admin": False,
             "is_org_admin": False,
-            "permissions": list(WORKSPACE_PERMISSIONS),
+            "permissions": list(WORKSPACE_USE_PERMISSIONS),
         }
 
-    return {
-        "is_admin": False,
-        "is_org_admin": False,
-        "permissions": member.permissions or [],
-    }
+    raise ForbiddenError("您不是该组织的成员", "errors.workspace.no_access")
 
 
 async def search_org_users(

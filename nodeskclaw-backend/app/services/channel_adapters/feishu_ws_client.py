@@ -11,13 +11,10 @@ import logging
 import threading
 from typing import TYPE_CHECKING
 
-import lark_oapi as lark
-from lark_oapi.api.im.v1.model.p2_im_message_receive_v1 import P2ImMessageReceiveV1
-from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
-from lark_oapi.ws import Client as LarkWSClient
-
 if TYPE_CHECKING:
-    pass
+    import lark_oapi as lark
+    from lark_oapi.api.im.v1.model.p2_im_message_receive_v1 import P2ImMessageReceiveV1
+    from lark_oapi.ws import Client as LarkWSClient
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +129,10 @@ class FeishuWSClient:
     """Manages a single Feishu WebSocket long-connection for one app."""
 
     def __init__(self, app_id: str, app_secret: str, encrypt_key: str = "", verification_token: str = ""):
+        import lark_oapi as lark
+        from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
+        from lark_oapi.ws import Client as LarkWSClient
+
         self._app_id = app_id
         self._app_secret = app_secret
         self._thread: threading.Thread | None = None
