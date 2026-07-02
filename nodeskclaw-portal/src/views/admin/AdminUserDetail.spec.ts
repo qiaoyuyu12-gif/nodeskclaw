@@ -10,6 +10,7 @@ vi.mock('@/services/adminApi', () => ({
       is_active: true, is_super_admin: false, must_change_password: false,
       created_at: '2026-05-01', org_count: 2,
     }),
+    fetchUserOrgs: vi.fn().mockResolvedValue([]),
     resetUserPassword: vi.fn().mockResolvedValue({ temp_password: 'TEMPpwd1234' }),
     updateUser: vi.fn().mockResolvedValue({}),
   }),
