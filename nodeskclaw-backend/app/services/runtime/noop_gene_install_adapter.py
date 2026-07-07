@@ -10,7 +10,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from app.services.runtime.gene_install_adapter import GeneInstallAdapter
+from app.services.runtime.gene_install_adapter import (
+    GeneInstallAdapter,
+    sanitize_skill_file_path,
+)
 
 if TYPE_CHECKING:
     from app.services.nfs_mount import RemoteFS
@@ -28,6 +31,19 @@ class NoopGeneInstallAdapter(GeneInstallAdapter):
     ) -> None:
         await fs.mkdir(f"{SKILLS_DIR_REL}/{skill_name}")
         await fs.write_text(f"{SKILLS_DIR_REL}/{skill_name}/SKILL.md", content)
+
+    async def deploy_skill_files(
+        self, fs: RemoteFS, skill_name: str, files: dict[str, str],
+    ) -> None:
+        # 与 OpenClaw 适配器行为一致：附属文件按相对路径写入技能目录
+        for rel_path, content in (files or {}).items():
+            safe_path = sanitize_skill_file_path(rel_path)
+            if safe_path is None:
+                logger.warning("deploy_skill_files: 非法相对路径已跳过: %s", rel_path)
+                continue
+            if not content:
+                continue
+            await fs.write_text(f"{SKILLS_DIR_REL}/{skill_name}/{safe_path}", content)
 
     async def allow_tools(self, fs: RemoteFS, tool_names: list[str]) -> None:
         if tool_names:
