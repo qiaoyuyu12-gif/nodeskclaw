@@ -38,12 +38,18 @@ export interface KnowledgeBaseUpdate {
   source_type?: 'doc' | 'system' | 'mixed'
 }
 
+/** 二进制文件条目：.docx 等无法 UTF-8 解码的文件以 base64 存储 */
+export interface BinaryFileEntry {
+  __binary__: true
+  b64: string
+}
+
 /** manifest 内联序列化结构：agent 命中时读取 */
 export interface SkillManifest {
   entry?: string                      // 入口脚本文件名（tool 类型）
   scripts?: Record<string, string>    // {filename: 脚本内容}
-  assets?: Record<string, string>     // {相对路径: 资源内容}
-  references?: Record<string, string> // {相对路径: 参考资料内容}
+  assets?: Record<string, string | BinaryFileEntry>     // {相对路径: 资源内容}
+  references?: Record<string, string | BinaryFileEntry> // {相对路径: 参考资料内容}
 }
 
 export interface Skill {

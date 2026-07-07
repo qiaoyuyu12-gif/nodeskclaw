@@ -45,7 +45,7 @@ class GeneInstallAdapter(ABC):
 
     @abstractmethod
     async def deploy_skill_files(
-        self, fs: RemoteFS, skill_name: str, files: dict[str, str],
+        self, fs: RemoteFS, skill_name: str, files: dict[str, str | dict],
     ) -> None:
         """Deploy auxiliary skill files (reference/example/assets) alongside SKILL.md.
 
@@ -53,6 +53,8 @@ class GeneInstallAdapter(ABC):
             fs: Remote filesystem handle.
             skill_name: Skill directory name.
             files: Mapping of relative path (inside the skill dir) -> file content.
+                Values are text strings, or binary entries of the form
+                ``{"__binary__": true, "b64": "<base64>"}`` for non-UTF-8 files.
         """
 
     @abstractmethod

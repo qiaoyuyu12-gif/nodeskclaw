@@ -86,6 +86,20 @@ class PodFS:
         else:
             await self._chunked_write(path, encoded)
 
+    async def write_binary(self, path: str, data: bytes) -> None:
+        """Write binary content to a file in the Pod (creates parent dirs)."""
+        encoded = base64.b64encode(data).decode("ascii")
+        if len(encoded) < CHUNK_SIZE:
+            await self._k8s.exec_in_pod(
+                self._ns, self._pod,
+                ["bash", "-c",
+                 f"mkdir -p \"$(dirname '/root/{path}')\" && "
+                 f"printf '%s' '{encoded}' | base64 -d > '/root/{path}'"],
+                container=self._container,
+            )
+        else:
+            await self._chunked_write(path, encoded)
+
     async def _chunked_write(self, path: str, encoded: str) -> None:
         tmp = "/tmp/_ndk_upload.b64"
         await self._k8s.exec_in_pod(

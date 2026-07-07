@@ -2,15 +2,19 @@
 
 背景：文件夹上传的技能包中 reference/example 等文件存于 genes.manifest，
 但安装到实例时只写 SKILL.md，导致 agent 读不到附属文件。
+二进制文件（.docx 等）以 base64 条目存储并按字节部署。
 
 测试矩阵：
   - sanitize_skill_file_path：合法路径归一化 / 路径穿越与空路径拒绝
+  - _safe_decode / is_binary_entry / decode_binary_entry：二进制 base64 往返
   - OpenClawGeneInstallAdapter.deploy_skill_files：按相对路径写入技能目录，
-    跳过非法路径与空内容
+    跳过非法路径与空内容，二进制条目走 write_binary
   - _apply_manifest_actions：manifest 中 assets + references 合并后
     调用 deploy_skill_files；无 skill_name 时不调用
 """
 from __future__ import annotations
+
+import base64
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -19,6 +23,12 @@ import pytest
 from app.services.runtime.gene_install_adapter import sanitize_skill_file_path
 from app.services.runtime.openclaw_gene_install_adapter import (
     OpenClawGeneInstallAdapter,
+)
+from app.services.skill_package_service import (
+    _safe_decode,
+    decode_binary_entry,
+    is_binary_entry,
+    parse_skill_folder,
 )
 
 
@@ -91,6 +101,84 @@ async def test_deploy_skill_files_empty_dict_noop():
     await adapter.deploy_skill_files(fs, "my-skill", {})
 
     fs.write_text.assert_not_called()
+
+
+# ── 二进制文件条目（.docx 等）────────────────────
+
+
+def test_safe_decode_binary_roundtrip():
+    """二进制内容存为 base64 条目，可无损还原。"""
+    raw = b"PK\x03\x04\x00\xff\xfe binary docx bytes"
+    entry = _safe_decode(raw, "reference/template.docx")
+
+    assert is_binary_entry(entry)
+    assert decode_binary_entry(entry) == raw
+
+
+def test_safe_decode_text_stays_string():
+    """文本内容保持字符串，不被误判为二进制条目。"""
+    entry = _safe_decode("普通文本".encode(), "reference/a.md")
+    assert entry == "普通文本"
+    assert not is_binary_entry(entry)
+
+
+def test_decode_binary_entry_invalid_b64():
+    """b64 字段非法时抛 ValueError。"""
+    with pytest.raises(ValueError):
+        decode_binary_entry({"__binary__": True, "b64": "!!not-base64!!"})
+
+
+def test_parse_skill_folder_keeps_binary_asset():
+    """文件夹解析：.docx 二进制文件不再丢弃，存为 base64 条目。"""
+    docx_bytes = b"PK\x03\x04\xff\xfe fake docx"
+    meta = parse_skill_folder({
+        "SKILL.md": b"---\nname: doc-writer\ntype: tool\n---\n\nbody",
+        "reference/blank_template.docx": docx_bytes,
+    })
+
+    entry = meta["manifest"]["references"]["reference/blank_template.docx"]
+    assert is_binary_entry(entry)
+    assert decode_binary_entry(entry) == docx_bytes
+
+
+@pytest.mark.asyncio
+async def test_deploy_skill_files_binary_entry_uses_write_binary():
+    """二进制条目解码后走 write_binary 按字节写入。"""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+    raw = b"PK\x03\x04\xff binary"
+
+    await adapter.deploy_skill_files(fs, "my-skill", {
+        "reference/template.docx": {
+            "__binary__": True,
+            "b64": base64.b64encode(raw).decode("ascii"),
+        },
+        "reference/guide.md": "text guide",
+    })
+
+    fs.write_binary.assert_awaited_once_with(
+        ".openclaw/skills/my-skill/reference/template.docx", raw,
+    )
+    fs.write_text.assert_awaited_once_with(
+        ".openclaw/skills/my-skill/reference/guide.md", "text guide",
+    )
+
+
+@pytest.mark.asyncio
+async def test_deploy_skill_files_invalid_binary_entry_skipped():
+    """b64 非法的二进制条目跳过，不中断其他文件部署。"""
+    adapter = OpenClawGeneInstallAdapter()
+    fs = AsyncMock()
+
+    await adapter.deploy_skill_files(fs, "my-skill", {
+        "reference/bad.docx": {"__binary__": True, "b64": "!!bad!!"},
+        "reference/ok.md": "ok",
+    })
+
+    fs.write_binary.assert_not_awaited()
+    fs.write_text.assert_awaited_once_with(
+        ".openclaw/skills/my-skill/reference/ok.md", "ok",
+    )
 
 
 # ── _apply_manifest_actions ────────────────────
