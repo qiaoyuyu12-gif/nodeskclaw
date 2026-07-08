@@ -231,11 +231,21 @@ async def get_gene(
 
 
 def _to_bytes(value) -> bytes:
-    """将 manifest 字段值安全转换为 bytes，容忍 None 和非字符串类型。"""
+    """将 manifest 字段值安全转换为 bytes，容忍 None 和非字符串类型。
+
+    二进制 base64 条目（.docx 等）还原为原始字节。
+    """
+    from app.services import skill_package_service
+
     if isinstance(value, bytes):
         return value
     if value is None:
         return b""
+    if skill_package_service.is_binary_entry(value):
+        try:
+            return skill_package_service.decode_binary_entry(value)
+        except ValueError:
+            return b""
     return str(value).encode("utf-8")
 
 

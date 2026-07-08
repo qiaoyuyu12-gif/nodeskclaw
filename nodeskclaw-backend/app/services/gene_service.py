@@ -1322,7 +1322,7 @@ async def install_gene_prerestart(instance_id: str, gene_slug: str) -> None:
                         fs, skill_name, skill_content,
                         gene.short_description or gene.description or "",
                     )
-                    await _apply_manifest_actions(fs, manifest, adapter)
+                    await _apply_manifest_actions(fs, manifest, adapter, skill_name)
                     await adapter.invalidate_cache(fs, skill_name, "installed")
 
                 ig.status = InstanceGeneStatus.installed
@@ -1439,7 +1439,7 @@ async def _direct_install(
                         fs, skill_name, skill_content,
                         gene.short_description or gene.description or "",
                     )
-                    await _apply_manifest_actions(fs, manifest, adapter)
+                    await _apply_manifest_actions(fs, manifest, adapter, skill_name)
                     await adapter.invalidate_cache(fs, skill_name, "installed")
 
                 ig.status = InstanceGeneStatus.installed
@@ -1552,6 +1552,7 @@ async def _send_learning_task(
 
 async def _apply_manifest_actions(
     fs: RemoteFS, manifest: dict, adapter: GeneInstallAdapter,
+    skill_name: str | None = None,
 ) -> None:
     """Execute engineering actions using the runtime-specific adapter."""
     runtime_config = manifest.get("runtime_config") or manifest.get("openclaw_config")
@@ -1565,6 +1566,17 @@ async def _apply_manifest_actions(
     scripts = manifest.get("scripts")
     if scripts and isinstance(scripts, (list, dict)):
         await _deploy_gene_scripts(fs, scripts, adapter)
+
+    # 文件夹上传的技能包附属文件（reference/example/assets 等）
+    # 随 SKILL.md 一起部署到实例技能目录，否则 agent 只能读到 SKILL.md
+    if skill_name:
+        extra_files: dict[str, str] = {}
+        for key in ("assets", "references"):
+            value = manifest.get(key)
+            if isinstance(value, dict):
+                extra_files.update(value)
+        if extra_files:
+            await adapter.deploy_skill_files(fs, skill_name, extra_files)
 
 
 async def _deploy_gene_scripts(
@@ -1653,7 +1665,7 @@ async def handle_learning_callback(
         adapter = _get_gene_install_adapter(instance.runtime)
         async with remote_fs(instance, db) as fs:
             await adapter.deploy_skill(fs, skill_name, skill.get("content", ""), gene_desc)
-            await _apply_manifest_actions(fs, manifest, adapter)
+            await _apply_manifest_actions(fs, manifest, adapter, skill_name)
             await adapter.invalidate_cache(fs, skill_name, "installed")
 
         ig_obj.status = InstanceGeneStatus.installed
@@ -1666,7 +1678,7 @@ async def handle_learning_callback(
         async with remote_fs(instance, db) as fs:
             await adapter.deploy_skill(fs, gene_obj.slug, content, gene_desc)
             manifest = _json_loads(gene_obj.manifest) or {}
-            await _apply_manifest_actions(fs, manifest, adapter)
+            await _apply_manifest_actions(fs, manifest, adapter, gene_obj.slug)
             await adapter.invalidate_cache(fs, gene_obj.slug, "installed")
 
         ig_obj.status = InstanceGeneStatus.installed
@@ -2480,6 +2492,13 @@ async def refresh_gene_skills(db: AsyncSession, gene_slugs: list[str]) -> dict:
                     fs, skill_name, skill_content,
                     gene.short_description or gene.description or "",
                 )
+                # 同步补齐 reference/example 等附属文件，避免刷新后只剩 SKILL.md
+                extra_files = {
+                    **(manifest.get("assets") if isinstance(manifest.get("assets"), dict) else {}),
+                    **(manifest.get("references") if isinstance(manifest.get("references"), dict) else {}),
+                }
+                if extra_files:
+                    await adapter.deploy_skill_files(fs, skill_name, extra_files)
 
             refreshed.append({
                 "instance_id": instance.id,

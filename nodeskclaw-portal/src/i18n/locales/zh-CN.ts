@@ -1,11 +1,11 @@
 const zhCN = {
   common: {
     appTitle: "DeskClaw 控制台",
-    workspace: "赛博办公室",
+    workspace: "AI 员工协作空间",
     instance: "AI 员工",
     members: "成员",
     usage: "用量",
-    geneMarket: "基因市场",
+    geneMarket: "技能市场",
     overview: "概览",
     genes: "技能基因",
     evolutionLog: "进化日志",
@@ -156,11 +156,11 @@ const zhCN = {
     codeEmailOnly: "邮箱验证码登录当前仅支持邮箱地址",
     landing: {
       headline1: '你的第一间',
-      headline2: '赛博办公室',
+      headline2: 'AI 员工协作空间',
       subtitle: '不只是让 AI 干活，而是为你的组织构建自主协作、持续进化的 AI 劳动力。目标驱动行为，协作从组织结构中自然涌现。',
       themes: {
         cyberOffice: {
-          title: '赛博办公室',
+          title: 'AI 员工协作空间',
           desc: '有空间布局、协作走廊和共享看板的数字办公室。团队的沟通方式由座位关系自然决定，无需逐条编排',
         },
         aiEmployee: {
@@ -224,7 +224,7 @@ const zhCN = {
     knowledge: "知识",
   },
   gene: {
-    backToMarket: "返回基因市场",
+    backToMarket: "返回技能市场",
     registryLocal: "本地",
     registryClawHub: "ClawHub",
     registryDeskHub: "DeskHub",
@@ -272,7 +272,7 @@ const zhCN = {
     selectInstanceHint: "选择要学习技能基因组 {name} 的 AI 员工（将批量安装所含全部技能基因）",
   },
   geneMarketDialog: {
-    title: "基因市场",
+    title: "技能市场",
     learnForInstance: "学习到当前 AI 员工",
     alreadyLearned: "已学习",
     learnSuccess: "技能基因学习已提交",
@@ -336,7 +336,7 @@ const zhCN = {
     manualSkillContentPlaceholder: "请输入 SKILL.md 的完整 Markdown 内容...",
     manualCreateSuccess: "技能基因已创建并安装",
     manualCreateFailed: "创建失败",
-    publishToMarket: "发布到基因市场",
+    publishToMarket: "发布到技能市场",
     publishToMarketSuccess: "已提交发布审核",
     publishToMarketFailed: "发布失败",
   },
@@ -762,7 +762,7 @@ const zhCN = {
     closePreview: "关闭预览",
   },
   createWorkspace: {
-    title: "新建赛博办公室",
+    title: "新建AI 员工协作空间",
     chooseTemplate: "选择一个模板快速开始，或从空白创建",
     blankTemplate: "从空白创建",
     agentSlots: "{count} 个 AI 员工",
@@ -783,7 +783,7 @@ const zhCN = {
     goConfigCluster: "前往配置集群",
     nameRequired: "请输入办公室名称",
     createFailed: "创建失败",
-    submit: "创建赛博办公室",
+    submit: "创建AI 员工协作空间",
   },
   deleteTemplate: {
     title: "删除模板",
@@ -794,12 +794,12 @@ const zhCN = {
     failed: "删除模板失败",
   },
   workspaceList: {
-    title: "我的赛博办公室",
+    title: "我的AI 员工协作空间",
     subtitle: "管理你的 AI 员工协作空间",
-    createNew: "新建赛博办公室",
-    emptyTitle: "还没有赛博办公室",
-    emptyDescription: "创建一个赛博办公室，添加 AI 员工，让它们互相协作，共同完成任务",
-    createFirst: "创建第一个赛博办公室",
+    createNew: "新建AI 员工协作空间",
+    emptyTitle: "还没有AI 员工协作空间",
+    emptyDescription: "创建一个AI 员工协作空间，添加 AI 员工，让它们互相协作，共同完成任务",
+    createFirst: "创建第一个AI 员工协作空间",
   },
   workspaceCard: {
     noAgent: "无 AI 员工",
@@ -1132,7 +1132,7 @@ const zhCN = {
     noClusterHint: "请先配置集群以查看资源用量",
   },
   geneMarket: {
-    title: "基因市场",
+    title: "技能市场",
     tabGenes: "技能基因",
     tabGenomes: "技能基因组",
     tabEvolution: "进化趋势",
@@ -1266,7 +1266,7 @@ const zhCN = {
     geneCount: "{count} 个技能基因",
     useCount: "{count} 次使用",
     useTemplate: "使用此模板创建 AI 员工",
-    backToMarket: "返回基因市场",
+    backToMarket: "返回技能市场",
     description: "详细描述",
     includedGenes: "包含的技能基因",
     noGenes: "该模板暂未包含技能基因",

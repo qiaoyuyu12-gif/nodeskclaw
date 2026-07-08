@@ -20,6 +20,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def sanitize_skill_file_path(rel_path: str) -> str | None:
+    """校验并归一化技能附属文件的相对路径，防止路径穿越。
+
+    返回归一化后的相对路径；路径为空、含 ".."、"." 或为绝对路径时返回 None。
+    """
+    normalized = rel_path.replace("\\", "/").strip("/")
+    if not normalized:
+        return None
+    parts = normalized.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return None
+    return normalized
+
+
 class GeneInstallAdapter(ABC):
     """Runtime-specific gene installation adapter."""
 
@@ -28,6 +42,20 @@ class GeneInstallAdapter(ABC):
         self, fs: RemoteFS, skill_name: str, content: str, description: str = "",
     ) -> None:
         """Deploy a skill file to the runtime's skill directory."""
+
+    @abstractmethod
+    async def deploy_skill_files(
+        self, fs: RemoteFS, skill_name: str, files: dict[str, str | dict],
+    ) -> None:
+        """Deploy auxiliary skill files (reference/example/assets) alongside SKILL.md.
+
+        Args:
+            fs: Remote filesystem handle.
+            skill_name: Skill directory name.
+            files: Mapping of relative path (inside the skill dir) -> file content.
+                Values are text strings, or binary entries of the form
+                ``{"__binary__": true, "b64": "<base64>"}`` for non-UTF-8 files.
+        """
 
     @abstractmethod
     async def allow_tools(self, fs: RemoteFS, tool_names: list[str]) -> None:

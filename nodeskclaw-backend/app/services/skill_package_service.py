@@ -36,8 +36,9 @@ skill.md 支持两种格式：
 
     my-skill/
     ├── SKILL.md             # 技能声明（必需，大小写不敏感）
-    ├── main.py              # 入口脚本（可选）
-    ├── utils.py             # 辅助脚本（可选）
+    ├── main.py              # 入口脚本（可选，仅根目录 .py 走 tools 部署）
+    ├── utils.py             # 辅助脚本（可选，同上）
+    ├── scripts/             # 技能执行脚本（可选，保留相对路径部署到技能目录）
     ├── assets/              # 资源文件（可选，内联进 manifest）
     └── reference/           # 参考资料（可选，内联进 manifest）
 
@@ -49,7 +50,11 @@ manifest JSON 结构（存储在 genes.manifest 列）：
       "assets":     {"assets/data.json": "..."}, // 资源文件字典
       "references": {"reference/guide.md": "..."} // 参考资料字典
     }
+
+    assets/references 的值为字符串（文本文件）或二进制条目
+    {"__binary__": true, "b64": "<base64>"}（.docx 等无法 UTF-8 解码的文件）。
 """
+import base64
 import io
 import logging
 import zipfile
@@ -60,6 +65,11 @@ import yaml
 from app.core.exceptions import BadRequestError
 
 logger = logging.getLogger(__name__)
+
+# 二进制文件条目标记：无法 UTF-8 解码的文件（如 .docx/.xlsx/图片）
+# 以 {"__binary__": true, "b64": "<base64>"} 形式存入 manifest，
+# 避免被丢弃导致部署到实例后缺少模板等附属文件
+BINARY_MARKER = "__binary__"
 
 # skill.md 文件名约定（大小写不敏感，兼容官方 SKILL.md）
 _SKILL_MD_NAMES = {"skill.md", "SKILL.md"}
@@ -123,8 +133,8 @@ def parse_skill_folder(files: dict[str, bytes]) -> dict:
 
     # 3. 按目录分类其余文件，构建 manifest
     scripts: dict[str, str] = {}
-    assets: dict[str, str] = {}
-    references: dict[str, str] = {}
+    assets: dict[str, str | dict] = {}
+    references: dict[str, str | dict] = {}
 
     for rel_path, content in files.items():
         # 跳过 skill.md 本身（已解析，大小写不敏感）
@@ -133,9 +143,14 @@ def parse_skill_folder(files: dict[str, bytes]) -> dict:
 
         suffix = Path(rel_path).suffix.lower()
 
-        if suffix in _SCRIPT_EXTS:
-            # Python 脚本：存入 scripts，键为纯文件名
-            scripts[Path(rel_path).name] = _safe_decode(content, rel_path)
+        if suffix in _SCRIPT_EXTS and "/" not in rel_path:
+            # 根目录 Python 脚本：tool 类型入口机制，存入 scripts
+            # （部署到 ~/.deskclaw/tools/，与技能目录无关）
+            decoded = _safe_decode(content, rel_path)
+            if isinstance(decoded, str):
+                scripts[Path(rel_path).name] = decoded
+            else:
+                logger.warning("脚本 %s 不是有效的 UTF-8 文本，已跳过", rel_path)
         elif rel_path.startswith(_ASSET_PREFIX) or "/assets/" in rel_path:
             # assets/ 目录下的资源文件
             assets[rel_path] = _safe_decode(content, rel_path)
@@ -143,7 +158,9 @@ def parse_skill_folder(files: dict[str, bytes]) -> dict:
             # reference/ 目录下的参考资料
             references[rel_path] = _safe_decode(content, rel_path)
         else:
-            # 其余文件归入 assets
+            # 其余文件归入 assets 并保留相对路径（含 scripts/ 等子目录中的
+            # .py 脚本），随附属文件按原始目录结构部署到实例技能目录，
+            # 保证 SKILL.md 中的相对路径引用可用
             assets[rel_path] = _safe_decode(content, rel_path)
 
     # 4. type=tool 时自动从 config.entry 读取入口，未指定则从已有脚本中选取
@@ -184,13 +201,33 @@ def _find_skill_md_in_files(files: dict[str, bytes]) -> bytes | None:
     return None
 
 
-def _safe_decode(content: bytes, path: str) -> str:
-    """将文件内容安全解码为字符串；二进制文件跳过并记录警告。"""
+def is_binary_entry(value) -> bool:
+    """判断 manifest 文件条目是否为二进制 base64 条目。"""
+    return (
+        isinstance(value, dict)
+        and value.get(BINARY_MARKER) is True
+        and isinstance(value.get("b64"), str)
+    )
+
+
+def decode_binary_entry(value: dict) -> bytes:
+    """将二进制 base64 条目还原为原始字节；格式非法时抛 ValueError。"""
+    try:
+        return base64.b64decode(value["b64"], validate=True)
+    except Exception as exc:
+        raise ValueError(f"二进制条目 base64 解码失败: {exc}") from exc
+
+
+def _safe_decode(content: bytes, path: str) -> str | dict:
+    """将文件内容解码为字符串；二进制文件转为 base64 条目保留。"""
     try:
         return content.decode("utf-8")
     except UnicodeDecodeError:
-        logger.warning("文件 %s 无法以 UTF-8 解码，已跳过", path)
-        return ""
+        logger.info("文件 %s 无法以 UTF-8 解码，按二进制 base64 存储", path)
+        return {
+            BINARY_MARKER: True,
+            "b64": base64.b64encode(content).decode("ascii"),
+        }
 
 
 def _parse_skill_md(raw: str, filename: str = "skill.md") -> dict:
