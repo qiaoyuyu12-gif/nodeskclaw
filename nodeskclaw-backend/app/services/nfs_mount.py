@@ -37,6 +37,14 @@ class SkillScanError(Exception):
     """
 
 
+def _reject_path_traversal(path: str) -> str:
+    """校验远程相对路径不含 `..` 穿越，防止恶意压缩包/文件名写穿到实例根目录之外。"""
+    normalized = str(path).replace("\\", "/")
+    if any(seg == ".." for seg in normalized.split("/")):
+        raise NFSMountError("非法路径：不允许越权访问", message_key="errors.instance.invalid_path")
+    return normalized
+
+
 class PodFS:
     """Remote filesystem proxy — each method is one kubectl exec call."""
 
@@ -48,6 +56,7 @@ class PodFS:
 
     async def read_text(self, path: str) -> str | None:
         """Read a file from the Pod. Returns None if the file does not exist."""
+        path = _reject_path_traversal(path)
         try:
             result = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
@@ -60,6 +69,7 @@ class PodFS:
 
     async def read_binary(self, path: str) -> bytes | None:
         """Read a file as raw bytes via base64 encoding (exec channel cannot transmit raw binary)."""
+        path = _reject_path_traversal(path)
         try:
             result = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
@@ -74,6 +84,7 @@ class PodFS:
 
     async def write_text(self, path: str, content: str) -> None:
         """Write content to a file in the Pod (creates parent dirs)."""
+        path = _reject_path_traversal(path)
         encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
         if len(encoded) < CHUNK_SIZE:
             await self._k8s.exec_in_pod(
@@ -88,6 +99,7 @@ class PodFS:
 
     async def write_binary(self, path: str, data: bytes) -> None:
         """Write binary content to a file in the Pod (creates parent dirs)."""
+        path = _reject_path_traversal(path)
         encoded = base64.b64encode(data).decode("ascii")
         if len(encoded) < CHUNK_SIZE:
             await self._k8s.exec_in_pod(
@@ -123,6 +135,7 @@ class PodFS:
 
     async def remove(self, path: str) -> None:
         """Remove a file or directory from the Pod."""
+        path = _reject_path_traversal(path)
         await self._k8s.exec_in_pod(
             self._ns, self._pod,
             ["rm", "-rf", f"/root/{path}"],
@@ -130,6 +143,7 @@ class PodFS:
         )
 
     async def exists(self, path: str) -> bool:
+        path = _reject_path_traversal(path)
         try:
             await self._k8s.exec_in_pod(
                 self._ns, self._pod,
@@ -141,6 +155,7 @@ class PodFS:
             return False
 
     async def mkdir(self, path: str) -> None:
+        path = _reject_path_traversal(path)
         await self._k8s.exec_in_pod(
             self._ns, self._pod,
             ["mkdir", "-p", f"/root/{path}"],
@@ -149,6 +164,7 @@ class PodFS:
 
     async def append_text(self, path: str, content: str) -> None:
         """Append content to a file in the Pod."""
+        path = _reject_path_traversal(path)
         encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
         await self._k8s.exec_in_pod(
             self._ns, self._pod,
@@ -159,6 +175,7 @@ class PodFS:
 
     async def read_last_line(self, path: str) -> str | None:
         """Read the last line of a file from the Pod."""
+        path = _reject_path_traversal(path)
         try:
             result = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
@@ -176,6 +193,7 @@ class PodFS:
         empty for an existing but empty directory) or *None* when the path
         does not exist.
         """
+        path = _reject_path_traversal(path)
         try:
             result = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
@@ -212,6 +230,7 @@ class PodFS:
 
     async def file_stat(self, path: str) -> dict | None:
         """Get file metadata: size, modified_at, mime_type."""
+        path = _reject_path_traversal(path)
         try:
             result = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
@@ -253,6 +272,7 @@ class PodFS:
         Raises ``SkillScanError`` on failure (never returns ``[]`` as a
         silent fallback — the caller must distinguish "empty" from "failed").
         """
+        skills_dir_rel = _reject_path_traversal(skills_dir_rel)
         abs_dir = f"/root/{skills_dir_rel}"
         js = (
             'const fs=require("fs"),path=require("path");'
@@ -375,15 +395,19 @@ class DockerFS:
             remote_path = str(remote_path).replace("\\", "/")
         abs_slash = self._abs_prefix + "/"
         if remote_path.startswith(abs_slash):
-            return remote_path[len(abs_slash):]
+            rel = remote_path[len(abs_slash):]
         elif remote_path.startswith(self._abs_prefix):
-            return remote_path[len(self._abs_prefix):].lstrip("/")
+            rel = remote_path[len(self._abs_prefix):].lstrip("/")
         elif remote_path.startswith(self._home_prefix + "/"):
-            return remote_path[len(self._home_prefix) + 1:]
+            rel = remote_path[len(self._home_prefix) + 1:]
         elif remote_path == self._home_prefix:
-            return ""
+            rel = ""
         else:
-            return remote_path.lstrip("/")
+            rel = remote_path.lstrip("/")
+        # 拒绝 .. 穿越，防止写穿到 DOCKER_DATA_DIR（宿主机路径，容器未运行时的回退分支）之外
+        if any(seg == ".." for seg in rel.split("/")):
+            raise NFSMountError("非法路径：不允许越权访问", message_key="errors.instance.invalid_path")
+        return rel
 
     def _resolve(self, remote_path: str) -> pathlib.Path:
         """宿主机绝对路径（用于容器未运行时的回退分支）。"""

@@ -212,6 +212,9 @@ def _extract_tgz(content: bytes) -> tuple[dict[str, str], str]:
             text = f.read().decode("utf-8", errors="replace")
             parts = member.name.split("/", 1)
             rel_path = parts[1] if len(parts) > 1 else parts[0]
+            # 拒绝 .. 穿越与绝对路径，防止恶意压缩包写穿到目标目录之外（zip-slip）
+            if rel_path.startswith("/") or any(seg == ".." for seg in rel_path.split("/")):
+                raise ValueError(f"压缩包包含非法路径: {member.name}")
             files[rel_path] = text
 
     plugin_id = _parse_plugin_id(files)
@@ -231,6 +234,9 @@ def _extract_zip(content: bytes) -> tuple[dict[str, str], str]:
             parts = info.filename.split("/", 1)
             rel_path = parts[1] if len(parts) > 1 else parts[0]
             if rel_path:
+                # 拒绝 .. 穿越与绝对路径，防止恶意压缩包写穿到目标目录之外（zip-slip）
+                if rel_path.startswith("/") or any(seg == ".." for seg in rel_path.split("/")):
+                    raise ValueError(f"压缩包包含非法路径: {info.filename}")
                 files[rel_path] = text
 
     plugin_id = _parse_plugin_id(files)

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.services.nfs_mount import CHUNK_SIZE, DockerFS
+from app.services.nfs_mount import CHUNK_SIZE, DockerFS, NFSMountError, _reject_path_traversal
 
 
 @pytest.fixture
@@ -136,3 +136,33 @@ async def test_is_running_false_on_inspect_error(fs):
         new=AsyncMock(side_effect=RuntimeError("boom")),
     ):
         assert await fs._is_running() is False
+
+
+# ─── 路径穿越防护（zip-slip 等恶意路径写穿到实例根目录之外）───────────
+
+
+def test_reject_path_traversal_blocks_dotdot():
+    with pytest.raises(NFSMountError):
+        _reject_path_traversal("../../etc/passwd")
+    with pytest.raises(NFSMountError):
+        _reject_path_traversal("plugin/../../../../etc/cron.d/x")
+    # 正常相对路径不受影响
+    assert _reject_path_traversal(".openclaw/extensions/foo/bar.txt") == ".openclaw/extensions/foo/bar.txt"
+
+
+def test_docker_fs_rel_blocks_dotdot(fs):
+    with pytest.raises(NFSMountError):
+        fs._rel("plugin/../../../../etc/cron.d/x")
+    with pytest.raises(NFSMountError):
+        fs._container_path("../../etc/passwd")
+
+
+@pytest.mark.asyncio
+async def test_write_text_stopped_rejects_traversal_before_touching_host(fs):
+    """容器未运行时 write_text 直接落到宿主机 bind-mount 路径，.. 必须在落盘前被拦截。"""
+    fs._running = False
+    fs.exec_command = AsyncMock()
+    with pytest.raises(NFSMountError):
+        await fs.write_text("../../../../etc/cron.d/evil", "* * * * * root touch /tmp/pwned")
+
+    fs.exec_command.assert_not_called()
