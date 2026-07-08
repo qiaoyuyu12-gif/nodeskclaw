@@ -44,6 +44,12 @@ from app.services import gene_service
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Gene 文件夹上传限制：防止无限制大文件/大量文件耗尽内存与存储
+# （genes.manifest 是 Text 列，上传内容最终会整包塞进去）
+_MAX_UPLOAD_FILE_SIZE = 10 * 1024 * 1024   # 单文件 10MB
+_MAX_UPLOAD_TOTAL_SIZE = 50 * 1024 * 1024  # 总大小 50MB
+_MAX_UPLOAD_FILE_COUNT = 500                # 单次最多 500 个文件
+
 
 def _validate_gene_callback_auth(
     payload: LearningCallbackPayload,
@@ -156,6 +162,9 @@ async def upload_gene_folder(
     if not raw_entries:
         raise BadRequestError("未收到任何文件")
 
+    if len(raw_entries) > _MAX_UPLOAD_FILE_COUNT:
+        raise BadRequestError(f"文件数量超过限制（最多 {_MAX_UPLOAD_FILE_COUNT} 个）")
+
     all_first = {p.split("/", 1)[0] for p, _ in raw_entries if "/" in p}
     has_uniform_prefix = (
         len(all_first) == 1 and all("/" in p for p, _ in raw_entries)
@@ -163,9 +172,20 @@ async def upload_gene_folder(
     strip_prefix = (all_first.pop() + "/") if has_uniform_prefix else ""
 
     files_dict: dict[str, bytes] = {}
+    total_size = 0
     for raw, upload_file in raw_entries:
         rel_path = raw[len(strip_prefix):] if strip_prefix and raw.startswith(strip_prefix) else raw
-        files_dict[rel_path] = await upload_file.read()
+        data = await upload_file.read()
+        if len(data) > _MAX_UPLOAD_FILE_SIZE:
+            raise BadRequestError(
+                f"文件 {raw} 超过单文件大小限制（{_MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB）"
+            )
+        total_size += len(data)
+        if total_size > _MAX_UPLOAD_TOTAL_SIZE:
+            raise BadRequestError(
+                f"上传内容总大小超过限制（{_MAX_UPLOAD_TOTAL_SIZE // (1024 * 1024)}MB）"
+            )
+        files_dict[rel_path] = data
 
     meta = skill_package_service.parse_skill_folder(files_dict)
     manifest = meta.get("manifest", {})
