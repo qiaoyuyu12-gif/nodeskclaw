@@ -76,7 +76,8 @@ class GeneListItem(BaseModel):
 
 class GeneCreateRequest(BaseModel):
     name: str = Field(..., max_length=128)
-    slug: str = Field(..., max_length=128)
+    # slug 会作为 skill 目录名拼进远程 exec 命令（见 nfs_mount.py），限制字符集防止注入/路径穿越
+    slug: str = Field(..., max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str | None = None
     short_description: str | None = Field(
         None, max_length=256,
@@ -261,7 +262,8 @@ class CreateGeneRequest(BaseModel):
 
 class ManualGeneCreate(BaseModel):
     name: str = Field(..., max_length=128)
-    slug: str = Field(..., max_length=128)
+    # slug 会作为 skill 目录名拼进远程 exec 命令（见 nfs_mount.py），限制字符集防止注入/路径穿越
+    slug: str = Field(..., max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
     description: str | None = None
     short_description: str | None = Field(None, max_length=256)
     skill_content: str

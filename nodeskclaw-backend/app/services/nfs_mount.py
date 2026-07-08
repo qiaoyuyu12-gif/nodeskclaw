@@ -8,6 +8,7 @@ import base64
 import json
 import logging
 import pathlib
+import shlex
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -60,7 +61,7 @@ class PodFS:
         try:
             result = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
-                ["bash", "-c", f"cat '/root/{path}' 2>/dev/null || true"],
+                ["bash", "-c", f"cat {shlex.quote(f'/root/{path}')} 2>/dev/null || true"],
                 container=self._container,
             )
             return result if result else None
@@ -73,7 +74,7 @@ class PodFS:
         try:
             result = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
-                ["bash", "-c", f"base64 '/root/{path}' 2>/dev/null"],
+                ["bash", "-c", f"base64 {shlex.quote(f'/root/{path}')} 2>/dev/null"],
                 container=self._container,
             )
             if not result:
@@ -90,8 +91,8 @@ class PodFS:
             await self._k8s.exec_in_pod(
                 self._ns, self._pod,
                 ["bash", "-c",
-                 f"mkdir -p \"$(dirname '/root/{path}')\" && "
-                 f"printf '%s' '{encoded}' | base64 -d > '/root/{path}'"],
+                 f"mkdir -p \"$(dirname {shlex.quote(f'/root/{path}')})\" && "
+                 f"printf '%s' {shlex.quote(encoded)} | base64 -d > {shlex.quote(f'/root/{path}')}"],
                 container=self._container,
             )
         else:
@@ -105,8 +106,8 @@ class PodFS:
             await self._k8s.exec_in_pod(
                 self._ns, self._pod,
                 ["bash", "-c",
-                 f"mkdir -p \"$(dirname '/root/{path}')\" && "
-                 f"printf '%s' '{encoded}' | base64 -d > '/root/{path}'"],
+                 f"mkdir -p \"$(dirname {shlex.quote(f'/root/{path}')})\" && "
+                 f"printf '%s' {shlex.quote(encoded)} | base64 -d > {shlex.quote(f'/root/{path}')}"],
                 container=self._container,
             )
         else:
@@ -122,14 +123,14 @@ class PodFS:
             chunk = encoded[i:i + CHUNK_SIZE]
             await self._k8s.exec_in_pod(
                 self._ns, self._pod,
-                ["bash", "-c", f"printf '%s' '{chunk}' >> {tmp}"],
+                ["bash", "-c", f"printf '%s' {shlex.quote(chunk)} >> {tmp}"],
                 container=self._container,
             )
         await self._k8s.exec_in_pod(
             self._ns, self._pod,
             ["bash", "-c",
-             f"mkdir -p \"$(dirname '/root/{path}')\" && "
-             f"base64 -d {tmp} > '/root/{path}' && rm -f {tmp}"],
+             f"mkdir -p \"$(dirname {shlex.quote(f'/root/{path}')})\" && "
+             f"base64 -d {tmp} > {shlex.quote(f'/root/{path}')} && rm -f {tmp}"],
             container=self._container,
         )
 
@@ -169,7 +170,7 @@ class PodFS:
         await self._k8s.exec_in_pod(
             self._ns, self._pod,
             ["bash", "-c",
-             f"printf '%s' '{encoded}' | base64 -d >> '/root/{path}'"],
+             f"printf '%s' {shlex.quote(encoded)} | base64 -d >> {shlex.quote(f'/root/{path}')}"],
             container=self._container,
         )
 
@@ -179,7 +180,7 @@ class PodFS:
         try:
             result = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
-                ["bash", "-c", f"tail -1 '/root/{path}' 2>/dev/null || true"],
+                ["bash", "-c", f"tail -1 {shlex.quote(f'/root/{path}')} 2>/dev/null || true"],
                 container=self._container,
             )
             return result if result else None
@@ -198,8 +199,8 @@ class PodFS:
             result = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
                 ["bash", "-c",
-                 f"if [ -d '/root/{path}' ]; then "
-                 f"find '/root/{path}' -maxdepth 1 -mindepth 1 "
+                 f"if [ -d {shlex.quote(f'/root/{path}')} ]; then "
+                 f"find {shlex.quote(f'/root/{path}')} -maxdepth 1 -mindepth 1 "
                  f"-printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null; "
                  f"echo '__DIR_OK__'; "
                  f"else echo '__NOT_FOUND__'; fi"],
@@ -235,8 +236,8 @@ class PodFS:
             result = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
                 ["bash", "-c",
-                 f"if stat -c '%s|%Y' '/root/{path}' 2>/dev/null; then "
-                 f"file -bi '/root/{path}' 2>/dev/null || echo 'application/octet-stream'; "
+                 f"if stat -c '%s|%Y' {shlex.quote(f'/root/{path}')} 2>/dev/null; then "
+                 f"file -bi {shlex.quote(f'/root/{path}')} 2>/dev/null || echo 'application/octet-stream'; "
                  f"else echo '__NOT_FOUND__'; fi"],
                 container=self._container,
             )
@@ -276,7 +277,7 @@ class PodFS:
         abs_dir = f"/root/{skills_dir_rel}"
         js = (
             'const fs=require("fs"),path=require("path");'
-            f'const dir="{abs_dir}";'
+            f'const dir={json.dumps(abs_dir)};'
             'const r=[];'
             'if(fs.existsSync(dir)){'
             'for(const n of fs.readdirSync(dir).sort()){'
@@ -294,7 +295,7 @@ class PodFS:
         try:
             raw = await self._k8s.exec_in_pod(
                 self._ns, self._pod,
-                ["bash", "-c", f"printf '%s' '{encoded}' | base64 -d | node"],
+                ["bash", "-c", f"printf '%s' {shlex.quote(encoded)} | base64 -d | node"],
                 container=self._container,
             )
             if not raw:
@@ -423,7 +424,7 @@ class DockerFS:
         if await self._is_running():
             cp = self._container_path(remote_path)
             try:
-                result = await self.exec_command(["bash", "-c", f"cat '{cp}' 2>/dev/null || true"])
+                result = await self.exec_command(["bash", "-c", f"cat {shlex.quote(cp)} 2>/dev/null || true"])
             except Exception:
                 return None
             return result if result else None
@@ -439,8 +440,8 @@ class DockerFS:
             if len(encoded) < CHUNK_SIZE:
                 await self.exec_command(
                     ["bash", "-c",
-                     f"mkdir -p \"$(dirname '{cp}')\" && "
-                     f"printf '%s' '{encoded}' | base64 -d > '{cp}'"]
+                     f"mkdir -p \"$(dirname {shlex.quote(cp)})\" && "
+                     f"printf '%s' {shlex.quote(encoded)} | base64 -d > {shlex.quote(cp)}"]
                 )
             else:
                 await self._chunked_write(cp, encoded)
@@ -454,11 +455,11 @@ class DockerFS:
         await self.exec_command(["rm", "-f", tmp])
         for i in range(0, len(encoded), CHUNK_SIZE):
             chunk = encoded[i:i + CHUNK_SIZE]
-            await self.exec_command(["bash", "-c", f"printf '%s' '{chunk}' >> {tmp}"])
+            await self.exec_command(["bash", "-c", f"printf '%s' {shlex.quote(chunk)} >> {tmp}"])
         await self.exec_command(
             ["bash", "-c",
-             f"mkdir -p \"$(dirname '{container_path}')\" && "
-             f"base64 -d {tmp} > '{container_path}' && rm -f {tmp}"]
+             f"mkdir -p \"$(dirname {shlex.quote(container_path)})\" && "
+             f"base64 -d {tmp} > {shlex.quote(container_path)} && rm -f {tmp}"]
         )
 
     async def read_binary(self, remote_path: str) -> bytes | None:
@@ -466,7 +467,7 @@ class DockerFS:
         if await self._is_running():
             cp = self._container_path(remote_path)
             try:
-                result = await self.exec_command(["bash", "-c", f"base64 '{cp}' 2>/dev/null"])
+                result = await self.exec_command(["bash", "-c", f"base64 {shlex.quote(cp)} 2>/dev/null"])
             except Exception:
                 return None
             if not result:
@@ -484,8 +485,8 @@ class DockerFS:
             if len(encoded) < CHUNK_SIZE:
                 await self.exec_command(
                     ["bash", "-c",
-                     f"mkdir -p \"$(dirname '{cp}')\" && "
-                     f"printf '%s' '{encoded}' | base64 -d > '{cp}'"]
+                     f"mkdir -p \"$(dirname {shlex.quote(cp)})\" && "
+                     f"printf '%s' {shlex.quote(encoded)} | base64 -d > {shlex.quote(cp)}"]
                 )
             else:
                 await self._chunked_write(cp, encoded)
@@ -524,8 +525,8 @@ class DockerFS:
             try:
                 result = await self.exec_command(
                     ["bash", "-c",
-                     f"if [ -d '{cp}' ]; then "
-                     f"find '{cp}' -maxdepth 1 -mindepth 1 "
+                     f"if [ -d {shlex.quote(cp)} ]; then "
+                     f"find {shlex.quote(cp)} -maxdepth 1 -mindepth 1 "
                      f"-printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null; "
                      f"echo '__DIR_OK__'; "
                      f"else echo '__NOT_FOUND__'; fi"]
@@ -575,7 +576,7 @@ class DockerFS:
             abs_dir = self._container_path(skills_dir_rel)
             js = (
                 'const fs=require("fs"),path=require("path");'
-                f'const dir="{abs_dir}";'
+                f'const dir={json.dumps(abs_dir)};'
                 'const r=[];'
                 'if(fs.existsSync(dir)){'
                 'for(const n of fs.readdirSync(dir).sort()){'
@@ -592,7 +593,7 @@ class DockerFS:
             encoded = base64.b64encode(js.encode()).decode("ascii")
             try:
                 raw = await self.exec_command(
-                    ["bash", "-c", f"printf '%s' '{encoded}' | base64 -d | node"]
+                    ["bash", "-c", f"printf '%s' {shlex.quote(encoded)} | base64 -d | node"]
                 )
                 if not raw:
                     return []
@@ -619,8 +620,8 @@ class DockerFS:
             try:
                 result = await self.exec_command(
                     ["bash", "-c",
-                     f"if stat -c '%s|%Y' '{cp}' 2>/dev/null; then "
-                     f"file -bi '{cp}' 2>/dev/null || echo 'application/octet-stream'; "
+                     f"if stat -c '%s|%Y' {shlex.quote(cp)} 2>/dev/null; then "
+                     f"file -bi {shlex.quote(cp)} 2>/dev/null || echo 'application/octet-stream'; "
                      f"else echo '__NOT_FOUND__'; fi"]
                 )
             except Exception:
@@ -657,8 +658,8 @@ class DockerFS:
             encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
             await self.exec_command(
                 ["bash", "-c",
-                 f"mkdir -p \"$(dirname '{cp}')\" && "
-                 f"printf '%s' '{encoded}' | base64 -d >> '{cp}'"]
+                 f"mkdir -p \"$(dirname {shlex.quote(cp)})\" && "
+                 f"printf '%s' {shlex.quote(encoded)} | base64 -d >> {shlex.quote(cp)}"]
             )
             return
         p = self._resolve(remote_path)
@@ -670,7 +671,7 @@ class DockerFS:
         if await self._is_running():
             cp = self._container_path(remote_path)
             try:
-                result = await self.exec_command(["bash", "-c", f"tail -1 '{cp}' 2>/dev/null || true"])
+                result = await self.exec_command(["bash", "-c", f"tail -1 {shlex.quote(cp)} 2>/dev/null || true"])
             except Exception:
                 return None
             if not result:

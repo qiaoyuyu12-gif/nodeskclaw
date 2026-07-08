@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import shlex
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -42,7 +43,7 @@ async def test_write_text_running_uses_exec(fs):
 
     fs.exec_command.assert_awaited_once()
     script = fs.exec_command.call_args.args[0][2]
-    assert "base64 -d > '/root/.openclaw/openclaw.json'" in script
+    assert "base64 -d > /root/.openclaw/openclaw.json" in script
     assert "mkdir -p" in script
 
 
@@ -54,7 +55,7 @@ async def test_read_text_running_uses_exec(fs):
 
     assert result == '{"x":1}'
     script = fs.exec_command.call_args.args[0][2]
-    assert "cat '/root/.openclaw/openclaw.json'" in script
+    assert "cat /root/.openclaw/openclaw.json" in script
 
 
 @pytest.mark.asyncio
@@ -80,7 +81,7 @@ async def test_write_text_chunked_when_large(fs):
     assert calls[0].args[0] == ["rm", "-f", "/tmp/_ndk_upload.b64"]
     # 最后一刀解码落盘到目标
     last_script = calls[-1].args[0][2]
-    assert "base64 -d /tmp/_ndk_upload.b64 > '/root/.openclaw/big.json'" in last_script
+    assert "base64 -d /tmp/_ndk_upload.b64 > /root/.openclaw/big.json" in last_script
     # 中间至少有一次分块追加
     assert any(">> /tmp/_ndk_upload.b64" in c.args[0][2] for c in calls[1:-1])
 
@@ -166,3 +167,48 @@ async def test_write_text_stopped_rejects_traversal_before_touching_host(fs):
         await fs.write_text("../../../../etc/cron.d/evil", "* * * * * root touch /tmp/pwned")
 
     fs.exec_command.assert_not_called()
+
+
+# ─── Shell 命令注入防护（恶意 slug/文件名逃出单引号执行任意命令）─────
+
+
+@pytest.mark.asyncio
+async def test_write_text_escapes_shell_metacharacters_in_path(fs):
+    """path 含单引号/分号等 shell 元字符时，必须被 shlex.quote 转义而不是直接拼进 bash -c。"""
+    fs._running = True
+    fs.exec_command = AsyncMock(return_value="")
+    malicious = ".openclaw/extensions/x'; touch /tmp/pwned; echo '.json"
+    await fs.write_text(malicious, "hello")
+
+    script = fs.exec_command.call_args.args[0][2]
+    full_path = f"/root/{malicious}"
+    # 恶意路径必须整体经过 shlex.quote 转义后才出现在脚本里
+    assert shlex.quote(full_path) in script
+
+
+@pytest.mark.asyncio
+async def test_read_text_escapes_shell_metacharacters_in_path(fs):
+    fs._running = True
+    fs.exec_command = AsyncMock(return_value="")
+    malicious = ".openclaw/x' && touch /tmp/pwned && echo '"
+    await fs.read_text(malicious)
+
+    script = fs.exec_command.call_args.args[0][2]
+    full_path = f"/root/{malicious}"
+    assert shlex.quote(full_path) in script
+
+
+def test_shlex_quote_blocks_injection_in_real_shell(tmp_path):
+    """在真实 bash 里验证 shlex.quote 的转义确实阻止了命令注入（而不只是断言字符串包含关系）。"""
+    import subprocess
+
+    marker = tmp_path / "pwned"
+    malicious = f"x'; touch {marker}; echo '"
+    quoted = shlex.quote(f"/root/{malicious}")
+    # 模拟 nfs_mount.py 里真实使用的拼接方式：cat <quoted_path>
+    result = subprocess.run(
+        ["bash", "-c", f"cat {quoted} 2>/dev/null || true"],
+        capture_output=True, text=True, check=False,
+    )
+    assert not marker.exists(), "shlex.quote 未能阻止命令注入"
+    assert result.returncode == 0
