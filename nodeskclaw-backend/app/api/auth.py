@@ -1,11 +1,12 @@
 """Auth endpoints: OAuth, email/password, phone/SMS, token refresh, user info, logout, user management."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core import hooks
+from app.core.auth_rate_limit import check_login_rate_limit, get_client_ip, record_login_failure, reset_login_failures
 from app.core.deps import get_db, require_feature, require_super_admin_dep
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.security import get_current_user, get_current_user_unchecked
@@ -86,11 +87,15 @@ async def _write_auth_audit(
 # ── 邮箱密码 ─────────────────────────────────────────────
 
 @router.post("/login", response_model=ApiResponse[LoginResponse])
-async def email_login(body: EmailLoginRequest, db: AsyncSession = Depends(get_db)):
+async def email_login(body: EmailLoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """邮箱密码登录。"""
+    ip_key = f"ip:{get_client_ip(request)}"
+    account_key = f"email:{body.email.lower()}"
+    check_login_rate_limit(ip_key, account_key)
     try:
         result = await auth_service.login_with_email(body.email, body.password, db)
     except HTTPException as exc:
+        record_login_failure(ip_key, account_key)
         # 登录失败：写审计后重新抛出，密码绝不入 details
         await _write_auth_audit(
             db,
@@ -100,6 +105,7 @@ async def email_login(body: EmailLoginRequest, db: AsyncSession = Depends(get_db
             details={"attempted_email": body.email, "reason": "invalid_credentials"},
         )
         raise exc
+    reset_login_failures(account_key)
     await _write_auth_audit(
         db,
         action=AdminAction.AUTH_LOGIN_SUCCESS,
@@ -131,9 +137,17 @@ async def sms_send(body: SmsSendRequest):
 
 
 @router.post("/sms/login", response_model=ApiResponse[LoginResponse])
-async def sms_login(body: SmsLoginRequest, db: AsyncSession = Depends(get_db)):
+async def sms_login(body: SmsLoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """手机验证码登录（自动注册）。"""
-    result = await auth_service.login_with_phone(body.phone, body.code, db)
+    ip_key = f"ip:{get_client_ip(request)}"
+    account_key = f"phone:{body.phone}"
+    check_login_rate_limit(ip_key, account_key)
+    try:
+        result = await auth_service.login_with_phone(body.phone, body.code, db)
+    except HTTPException:
+        record_login_failure(ip_key, account_key)
+        raise
+    reset_login_failures(account_key)
     await hooks.emit("operation_audit", action="auth.login", target_type="user", target_id=result.user.id, actor_id=result.user.id, org_id=result.user.current_org_id, details={"method": "sms"})
     return ApiResponse(data=result)
 
@@ -353,9 +367,18 @@ async def update_staff(
 @router.post("/account-login", response_model=ApiResponse[LoginResponse])
 async def account_login(
     body: AccountLoginRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await auth_service.login_with_account(body.account, body.password, db)
+    ip_key = f"ip:{get_client_ip(request)}"
+    account_key = f"account:{body.account.strip().lower()}"
+    check_login_rate_limit(ip_key, account_key)
+    try:
+        result = await auth_service.login_with_account(body.account, body.password, db)
+    except HTTPException:
+        record_login_failure(ip_key, account_key)
+        raise
+    reset_login_failures(account_key)
     await hooks.emit("operation_audit", action="auth.login", target_type="user", target_id=result.user.id, actor_id=result.user.id, org_id=result.user.current_org_id, details={"method": "account"})
     return ApiResponse(data=result)
 
@@ -372,8 +395,17 @@ async def send_verification_code(
 @router.post("/verification-code/login", response_model=ApiResponse[LoginResponse])
 async def verification_code_login(
     body: VerificationCodeLoginRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await auth_service.login_with_verification_code(body.account, body.code, db)
+    ip_key = f"ip:{get_client_ip(request)}"
+    account_key = f"account:{body.account.strip().lower()}"
+    check_login_rate_limit(ip_key, account_key)
+    try:
+        result = await auth_service.login_with_verification_code(body.account, body.code, db)
+    except HTTPException:
+        record_login_failure(ip_key, account_key)
+        raise
+    reset_login_failures(account_key)
     await hooks.emit("operation_audit", action="auth.login", target_type="user", target_id=result.user.id, actor_id=result.user.id, org_id=result.user.current_org_id, details={"method": "verification_code"})
     return ApiResponse(data=result)
