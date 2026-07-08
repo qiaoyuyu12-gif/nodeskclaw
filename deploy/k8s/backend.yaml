@@ -23,7 +23,7 @@ spec:
             - containerPort: 8000
           envFrom:
             - secretRef:
-                name: nodeskclaw-secrets   # 对应 6.2 步创建的 Secret
+                name: nodeskclaw-backend-env   # 由 deploy/cli.sh init 自动创建（cmd_init 里的 secret_name）
           resources:
             requests:
               cpu: 500m
