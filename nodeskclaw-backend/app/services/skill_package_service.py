@@ -36,8 +36,9 @@ skill.md 支持两种格式：
 
     my-skill/
     ├── SKILL.md             # 技能声明（必需，大小写不敏感）
-    ├── main.py              # 入口脚本（可选）
-    ├── utils.py             # 辅助脚本（可选）
+    ├── main.py              # 入口脚本（可选，仅根目录 .py 走 tools 部署）
+    ├── utils.py             # 辅助脚本（可选，同上）
+    ├── scripts/             # 技能执行脚本（可选，保留相对路径部署到技能目录）
     ├── assets/              # 资源文件（可选，内联进 manifest）
     └── reference/           # 参考资料（可选，内联进 manifest）
 
@@ -142,8 +143,9 @@ def parse_skill_folder(files: dict[str, bytes]) -> dict:
 
         suffix = Path(rel_path).suffix.lower()
 
-        if suffix in _SCRIPT_EXTS:
-            # Python 脚本：存入 scripts，键为纯文件名（脚本必须是文本）
+        if suffix in _SCRIPT_EXTS and "/" not in rel_path:
+            # 根目录 Python 脚本：tool 类型入口机制，存入 scripts
+            # （部署到 ~/.deskclaw/tools/，与技能目录无关）
             decoded = _safe_decode(content, rel_path)
             if isinstance(decoded, str):
                 scripts[Path(rel_path).name] = decoded
@@ -156,7 +158,9 @@ def parse_skill_folder(files: dict[str, bytes]) -> dict:
             # reference/ 目录下的参考资料
             references[rel_path] = _safe_decode(content, rel_path)
         else:
-            # 其余文件归入 assets
+            # 其余文件归入 assets 并保留相对路径（含 scripts/ 等子目录中的
+            # .py 脚本），随附属文件按原始目录结构部署到实例技能目录，
+            # 保证 SKILL.md 中的相对路径引用可用
             assets[rel_path] = _safe_decode(content, rel_path)
 
     # 4. type=tool 时自动从 config.entry 读取入口，未指定则从已有脚本中选取

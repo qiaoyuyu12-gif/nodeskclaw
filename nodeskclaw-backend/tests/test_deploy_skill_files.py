@@ -141,6 +141,26 @@ def test_parse_skill_folder_keeps_binary_asset():
     assert decode_binary_entry(entry) == docx_bytes
 
 
+def test_parse_skill_folder_nested_py_keeps_relative_path():
+    """子目录中的 .py 脚本保留相对路径归入 assets/references，
+    随附属文件部署到技能目录；仅根目录 .py 走 scripts → tools 链路。"""
+    meta = parse_skill_folder({
+        "SKILL.md": b"---\nname: doc-writer\ntype: tool\n---\n\nbody",
+        "main.py": b"print('entry')",
+        "scripts/fill_template.py": b"print('fill')",
+        "reference/helper.py": b"print('ref helper')",
+    })
+    manifest = meta["manifest"]
+
+    # 根目录 .py：保持原有 tool 入口机制
+    assert manifest["scripts"] == {"main.py": "print('entry')"}
+    assert manifest["entry"] == "main.py"
+    # scripts/ 子目录 .py：保留相对路径，部署到技能目录
+    assert manifest["assets"]["scripts/fill_template.py"] == "print('fill')"
+    # reference/ 子目录 .py：归入 references
+    assert manifest["references"]["reference/helper.py"] == "print('ref helper')"
+
+
 @pytest.mark.asyncio
 async def test_deploy_skill_files_binary_entry_uses_write_binary():
     """二进制条目解码后走 write_binary 按字节写入。"""
