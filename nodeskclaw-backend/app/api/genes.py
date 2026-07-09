@@ -48,6 +48,7 @@ router = APIRouter()
 # （genes.manifest 是 Text 列，上传内容最终会整包塞进去）
 _MAX_UPLOAD_FILE_SIZE = 10 * 1024 * 1024   # 单文件 10MB
 _MAX_UPLOAD_TOTAL_SIZE = 50 * 1024 * 1024  # 总大小 50MB
+_UPLOAD_READ_CHUNK_SIZE = 1024 * 1024      # 分块读取粒度：边读边判断大小上限，避免超大文件被整体读入内存后才拒绝
 _MAX_UPLOAD_FILE_COUNT = 500                # 单次最多 500 个文件
 
 
@@ -175,17 +176,26 @@ async def upload_gene_folder(
     total_size = 0
     for raw, upload_file in raw_entries:
         rel_path = raw[len(strip_prefix):] if strip_prefix and raw.startswith(strip_prefix) else raw
-        data = await upload_file.read()
-        if len(data) > _MAX_UPLOAD_FILE_SIZE:
-            raise BadRequestError(
-                f"文件 {raw} 超过单文件大小限制（{_MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB）"
-            )
-        total_size += len(data)
-        if total_size > _MAX_UPLOAD_TOTAL_SIZE:
-            raise BadRequestError(
-                f"上传内容总大小超过限制（{_MAX_UPLOAD_TOTAL_SIZE // (1024 * 1024)}MB）"
-            )
-        files_dict[rel_path] = data
+        # 分块读取：每读一块就立即检查单文件/总大小上限，一旦超限马上中止读取，
+        # 避免恶意超大文件在被拒绝前就已整体读入内存（此前是 read() 全量读完才检查，防护形同虚设）
+        chunks: list[bytes] = []
+        file_size = 0
+        while True:
+            chunk = await upload_file.read(_UPLOAD_READ_CHUNK_SIZE)
+            if not chunk:
+                break
+            file_size += len(chunk)
+            if file_size > _MAX_UPLOAD_FILE_SIZE:
+                raise BadRequestError(
+                    f"文件 {raw} 超过单文件大小限制（{_MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB）"
+                )
+            if total_size + file_size > _MAX_UPLOAD_TOTAL_SIZE:
+                raise BadRequestError(
+                    f"上传内容总大小超过限制（{_MAX_UPLOAD_TOTAL_SIZE // (1024 * 1024)}MB）"
+                )
+            chunks.append(chunk)
+        total_size += file_size
+        files_dict[rel_path] = b"".join(chunks)
 
     meta = skill_package_service.parse_skill_folder(files_dict)
     manifest = meta.get("manifest", {})
