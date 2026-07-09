@@ -71,6 +71,30 @@ const localFolderInputRef = ref<HTMLInputElement>()
 // 上传目标库：默认 personal（个人 library，无需审核），可选 org / public
 const uploadTarget = ref<'personal' | 'org' | 'public'>('personal')
 
+// 上传限制：需与后端 genes.py 的 _MAX_UPLOAD_* 常量保持一致，防内存/存储 DoS
+const MAX_UPLOAD_FILE_SIZE = 10 * 1024 * 1024 // 单文件 10MB
+const MAX_UPLOAD_TOTAL_SIZE = 50 * 1024 * 1024 // 总大小 50MB
+const MAX_UPLOAD_FILE_COUNT = 500 // 单次最多 500 个文件
+
+// 上传前的本地校验：超限时返回中文提示，未超限返回 null
+function validateUploadFiles(files: FileList): string | null {
+  if (files.length > MAX_UPLOAD_FILE_COUNT) {
+    return `文件数量超过限制（最多 ${MAX_UPLOAD_FILE_COUNT} 个，当前 ${files.length} 个）`
+  }
+  let totalSize = 0
+  for (const file of Array.from(files)) {
+    if (file.size > MAX_UPLOAD_FILE_SIZE) {
+      const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+      return `文件 ${path} 超过单文件大小限制（${MAX_UPLOAD_FILE_SIZE / (1024 * 1024)}MB）`
+    }
+    totalSize += file.size
+  }
+  if (totalSize > MAX_UPLOAD_TOTAL_SIZE) {
+    return `上传内容总大小超过限制（${MAX_UPLOAD_TOTAL_SIZE / (1024 * 1024)}MB）`
+  }
+  return null
+}
+
 async function handleLocalFile(file: File) {
   localError.value = '请使用文件夹上传功能'
   return
@@ -80,6 +104,12 @@ async function handleLocalFolder() {
   const input = localFolderInputRef.value
   if (!input?.files || input.files.length === 0) {
     localError.value = '请先选择文件夹'
+    return
+  }
+  // 上传前本地校验大小/数量，避免把超大请求发到后端才被拒绝
+  const validationError = validateUploadFiles(input.files)
+  if (validationError) {
+    localError.value = validationError
     return
   }
   localUploading.value = true
@@ -674,6 +704,11 @@ function hasNativeTools(gene: GeneItem): boolean {
                 <p class="text-xs text-gray-500 text-center max-w-md">
                   选择包含 <code class="bg-white px-1 rounded">SKILL.md</code> 的文件夹，系统自动解析并创建本地基因。
                   同时支持上传 ZIP 包。
+                </p>
+                <p class="text-xs text-gray-400 text-center max-w-md">
+                  限制：单文件最大 {{ MAX_UPLOAD_FILE_SIZE / (1024 * 1024) }}MB，
+                  总大小最大 {{ MAX_UPLOAD_TOTAL_SIZE / (1024 * 1024) }}MB，
+                  最多 {{ MAX_UPLOAD_FILE_COUNT }} 个文件。
                 </p>
 
                 <input
