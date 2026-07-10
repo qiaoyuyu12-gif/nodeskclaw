@@ -11,6 +11,7 @@ from typing import Coroutine
 from urllib.parse import urlencode
 
 from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_nodeskclaw_webhook_base_url, settings
@@ -18,9 +19,10 @@ from app.core.exceptions import AppException, BadRequestError, ConflictError, Fo
 from app.models.base import not_deleted
 from app.models.corridor import HumanHex
 from app.models.gene import (
+    ContentVisibility,
     EffectMetricType,
-    EvolutionEvent,
     EvolutionEventType,
+    EvolutionEvent,
     Gene,
     GeneEffectLog,
     GeneRating,
@@ -686,6 +688,39 @@ async def get_gene_by_slug_in_scope(
         if created_by is not None:
             stmt = stmt.where(Gene.created_by == created_by)
     else:
+        stmt = stmt.where(Gene.org_id == org_id)
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def get_gene_by_name_in_scope(
+    db: AsyncSession,
+    name: str,
+    *,
+    visibility: str,
+    org_id: str | None = None,
+    created_by: str | None = None,
+) -> Gene | None:
+    """按 (trim+忽略大小写的 name, scope) 精确定位一条未删除 gene。
+
+    与 3 条 uq_genes_name_* partial unique index 语义一一对应：
+      - personal：按 (小写trim后的 name, created_by) 判重
+      - org_private：按 (小写trim后的 name, org_id) 判重
+      - public：全局按小写trim后的 name 判重，不再附加 org_id/created_by 条件
+
+    用 first() 而非 scalar_one_or_none()——理论上 scope 内不会有多条，但按
+    项目既有踩坑经验（同 slug 跨 scope 并存过 MultipleResultsFound），一律
+    用 first() 更保守。
+    """
+    normalized = name.strip().lower()
+    stmt = select(Gene).where(
+        func.lower(func.trim(Gene.name)) == normalized,
+        Gene.visibility == visibility,
+        not_deleted(Gene),
+    )
+    if visibility == ContentVisibility.personal:
+        stmt = stmt.where(Gene.created_by == created_by)
+    elif visibility == ContentVisibility.org_private:
         stmt = stmt.where(Gene.org_id == org_id)
     result = await db.execute(stmt)
     return result.scalars().first()
