@@ -21,8 +21,8 @@ from app.models.corridor import HumanHex
 from app.models.gene import (
     ContentVisibility,
     EffectMetricType,
-    EvolutionEventType,
     EvolutionEvent,
+    EvolutionEventType,
     Gene,
     GeneEffectLog,
     GeneRating,
