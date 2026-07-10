@@ -731,19 +731,32 @@ async def create_gene(
     visibility: str | None = None,
     review_status: str | None = None,
 ) -> dict:
+    resolved_visibility = visibility or req.visibility
+
     # 冲突判定按 (slug, org_id) 进行，对齐 partial unique index `uq_genes_slug_org_active`。
     # personal scope（org_id IS NULL）下，索引允许多个用户共用同 slug，因此用 created_by
     # 进一步限定到"当前用户的 personal 同 slug"，避免误报。
     existing = await get_gene_by_slug_in_scope(
         db, req.slug, org_id=org_id, created_by=user_id,
     )
-    if existing:
+    # 名称查重按 scope 分别进行（personal 按用户、org 按组织、public 全局），
+    # 对齐新增的 3 条 uq_genes_name_* partial unique index。
+    existing_name = await get_gene_by_name_in_scope(
+        db, req.name, visibility=resolved_visibility, org_id=org_id, created_by=user_id,
+    )
+    if existing or existing_name:
         if req.overwrite:
-            # 覆盖模式：软删除该 scope 内的旧基因，再创建新基因
-            existing.soft_delete()
+            # 覆盖模式：软删除该 scope 内命中的旧基因（slug 和 name 命中的可能是
+            # 同一行，也可能是两行，两个都要软删，避免插入新行时任一唯一索引冲突）
+            if existing:
+                existing.soft_delete()
+            if existing_name and existing_name is not existing:
+                existing_name.soft_delete()
             await db.commit()
-        else:
+        elif existing:
             raise ConflictError(f"基因 slug '{req.slug}' 已存在")
+        else:
+            raise ConflictError(f"技能名称 '{req.name}' 已存在")
 
     _validate_skill_metadata(req.manifest, req.short_description, req.description)
 
@@ -763,7 +776,7 @@ async def create_gene(
         synergies=_json_dumps(req.synergies),
         is_featured=req.is_featured,
         is_published=req.is_published,
-        visibility=visibility or req.visibility,
+        visibility=resolved_visibility,
         review_status=review_status,
         created_by=user_id,
         org_id=org_id,
@@ -772,7 +785,13 @@ async def create_gene(
         source_registry="local",
     )
     db.add(gene)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        # 极小概率竞态：两个请求同时通过了上面的预检查。DB 唯一索引在此兜底，
+        # 统一转换成 ConflictError，不暴露内部约束名等实现细节。
+        await db.rollback()
+        raise ConflictError(f"基因 slug '{req.slug}' 或名称 '{req.name}' 已存在") from e
     await db.refresh(gene)
     return _gene_to_dict(gene)
 
