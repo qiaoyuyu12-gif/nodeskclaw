@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -80,6 +81,29 @@ class Gene(BaseModel):
             "org_id",
             unique=True,
             postgresql_where="deleted_at IS NULL",
+        ),
+        # 以下 3 条按 scope 分别对技能名称（trim + 忽略大小写）做唯一约束，
+        # 与 get_gene_by_name_in_scope() 的应用层预检查语义一一对应，
+        # 作为并发场景下的最后一道防线（防止两个请求同时通过预检查）。
+        Index(
+            "uq_genes_name_personal_active",
+            text("lower(trim(name))"),
+            "created_by",
+            unique=True,
+            postgresql_where="deleted_at IS NULL AND visibility = 'personal'",
+        ),
+        Index(
+            "uq_genes_name_org_active",
+            text("lower(trim(name))"),
+            "org_id",
+            unique=True,
+            postgresql_where="deleted_at IS NULL AND visibility = 'org_private'",
+        ),
+        Index(
+            "uq_genes_name_public_active",
+            text("lower(trim(name))"),
+            unique=True,
+            postgresql_where="deleted_at IS NULL AND visibility = 'public'",
         ),
     )
 
