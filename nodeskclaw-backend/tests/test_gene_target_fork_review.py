@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from app.core.exceptions import BadRequestError, ForbiddenError
+from app.core.exceptions import BadRequestError, ConflictError, ForbiddenError
 from app.models.gene import GeneReviewStatus
 from app.services import gene_service
 
@@ -138,6 +138,7 @@ class _FakeGene:
         visibility: str = "org_private",
         created_by: str | None = "uploader",
         slug: str = "skill-x",
+        name: str | None = None,
     ):
         self.id = gene_id
         self.org_id = org_id
@@ -148,7 +149,7 @@ class _FakeGene:
         self.created_by = created_by
         # fork 函数会读取一组 source_* 字段并复制
         self.slug = slug
-        self.name = f"name-{slug}"
+        self.name = name or f"name-{slug}"
         self.description = None
         self.short_description = None
         self.category = None
@@ -234,6 +235,7 @@ def _make_fork_db(
     *,
     membership=None,
     has_slug_conflict: bool = False,
+    has_name_conflict: bool = False,
     is_target_admin: bool = False,
     has_target_org: bool = True,
 ) -> MagicMock:
@@ -244,7 +246,8 @@ def _make_fork_db(
          仅当非超管且 effective_org_id 不为 None 时才会真的 SQL 查询
       1. select(Gene) by id → source
       2. （仅当非超管且源为 org scope 时）select(OrgMembership) → membership
-      3. select(Gene) for slug 冲突 → existing
+      3. select(Gene) for name 查重（get_gene_by_name_in_scope）→ existing_name
+      4. select(Gene) for slug 冲突 → existing
     db.add 为同步 MagicMock；db.commit / db.refresh 为 AsyncMock。
     """
     db = MagicMock()
@@ -268,7 +271,15 @@ def _make_fork_db(
         m_result.scalar_one_or_none.return_value = membership
         side_effects.append(m_result)
 
-    # 3. slug 冲突查询
+    # 3. name 查重查询（get_gene_by_name_in_scope 用 .scalars().first()，
+    # 与其它步骤的 .scalar_one_or_none() 链路不同，需要单独 mock）
+    name_result = MagicMock()
+    name_result.scalars.return_value.first.return_value = (
+        MagicMock() if has_name_conflict else None
+    )
+    side_effects.append(name_result)
+
+    # 4. slug 冲突查询
     conflict_result = MagicMock()
     conflict_result.scalar_one_or_none.return_value = MagicMock() if has_slug_conflict else None
     side_effects.append(conflict_result)
@@ -484,15 +495,17 @@ async def test_fork_super_admin_bypasses_review_to_public():
         slug="team-skill",
     )
     # 超管路径：is_user_admin_of_org 在最前直接返回 True，不走 SQL；
-    # 但仍会触发后续源查询、（org 源）成员查询、冲突查询。超管路径下源
-    # 校验也直接放行（不查 OrgMembership）。
+    # 但仍会触发后续源查询、（org 源）成员查询、name 查重查询、slug 冲突查询。
+    # 超管路径下源校验也直接放行（不查 OrgMembership）。
     db = MagicMock()
 
     src_result = MagicMock()
     src_result.scalar_one_or_none.return_value = source
+    name_result = MagicMock()
+    name_result.scalars.return_value.first.return_value = None
     conflict_result = MagicMock()
     conflict_result.scalar_one_or_none.return_value = None
-    db.execute = AsyncMock(side_effect=[src_result, conflict_result])
+    db.execute = AsyncMock(side_effect=[src_result, name_result, conflict_result])
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
 
@@ -672,3 +685,49 @@ async def test_attach_uploader_identity_skips_query_when_no_uploaders():
     result = await gene_service._attach_uploader_identity(db, items)
     assert result == items  # 原样返回，不注入字段
     db.execute.assert_not_called()
+
+
+# ─── fork_gene_to_library：名称查重 ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fork_rejects_when_target_scope_has_same_name():
+    """目标 scope 已存在同名技能：直接 ConflictError，不再自动改名绕开。"""
+    source = _FakeGene(
+        gene_id="g-personal",
+        org_id=None,
+        created_by="owner-id",
+        visibility="personal",
+        review_status=None,
+        slug="my-skill",
+        name="客服助手",
+    )
+    db = _make_fork_db(source, has_name_conflict=True)
+    user = _FakeUser("owner-id", current_org_id="org-target")
+
+    with pytest.raises(ConflictError):
+        await gene_service.fork_gene_to_library(
+            db, "my-skill", "org", current_user=user,
+        )
+
+
+@pytest.mark.asyncio
+async def test_fork_allows_when_target_scope_has_no_same_name():
+    """目标 scope 没有同名技能：正常 fork 成功（沿用已有的 slug 自动改名兜底）。"""
+    source = _FakeGene(
+        gene_id="g-personal",
+        org_id=None,
+        created_by="owner-id",
+        visibility="personal",
+        review_status=None,
+        slug="my-skill",
+        name="客服助手",
+    )
+    db = _make_fork_db(source, has_name_conflict=False, has_slug_conflict=True)
+    user = _FakeUser("owner-id", current_org_id="org-target")
+
+    result = await gene_service.fork_gene_to_library(
+        db, "my-skill", "org", current_user=user,
+    )
+    assert result["name"] == "客服助手"
+    assert result["slug"] != "my-skill"  # slug 冲突时仍走自动加后缀

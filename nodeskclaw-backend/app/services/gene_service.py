@@ -3573,6 +3573,18 @@ async def fork_gene_to_library(
         source_synergies = _json_dumps(detail.synergies or [])
         source_parent_id = None  # 外部源没有本地 id 可指
 
+    # ── 2.5. 名称查重：目标 scope 内已存在同名技能则直接拒绝 ──────────
+    # 与"防止重名出现"的需求本身矛盾，所以这里不像 slug 那样自动加后缀绕开，
+    # 而是直接报错让用户自己决定改名或删除旧的。
+    existing_name = await get_gene_by_name_in_scope(
+        db, source_name,
+        visibility=attrs["visibility"],
+        org_id=attrs["org_id"],
+        created_by=attrs["created_by"],
+    )
+    if existing_name is not None:
+        raise ConflictError(f"技能名称 '{source_name}' 已存在")
+
     # ── 3. 计算副本 slug：在目标 org_id 内重名时追加短后缀 ──────────
     import uuid
 
