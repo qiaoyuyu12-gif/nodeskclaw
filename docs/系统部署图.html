@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>DeskClaw 系统部署图：总体部署与高可用设计</title>
+<style>
+  /* 全局重置与基础排版 */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: #f5f6f8;
+    padding: 40px 48px;
+    color: #1f2430;
+  }
+  h1 { font-size: 27px; font-weight: 700; margin-bottom: 28px; }
+
+  /* 主体：左侧四层部署带 + 右侧外围系统协同栏 */
+  .layout { display: grid; grid-template-columns: 1fr 220px; gap: 18px; }
+  .layers { display: flex; flex-direction: column; gap: 14px; }
+
+  /* 每一层：左侧色块标签 + 右侧浅色边框内容区 */
+  .layer { display: grid; grid-template-columns: 150px 1fr; gap: 0; }
+  .layer .label {
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 15px; font-weight: 600;
+    border-radius: 8px; text-align: center; padding: 10px;
+  }
+  .layer .content {
+    background: #fff; border: 1.5px solid; border-radius: 8px;
+    margin-left: 14px; padding: 16px; display: flex; gap: 12px; flex-wrap: wrap;
+  }
+
+  .box-layer .label { background: #2563eb; }
+  .box-layer .content { border-color: #bfdbfe; background: #eff6ff; }
+  .access-layer .label { background: #2563eb; }
+  .access-layer .content { border-color: #bfdbfe; background: #eff6ff; }
+  .app-layer .label { background: #7c3aed; }
+  .app-layer .content { border-color: #ddd6fe; background: #f5f3ff; }
+  .data-layer .label { background: #059669; }
+  .data-layer .content { border-color: #a7f3d0; background: #ecfdf5; }
+
+  /* 服务卡片：白底 + 图标 + 标题 + 说明 + 部署形态标签 */
+  .svc {
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+    padding: 12px 14px; flex: 1; min-width: 190px;
+    display: flex; flex-direction: column; align-items: center; text-align: center;
+  }
+  .svc .ic { width: 30px; height: 30px; margin-bottom: 6px; }
+  .svc .t { font-size: 13.5px; font-weight: 600; margin-bottom: 4px; }
+  .svc .d { font-size: 11.5px; color: #6b7280; line-height: 1.5; margin-bottom: 6px; }
+  .svc .tag {
+    font-size: 10.5px; color: #4b5563; background: #f3f4f6;
+    border-radius: 4px; padding: 2px 8px;
+  }
+
+  /* 用户访问层内元素较简单，纵向排布图标+文字 */
+  .endpoint {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 500; flex: 1;
+  }
+  .endpoint .ic { width: 30px; height: 30px; }
+
+  .arrow { text-align: center; color: #9ca3af; font-size: 18px; margin-left: 150px; }
+
+  /* 右侧外围系统协同栏 */
+  .sidebar {
+    background: #fff7ed; border: 1.5px solid #fed7aa; border-radius: 8px;
+    display: flex; flex-direction: column;
+  }
+  .sidebar .head {
+    background: #ea580c; color: #fff; font-weight: 600; font-size: 14px;
+    text-align: center; padding: 10px; border-radius: 8px 8px 0 0;
+  }
+  .sidebar .items { padding: 12px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .sidebar .item {
+    background: #fff; border: 1px solid #fed7aa; border-radius: 6px;
+    padding: 8px 10px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 500;
+  }
+  .sidebar .item .ic { width: 20px; height: 20px; flex-shrink: 0; }
+
+  /* 底部部署说明 */
+  .footer {
+    margin-top: 18px; background: #1e293b; border-radius: 8px;
+    display: grid; grid-template-columns: 170px repeat(4, 1fr); align-items: center;
+    padding: 14px 20px; gap: 14px; color: #fff;
+  }
+  .footer .title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+  .footer .note { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.6; }
+  .footer .note svg { flex-shrink: 0; margin-top: 2px; }
+
+  svg { stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+</head>
+<body>
+<h1>系统部署图：DeskClaw 总体部署与高可用设计</h1>
+
+<div class="layout">
+  <div class="layers">
+
+    <!-- 用户访问层：Portal Web / 移动端 / 飞书钉钉客户端 / 拓扑看板 -->
+    <div class="layer box-layer">
+      <div class="label">用户访问层</div>
+      <div class="content">
+        <div class="endpoint">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="10" rx="1.5"></rect><path d="M2 14h14M6 18h6"></path></svg>
+          PC Web 门户
+        </div>
+        <div class="endpoint">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"></rect><path d="M11 18h2"></path></svg>
+          移动端 H5
+        </div>
+        <div class="endpoint">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M8 20h8"></path></svg>
+          飞书 / 钉钉客户端
+        </div>
+        <div class="endpoint">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M3 3v18h18"></path><path d="M7 15l4-4 3 3 5-6"></path></svg>
+          团队拓扑 / 效能看板
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow">&#8593;&#8595;</div>
+
+    <!-- 接入与安全层：Ingress + SSO 鉴权 -->
+    <div class="layer access-layer">
+      <div class="label">接入与安全层</div>
+      <div class="content">
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 010 18 14 14 0 010-18"></path></svg>
+          <div class="t">Internet / 域名接入</div>
+          <div class="d">HTTPS 证书终止，域名绑定 Ingress</div>
+        </div>
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.5"></circle><circle cx="5" cy="19" r="2.5"></circle><circle cx="19" cy="19" r="2.5"></circle><path d="M12 7.5v6M12 13.5L5 16.8M12 13.5l7 3.3"></path></svg>
+          <div class="t">Nginx Ingress Controller</div>
+          <div class="d">/api/ 转发 backend，/ 转发 portal</div>
+          <div class="tag">K8s Deployment</div>
+        </div>
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z"></path></svg>
+          <div class="t">飞书 SSO / JWT 鉴权</div>
+          <div class="d">人类用户 JWT，AI 员工 proxy_token</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow">&#8593;&#8595;</div>
+
+    <!-- 应用服务层：portal / backend / llm-proxy / channel 插件 / admin(EE) -->
+    <div class="layer app-layer">
+      <div class="label">应用服务层</div>
+      <div class="content">
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18"></path></svg>
+          <div class="t">门户前端服务</div>
+          <div class="d">nodeskclaw-portal（Vue3），CE/EE 通用</div>
+          <div class="tag">2 副本 · HA</div>
+        </div>
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.5"></rect><rect x="13" y="3" width="8" height="8" rx="1.5"></rect><rect x="3" y="13" width="8" height="8" rx="1.5"></rect><rect x="13" y="13" width="8" height="8" rx="1.5"></rect></svg>
+          <div class="t">业务服务集群</div>
+          <div class="d">nodeskclaw-backend（FastAPI Service Layer，实例部署/巡检/Gene 管理）</div>
+          <div class="tag">2 副本 · HA</div>
+        </div>
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M9 3v18M3 9h18"></path><circle cx="12" cy="12" r="9"></circle></svg>
+          <div class="t">LLM Proxy 服务</div>
+          <div class="d">nodeskclaw-llm-proxy，统一代理模型调用</div>
+          <div class="tag">独立部署</div>
+        </div>
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M17 2l-2 6h-6l-2-6"></path><path d="M4 8h16l-1 12H5z"></path></svg>
+          <div class="t">Channel 集成服务</div>
+          <div class="d">openclaw-channel-nodeskclaw / dingtalk 插件</div>
+          <div class="tag">按需部署</div>
+        </div>
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M8 10h8M8 14h5"></path></svg>
+          <div class="t">管理后台服务</div>
+          <div class="d">ee/nodeskclaw-frontend（仅 EE，组织/审核管理）</div>
+          <div class="tag">1 副本 · EE-only</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow">&#8593;&#8595;</div>
+
+    <!-- 数据与存储层：PostgreSQL / 对象存储 / 实例数据卷 / K8s资源 -->
+    <div class="layer data-layer">
+      <div class="label">数据与存储层</div>
+      <div class="content">
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path><path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"></path></svg>
+          <div class="t">PostgreSQL</div>
+          <div class="d">SQLAlchemy async + asyncpg，健康检查 + 持久化 Volume</div>
+          <div class="tag">软删除 + Partial Unique Index</div>
+        </div>
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"></rect><path d="M3 12h18"></path></svg>
+          <div class="t">对象存储 / 文件存储</div>
+          <div class="d">S3/OSS 兼容存储（boto3），附件与制品</div>
+        </div>
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M4 4h6l2 3h8v11H4z"></path></svg>
+          <div class="t">实例数据卷 / NFS</div>
+          <div class="d">Docker/K8s 实例运行数据，容器路径与本地挂载互转</div>
+        </div>
+        <div class="svc">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M7 8h10M7 12h6"></path></svg>
+          <div class="t">被管 K8s 集群资源</div>
+          <div class="d">KubeConfig AES-256-GCM 加密存储，kubectl 显式指定 --context</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 右侧：外围系统协同 -->
+  <div class="sidebar">
+    <div class="head">外围系统协同</div>
+    <div class="items">
+      <div class="item">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z"></path></svg>
+        飞书（SSO 登录 + IM）
+      </div>
+      <div class="item">
+        <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M8 20h8"></path></svg>
+        钉钉（Stream 协议插件）
+      </div>
+      <div class="item">
+        <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M7 8h10M7 12h6"></path></svg>
+        被管 K8s 集群（多集群）
+      </div>
+      <div class="item">
+        <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18"></path></svg>
+        Docker 单机集群
+      </div>
+      <div class="item">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M9 3v18M3 9h18"></path><circle cx="12" cy="12" r="9"></circle></svg>
+        LLM 模型服务商
+      </div>
+      <div class="item">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-5-9 5 9 5 9-5z"></path><path d="M3 8v8l9 5 9-5V8"></path></svg>
+        镜像仓库（火山云/阿里云）
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 底部部署说明 -->
+<div class="footer">
+  <div class="title">
+    <svg width="18" height="18" viewBox="0 0 24 24" stroke="#fff"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>
+    部署说明
+  </div>
+  <div class="note">
+    <svg width="15" height="15" viewBox="0 0 24 24" stroke="#4ade80"><path d="M20 6L9 17l-5-5"></path></svg>
+    支持 Docker Compose 单机一键部署（CE/EE）与 K8s 生产多副本部署两种形态
+  </div>
+  <div class="note">
+    <svg width="15" height="15" viewBox="0 0 24 24" stroke="#4ade80"><path d="M20 6L9 17l-5-5"></path></svg>
+    K8s 模式下 backend / portal 生产环境至少 2 副本，readiness/liveness 探针保活
+  </div>
+  <div class="note">
+    <svg width="15" height="15" viewBox="0 0 24 24" stroke="#4ade80"><path d="M20 6L9 17l-5-5"></path></svg>
+    CE/EE 通过 NODESKCLAW_EDITION 环境变量或 ee/ 目录存在性判断，FeatureGate 运行时控制
+  </div>
+  <div class="note">
+    <svg width="15" height="15" viewBox="0 0 24 24" stroke="#4ade80"><path d="M20 6L9 17l-5-5"></path></svg>
+    K8s 操作必须显式指定 --context，禁止依赖 current-context 默认值
+  </div>
+</div>
+
+</body>
+</html>

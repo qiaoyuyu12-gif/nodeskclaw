@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>DeskClaw 技术架构(TA)：总体技术架构视图</title>
+<style>
+  /* 全局重置与基础排版 */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: #f5f6f8;
+    padding: 48px 56px;
+    color: #1f2430;
+  }
+  h1 {
+    font-size: 30px;
+    font-weight: 700;
+    margin-bottom: 40px;
+  }
+  /* 四列卡片布局，参考图风格：顶部色条 + 图标 + 标题 + 两段说明 */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .card .bar { height: 6px; }
+  .card .body { padding: 28px 24px; flex: 1; display: flex; flex-direction: column; }
+  .card .icon {
+    width: 64px; height: 64px;
+    display: flex; align-items: center; justify-content: center;
+    margin: 4px auto 20px;
+  }
+  .card h2 {
+    text-align: center;
+    font-size: 19px;
+    font-weight: 600;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #e8e9ed;
+    margin-bottom: 20px;
+    line-height: 1.4;
+  }
+  .card .en { display: block; font-size: 13px; font-weight: 400; color: #8a8f9c; margin-top: 2px; }
+  .section-title {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 600; margin-bottom: 8px;
+  }
+  .section-title .dot { width: 4px; height: 14px; border-radius: 2px; }
+  .section-text { font-size: 13px; line-height: 1.8; color: #4a4f5c; margin-bottom: 20px; }
+  .section-text:last-child { margin-bottom: 0; }
+
+  /* 四种主题色，对应用户端/接入层/服务层/数据层 */
+  .blue   .bar { background: #3b82f6; } .blue   .dot { background: #3b82f6; } .blue   svg { stroke: #3b82f6; }
+  .green  .bar { background: #10b981; } .green  .dot { background: #10b981; } .green  svg { stroke: #10b981; }
+  .purple .bar { background: #8b5cf6; } .purple .dot { background: #8b5cf6; } .purple svg { stroke: #8b5cf6; }
+  .orange .bar { background: #f97316; } .orange .dot { background: #f97316; } .orange svg { stroke: #f97316; }
+</style>
+</head>
+<body>
+<h1>技术架构(TA)：DeskClaw 总体技术架构视图</h1>
+
+<div class="grid">
+
+  <!-- 第一列：用户端，双前端架构（用户门户 + EE 管理后台） -->
+  <div class="card blue">
+    <div class="bar"></div>
+    <div class="body">
+      <div class="icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="4" width="14" height="11" rx="1.5"></rect>
+          <path d="M2 15h14"></path>
+          <rect x="18" y="7" width="4" height="12" rx="1"></rect>
+        </svg>
+      </div>
+      <h2>用户端<span class="en">User End</span></h2>
+      <div class="section-title"><span class="dot"></span>核心构成</div>
+      <div class="section-text">用户门户 nodeskclaw-portal（Vue 3 + Vite + Pinia + Tailwind CSS，CE/EE 通用）；管理后台 ee/nodeskclaw-frontend（Vue 3 + shadcn-vue，仅 EE）。</div>
+      <div class="section-title"><span class="dot"></span>主要职责</div>
+      <div class="section-text">实例可视化管理、实时日志查看、拓扑图/团队协作看板展示，面向普通用户与组织管理员两类角色。</div>
+    </div>
+  </div>
+
+  <!-- 第二列：接入层，鉴权与流量入口 -->
+  <div class="card green">
+    <div class="bar"></div>
+    <div class="body">
+      <div class="icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="5" r="2.5"></circle>
+          <circle cx="5" cy="19" r="2.5"></circle>
+          <circle cx="19" cy="19" r="2.5"></circle>
+          <path d="M12 7.5v6M12 13.5L5 16.8M12 13.5l7 3.3"></path>
+        </svg>
+      </div>
+      <h2>接入层<span class="en">Access Layer</span></h2>
+      <div class="section-title"><span class="dot"></span>核心构成</div>
+      <div class="section-text">飞书 SSO 登录（lark-oapi）、FastAPI 路由网关、JWT 鉴权中间件、CORS 策略。</div>
+      <div class="section-title"><span class="dot"></span>主要职责</div>
+      <div class="section-text">统一登录鉴权入口，区分人类用户（JWT）与 AI 员工（proxy_token）两种身份，按角色/组织解析访问权限。</div>
+    </div>
+  </div>
+
+  <!-- 第三列：业务服务层，FastAPI Service Layer + K8s 控制 + LLM 代理 -->
+  <div class="card purple">
+    <div class="bar"></div>
+    <div class="body">
+      <div class="icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="8" height="8" rx="1.5"></rect>
+          <rect x="13" y="3" width="8" height="8" rx="1.5"></rect>
+          <rect x="3" y="13" width="8" height="8" rx="1.5"></rect>
+          <rect x="13" y="13" width="8" height="8" rx="1.5"></rect>
+        </svg>
+      </div>
+      <h2>业务服务层<span class="en">Service Layer</span></h2>
+      <div class="section-title"><span class="dot"></span>核心构成</div>
+      <div class="section-text">nodeskclaw-backend（Python 3.12 + FastAPI + Service Layer 模式）、nodeskclaw-llm-proxy（LLM 代理服务）、kubectl / kubernetes-asyncio（K8s 集群交互）、Alembic 迁移。</div>
+      <div class="section-title"><span class="dot"></span>主要职责</div>
+      <div class="section-text">CE/EE 双版本 FeatureGate 判断、DeskClaw 实例部署编排、集群健康巡检、Gene/技能管理、工作区任务与目标协同。</div>
+    </div>
+  </div>
+
+  <!-- 第四列：数据层，PostgreSQL + 对象存储 + K8s 集群资源 -->
+  <div class="card orange">
+    <div class="bar"></div>
+    <div class="body">
+      <div class="icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <ellipse cx="12" cy="5" rx="8" ry="3"></ellipse>
+          <path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"></path>
+          <path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"></path>
+        </svg>
+      </div>
+      <h2>数据层<span class="en">Data Layer</span></h2>
+      <div class="section-title"><span class="dot"></span>核心构成</div>
+      <div class="section-text">PostgreSQL 16（SQLAlchemy async + asyncpg）、S3/OSS 兼容对象存储（boto3）、Docker 实例数据卷 / K8s 集群资源（Pod、PVC、Deployment）。</div>
+      <div class="section-title"><span class="dot"></span>主要职责</div>
+      <div class="section-text">持久化用户/组织/实例/Gene 元数据，软删除 + Partial Unique Index 约束；实例运行时数据经 NFS/Volume 挂载与容器路径互通。</div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
