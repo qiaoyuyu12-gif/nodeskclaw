@@ -238,6 +238,43 @@ async def test_create_gene_overwrite_rejects_when_name_hits_unrelated_row(requir
         assert still_there is not None
 
 
+@pytest.mark.asyncio
+async def test_create_gene_overwrite_succeeds_when_only_name_hits_no_slug_match(require_test_db):
+    """真实场景复现：旧记录的 slug 是通过别的入口（如手动创建）生成的，与本次
+
+    上传按名称推导出的 slug 对不上——slug 查不到任何行（existing=None），
+    但按 name 能精确命中这条旧记录（existing_name 非空）。此时 existing_name
+    就是唯一需要覆盖的目标，不是"无关行"，overwrite=True 应该成功软删旧行
+    并插入新行，而不是报 ConflictError（此前的回归 bug：见用户反馈"点击同意
+    覆盖后仍然提示同名已存在，拒绝上传"）。
+    """
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+
+        # 旧记录：slug 是手动指定的，与后续按 name 生成的 slug 不同
+        await create_gene(
+            db, _minimal_req("客服助手", "manual-custom-slug", visibility="personal"),
+            user_id=user.id, org_id=None, visibility="personal",
+        )
+
+        # 重新上传：slug 按名称重新生成，和旧记录的 slug 对不上，但 name 相同
+        result = await create_gene(
+            db, _minimal_req("客服助手", "customer-bot-regenerated", visibility="personal", overwrite=True),
+            user_id=user.id, org_id=None, visibility="personal",
+        )
+        assert result["name"] == "客服助手"
+        assert result["slug"] == "customer-bot-regenerated"
+
+        # 旧记录已被软删，不再能通过 name 查重命中（新记录才是唯一存活的一条）
+        current = await get_gene_by_name_in_scope(
+            db, "客服助手", visibility="personal", created_by=user.id,
+        )
+        assert current is not None
+        assert current.slug == "customer-bot-regenerated"
+
+
 async def _create_instance(db: AsyncSession, user: User) -> Instance:
     """构造 publish_variant / handle_creation_callback 测试所需的最小可用 Instance。
 

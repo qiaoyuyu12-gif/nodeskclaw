@@ -744,17 +744,25 @@ async def create_gene(
     existing_name = await get_gene_by_name_in_scope(
         db, req.name, visibility=resolved_visibility, org_id=org_id, created_by=user_id,
     )
-    if existing_name is not None and existing_name is not existing:
-        # name 命中的是另一条与本次覆盖目标无关的行：overwrite 的语义只是
-        # "允许覆盖 slug 命中的那一条"，不能顺带删掉一条名字撞车但完全无关
-        # 的记录，因此这里即使 overwrite=True 也直接拒绝。
+    if existing is not None and existing_name is not None and existing_name is not existing:
+        # slug 和 name 分别命中了两条不同的行：这才是真正的"无关行"冲突，
+        # overwrite 的语义只是"允许覆盖 slug 命中的那一条"，不能顺带删掉
+        # 一条名字撞车但完全无关的记录，因此即使 overwrite=True 也直接拒绝。
+        #
+        # 注意 existing 为 None（slug 没命中任何行）时不能进这个分支：
+        # 技能名称转 slug 是确定性生成的（见 _slugify_gene_name），若旧记录
+        # 是通过其他入口（如手动创建）用不同规则生成的 slug，重新上传时会
+        # 出现"slug 查不到、但 name 精确命中旧记录"的情况——这里 existing_name
+        # 就是唯一需要覆盖的目标，不是无关行，必须走下面的覆盖逻辑。
         raise ConflictError(f"技能名称 '{req.name}' 已存在")
     if existing or existing_name:
         if req.overwrite:
-            # 覆盖模式：existing 与 existing_name 此时必为同一行（或
-            # existing_name 为 None），软删该行即可，不会误删无关记录。
-            if existing:
-                existing.soft_delete()
+            # 覆盖模式：existing 和 existing_name 此时要么是同一行，要么只有
+            # 一个非 None（slug 对不上但 name 精确命中了同一技能的旧记录），
+            # 软删这一行即可，不会误删无关记录。
+            target = existing or existing_name
+            if target:
+                target.soft_delete()
             await db.commit()
         elif existing:
             raise ConflictError(f"基因 slug '{req.slug}' 已存在")

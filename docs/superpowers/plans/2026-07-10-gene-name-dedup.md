@@ -1067,6 +1067,22 @@ Expected: 无报错
 
 ---
 
+### Task 6 补充修复：overwrite 误判"无关行"导致合法覆盖被拒绝（用户线上反馈）
+
+**背景**：Task 6 commit（`6c6e82b`）落地后，用户反馈"点击同意覆盖后，仍然提示同名 skill 已存在，拒绝上传"——原本"检测到同名 → 提示是否覆盖 → 同意后带 `overwrite=true` 重新上传"的交互彻底失效。
+
+**根因**：Step 3 加的无条件早退检查 `if existing_name is not None and existing_name is not existing: raise ConflictError(...)` 漏判了一种合法场景——`existing`（按 slug 命中）为 `None`、仅 `existing_name`（按 name 命中）非空。这在真实场景里很常见：`/genes/upload-folder` 的 slug 是按名称确定性生成的（`_slugify_gene_name`），但若旧记录是通过别的入口（如手动创建、slug 自定义）生成的、slug 规则不同，重新上传覆盖时 slug 查不到旧行，只有 name 能精确命中——这条 `existing_name` 就是唯一需要覆盖的目标，不是"无关行"。旧检查不区分"existing 为 None"和"existing 非 None 但指向不同行"，一律拒绝，导致合法覆盖也被挡下。
+
+**修复**（`gene_service.py:747-763`）：
+- 无关行拒绝条件补上 `existing is not None` 前置：只有 slug 和 name 分别命中两条**不同**且**都存在**的行时才是真正冲突，需要拒绝
+- overwrite 分支软删目标从 `existing`（可能是 None）改为 `existing or existing_name`，恢复"existing 为 None 时软删 existing_name"的原有正确行为
+
+**测试**：新增 `test_create_gene_overwrite_succeeds_when_only_name_hits_no_slug_match`（复现用户反馈场景：旧记录 slug 由手动创建生成，重新上传按名称生成的 slug 对不上，overwrite=True 应成功覆盖），验证前先确认该测试在修复前会失败（复现根因），修复后转绿；`test_create_gene_overwrite_rejects_when_name_hits_unrelated_row`（原有的真无关行拒绝场景）和 `test_create_gene_overwrite_allows_same_name`（slug/name 命中同一行）逐一单独验证仍然通过，确认修复没有削弱原有的误删防护。
+
+**commit**：`fix(backend): 修复 overwrite 误判无关行导致合法覆盖被拒绝`
+
+---
+
 ## 涉及文件总览
 
 | 文件 | 改动类型 |
