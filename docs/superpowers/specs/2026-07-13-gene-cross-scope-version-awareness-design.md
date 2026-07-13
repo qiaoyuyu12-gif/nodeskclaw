@@ -41,6 +41,23 @@ Gene（技能）采用 personal / org_private / public 三向 fork 架构：`for
 - Fork 出来的副本**继承**源的 `lineage_group_id`
 - Variant 是进化出的新技能，语义上不是"同一个技能换了个 scope"，**不继承**父技能的 `lineage_group_id`，用自己的新 id 单独成组
 
+### 用 `content_updated_at` 而非 `updated_at` 判断"内容是否更新"
+
+最初设想直接用 `Gene` 基类自带的 `updated_at` 做新旧判断，验证下来有两个问题：
+
+1. **fork 瞬间会产生假阳性**：fork 出来的新副本 `created_at`/`updated_at` 必然晚于源头，但内容在 fork 那一刻是完全相同的拷贝——如果直接比较，刚 fork 完就会误报"源头有更新版本"。
+2. **`updated_at` 被大量内容无关的字段变更污染**：`updated_at` 配了 `onupdate=func.now()`，而 `install_count`（每次安装 +1）、`avg_rating`（每次评分）、`effectiveness_score`（效果分重算）都是对同一行的原地 `UPDATE`，跟 skill 内容本身毫无关系，却都会顺带把 `updated_at` 刷新，导致角标被大量噪音触发。
+
+因此新增专门字段 `Gene.content_updated_at`，只在内容真正变化时才更新，不设 `onupdate`（避免被无关字段变更自动带动）：
+
+| 路径 | `content_updated_at` 取值 |
+|---|---|
+| `create_gene()` 全新创建 / overwrite 插入新行 | 插入时间（`server_default=func.now()`，与 `created_at` 语义一致） |
+| `fork_gene_to_library()` | **继承 `source.content_updated_at`，不重置为当前时间**——内容是原样拷贝，不算"更新" |
+| `publish_variant()` / `handle_creation_callback()` | 插入时间（不继承，本来就单独成组） |
+| `/admin/genes/{gene_id}` 就地编辑（`update_gene`） | 仅当本次请求实际修改了内容字段（`name`/`description`/`short_description`/`category`/`tags`/`icon`/`version`/`manifest` 任意一个）时，显式置为当前时间；只改 `is_featured`/`is_published` 不触发 |
+| `rate_gene` / 安装计数 / 效果分重算等其他原地 UPDATE | 不触碰 `content_updated_at` |
+
 ---
 
 ## 数据模型
@@ -50,29 +67,28 @@ Gene（技能）采用 personal / org_private / public 三向 fork 架构：`for
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `lineage_group_id` | `String(36)`，索引，非 FK | 分组 key，同一血缘下的三向副本共享同一个值 |
+| `content_updated_at` | `DateTime(timezone=True)`，`server_default=func.now()`，无 `onupdate` | 内容最后一次真正变化的时间，用于版本落后判定 |
 
-不加唯一约束（同组允许多行），加普通索引支持 `WHERE lineage_group_id IN (...)` 批量查询。
+`lineage_group_id` 不加唯一约束（同组允许多行），加普通索引支持 `WHERE lineage_group_id IN (...)` 批量查询。
 
 ### 传播规则（四条会产生 Gene 记录的路径）
 
-| 路径 | `lineage_group_id` 取值 |
-|---|---|
-| `create_gene()` 全新创建（无冲突） | 自己的新 id（构造时 Python 端 `BaseModel.id` 已用 `default=lambda: str(uuid.uuid4())` 生成，构造对象时即可直接引用） |
-| `create_gene()` overwrite 分支 | 继承被软删那一行的 `lineage_group_id`（在调用 `target.soft_delete()` 之前先读出 `target.lineage_group_id`，因为 soft_delete 只置 `deleted_at`，其余字段仍可读，但避免依赖时序，提前读取更清晰） |
-| `fork_gene_to_library()` | 继承 `source.lineage_group_id` |
-| `publish_variant()` / `handle_creation_callback()` | **不继承**，用自己的新 id 单独成组 |
+| 路径 | `lineage_group_id` 取值 | `content_updated_at` 取值 |
+|---|---|---|
+| `create_gene()` 全新创建（无冲突） | 自己的新 id（构造时 Python 端 `BaseModel.id` 已用 `default=lambda: str(uuid.uuid4())` 生成，构造对象时即可直接引用） | 插入时间（server_default） |
+| `create_gene()` overwrite 分支 | 继承被软删那一行的 `lineage_group_id`（在调用 `target.soft_delete()` 之前先读出 `target.lineage_group_id`，因为 soft_delete 只置 `deleted_at`，其余字段仍可读，但避免依赖时序，提前读取更清晰） | 插入时间（server_default，新行=新内容） |
+| `fork_gene_to_library()` | 继承 `source.lineage_group_id` | 继承 `source.content_updated_at` |
+| `publish_variant()` / `handle_creation_callback()` | **不继承**，用自己的新 id 单独成组 | 插入时间（server_default） |
 
-`/admin/genes/{gene_id}` 就地编辑（`PUT`）不创建新行，`lineage_group_id` 不受影响，自然保留。
+`/admin/genes/{gene_id}` 就地编辑（`PUT`）不创建新行，`lineage_group_id` 不受影响；`content_updated_at` 按上一节的规则条件更新。
 
 ### Alembic 迁移
 
-新增列先允许 `NULL`，迁移脚本内用 Python 端并查集（union-find）处理历史数据：
+两个新列先允许 `NULL`，迁移脚本内处理历史数据：
 
-1. 取出所有 Gene 的 `(id, parent_gene_id)`
-2. 沿 `parent_gene_id` 建无向连通分量（一条链无论朝哪个方向 fork 都会被分到同一组；variant 也会被历史数据误连进来——见下方"已知限制"）
-3. 每个连通分量选一个稳定代表值作为该组的 `lineage_group_id`（用分量内最小的 `id` 字符串，保证确定性、可重复运行）
-4. 孤立节点（无 `parent_gene_id` 且没有任何行以它为 `parent_gene_id`）各自成组，`lineage_group_id = 自己的 id`
-5. 批量 `UPDATE`，完成后把列改为 `NOT NULL`
+1. `lineage_group_id`：Python 端并查集（union-find）——取出所有 Gene 的 `(id, parent_gene_id)`，沿 `parent_gene_id` 建无向连通分量（一条链无论朝哪个方向 fork 都会被分到同一组；variant 也会被历史数据误连进来——见下方"已知限制"），每个连通分量选一个稳定代表值作为该组的 `lineage_group_id`（用分量内最小的 `id` 字符串，保证确定性、可重复运行），孤立节点各自成组
+2. `content_updated_at`：历史行没有真实的"内容最后变化时间"可考据，回填为 `created_at`（该行本身的创建时间，是唯一确定可信的下界；这只影响回填那一刻已存在的历史行，之后所有变更严格按上表规则维护，不影响新产生的数据）
+3. 批量 `UPDATE`，完成后把两列都改为 `NOT NULL`
 
 **已知限制**：由于当前 `parent_gene_id` 混用于 fork 和 variant 两种语义，历史数据回填时无法百分百区分"这条 parent_gene_id 链是三向 fork 还是 AI 进化出的 variant"——回填会保守地把两者都视为同一分量处理（历史数据里两者混在一起，无法事后精确拆分）。这只影响**回填那一刻已存在的历史行**；回填完成之后，新产生的数据严格按上表的传播规则处理，variant 和 fork 走向分离。回填前会跑一次统计（有多少历史行的 `parent_gene_id` 链同时包含 fork 产物和 variant 产物），如果数量很小可以接受，数量大再考虑单独处理。
 
@@ -80,13 +96,11 @@ Gene（技能）采用 personal / org_private / public 三向 fork 架构：`for
 
 ## 版本落后检测
 
-### 判定信号：`updated_at`
-
-`Gene` 基类的 `updated_at` 在 `create_gene()` 覆盖（新建行）和 `/admin/genes/{id}` 就地编辑（`onupdate=func.now()`）两种更新路径下都会被正确刷新，统一用它判断"是否有更晚的版本"，不需要额外维护版本号或内容 hash。
+### 判定信号：`content_updated_at`（不是 `updated_at`，理由见上方"用 content_updated_at 而非 updated_at"）
 
 ### 判定逻辑
 
-Gene G 判定为"落后"，当且仅当：存在一条与 G 同 `lineage_group_id`、未软删、且**对当前登录用户可见**的兄弟 S，满足 `S.updated_at > G.updated_at`。
+Gene G 判定为"落后"，当且仅当：存在一条与 G 同 `lineage_group_id`、未软删、且**对当前登录用户可见**的兄弟 S，满足 `S.content_updated_at > G.content_updated_at`。
 
 "可见"复用现有权限模型：
 - `visibility = public` → 任何登录用户可见
@@ -100,10 +114,10 @@ Gene G 判定为"落后"，当且仅当：存在一条与 G 同 `lineage_group_i
 拿到一页 Gene 后：
 
 1. 收集本页所有 `lineage_group_id`
-2. 一次查询：`SELECT lineage_group_id, visibility, org_id, MAX(updated_at) FROM genes WHERE lineage_group_id IN (...) AND deleted_at IS NULL AND <可见性过滤> GROUP BY lineage_group_id, visibility, org_id`（`org_private` 的可见性过滤限定在当前用户所在的组织 id 集合内，即使用户在多个组织，也只会聚合出用户实际有权限看到的那几个组织的副本）
+2. 一次查询：`SELECT lineage_group_id, visibility, org_id, MAX(content_updated_at) FROM genes WHERE lineage_group_id IN (...) AND deleted_at IS NULL AND <可见性过滤> GROUP BY lineage_group_id, visibility, org_id`（`org_private` 的可见性过滤限定在当前用户所在的组织 id 集合内，即使用户在多个组织，也只会聚合出用户实际有权限看到的那几个组织的副本）
 3. 若结果里出现 `org_private` 分组，批量查一次涉及到的 `org_id` 对应的组织名（`Organization` 表），用于展示
-4. 内存中按 `lineage_group_id` 聚合出"每个 (visibility, org_id) 组合各自的最新 `updated_at`"
-5. 逐条比较：某条 Gene 的落后列表 = 上述结果里，`updated_at` 比它新、且 `(visibility, org_id)` 不是它自己的那些条目
+4. 内存中按 `lineage_group_id` 聚合出"每个 (visibility, org_id) 组合各自最新的 `content_updated_at`"
+5. 逐条比较：某条 Gene 的落后列表 = 上述结果里，`content_updated_at` 比它新、且 `(visibility, org_id)` 不是它自己的那些条目
 
 ### API 输出
 
@@ -111,10 +125,10 @@ Gene 序列化字段（`_gene_to_dict`）新增只读字段 `newer_sibling_versi
 
 ```json
 "newer_sibling_versions": [
-  {"visibility": "personal", "org_id": null, "org_name": null, "updated_at": "2026-07-12T10:00:00Z"},
-  {"visibility": "org_private", "org_id": "org-a-id", "org_name": "研发部", "updated_at": "2026-07-13T08:00:00Z"},
-  {"visibility": "org_private", "org_id": "org-b-id", "org_name": "市场部", "updated_at": "2026-07-11T09:00:00Z"},
-  {"visibility": "public", "org_id": null, "org_name": null, "updated_at": "2026-07-10T12:00:00Z"}
+  {"visibility": "personal", "org_id": null, "org_name": null, "content_updated_at": "2026-07-12T10:00:00Z"},
+  {"visibility": "org_private", "org_id": "org-a-id", "org_name": "研发部", "content_updated_at": "2026-07-13T08:00:00Z"},
+  {"visibility": "org_private", "org_id": "org-b-id", "org_name": "市场部", "content_updated_at": "2026-07-11T09:00:00Z"},
+  {"visibility": "public", "org_id": null, "org_name": null, "content_updated_at": "2026-07-10T12:00:00Z"}
 ]
 ```
 
@@ -122,13 +136,24 @@ Gene 序列化字段（`_gene_to_dict`）新增只读字段 `newer_sibling_versi
 
 前端拿到这个字段后按 `visibility`/`org_name` 拼文案（如"研发部有更新版本"、"公共市场有更新版本"，同一 Gene 可能同时对应多条），本次不规定具体 UI 文案/组件实现细节，由前端按现有卡片角标样式风格实现（图标走 `lucide-vue-next`，不用 emoji）。
 
+### 场景验证
+
+用户提出的场景：A 上传技能到个人库 → fork 到组织 X → 组织 X 的另一个成员 B 把这份技能 fork 到自己的个人库并修改后重新上传。
+
+- A 的个人副本、组织 X 副本：`content_updated_at` 都是 A 上传那一刻的值（fork 到组织 X 时继承，没人改过内容）——A 无论看自己的个人库还是组织 X 库，两边一致，**无提示**
+- B 修改后新建的个人副本：`content_updated_at` 刷新为 B 修改的时间，但这一行 `visibility=personal, created_by=B`，只在 B 自己的可见范围内——A 看不到这一行，不受影响
+- B 自己查看组织 X 的副本时，B 可见范围内包含"自己的个人库"（比组织 X 新）——B 会看到"个人库有更新"提示，符合预期
+
 ---
 
 ## 测试计划
 
-- **传播规则**：`create_gene` 全新创建独立成组；`create_gene` overwrite 继承旧组（含"existing 为 None 只有 existing_name 命中"的分支，与近期修复的 overwrite bug 场景一致）；`fork_gene_to_library` 继承源组；`publish_variant` / `handle_creation_callback` 不继承、独立成组
-- **落后检测**：三 scope 血缘齐全时，任一 scope 更新后其余两个正确标记；只有部分 scope 存在血缘副本时不误报；`personal` scope 的副本不会因为"同组但属于别的用户"的行而误判可见性；**同一血缘在用户所在的多个组织里各自独立 fork** 时，`newer_sibling_versions` 按 `org_id` 分开列出各自的 `updated_at`，用户不是成员的组织的副本即使同血缘也不出现在结果里
-- **迁移回填**：构造链式（personal→org→public 单向 fork）、多分支（一条 public 被 fork 到两个不同 org）、孤立三种历史数据形状，验证并查集分组结果符合预期且迁移可重复运行（幂等）
+- **传播规则**：`create_gene` 全新创建独立成组、`content_updated_at` = 插入时间；`create_gene` overwrite 继承旧组、`content_updated_at` 刷新为插入时间（含"existing 为 None 只有 existing_name 命中"的分支，与近期修复的 overwrite bug 场景一致）；`fork_gene_to_library` 继承源组**且继承 `content_updated_at`（不重置）**；`publish_variant` / `handle_creation_callback` 不继承、独立成组
+- **fork 不产生假阳性**：fork 完成的瞬间，新副本与源头的 `content_updated_at` 相同，`newer_sibling_versions` 应为空（覆盖用户描述的场景，验证"刚 fork 完不会误报"）
+- **`update_gene` 按字段选择性刷新**：只改 `is_featured`/`is_published` 不刷新 `content_updated_at`；改 `name`/`manifest` 等内容字段才刷新
+- **`content_updated_at` 不受无关字段污染**：`rate_gene`、`install_gene`（`install_count += 1`）、效果分重算等操作后，`content_updated_at` 保持不变
+- **落后检测**：三 scope 血缘齐全时，任一 scope 更新后其余两个正确标记；只有部分 scope 存在血缘副本时不误报；`personal` scope 的副本不会因为"同组但属于别的用户"的行而误判可见性；**同一血缘在用户所在的多个组织里各自独立 fork** 时，`newer_sibling_versions` 按 `org_id` 分开列出各自的 `content_updated_at`，用户不是成员的组织的副本即使同血缘也不出现在结果里
+- **迁移回填**：构造链式（personal→org→public 单向 fork）、多分支（一条 public 被 fork 到两个不同 org）、孤立三种历史数据形状，验证并查集分组结果符合预期且迁移可重复运行（幂等）；`content_updated_at` 回填为各行 `created_at`
 
 ## 不在本次范围内
 
@@ -143,9 +168,9 @@ Gene 序列化字段（`_gene_to_dict`）新增只读字段 `newer_sibling_versi
 
 | 层 | 文件 | 变更类型 |
 |---|---|---|
-| DB | `nodeskclaw-backend/app/models/gene.py` | 新增 `lineage_group_id` 字段 + 索引 |
-| DB | `nodeskclaw-backend/alembic/versions/<new>.py` | 新增迁移（含并查集回填脚本） |
-| Service | `nodeskclaw-backend/app/services/gene_service.py` | `create_gene` / `fork_gene_to_library` / `publish_variant` / `handle_creation_callback` 传播 `lineage_group_id`；新增按 `(visibility, org_id)` 分组的落后检测批量查询（含组织名批量查询）；`_gene_to_dict` / `_list_genes_local` 接入 `newer_sibling_versions` |
+| DB | `nodeskclaw-backend/app/models/gene.py` | 新增 `lineage_group_id`、`content_updated_at` 字段 + 索引 |
+| DB | `nodeskclaw-backend/alembic/versions/<new>.py` | 新增迁移（含并查集回填 `lineage_group_id` + `content_updated_at` 回填脚本） |
+| Service | `nodeskclaw-backend/app/services/gene_service.py` | `create_gene` / `fork_gene_to_library` / `publish_variant` / `handle_creation_callback` 传播 `lineage_group_id` + `content_updated_at`；`update_gene` 按字段选择性刷新 `content_updated_at`；新增按 `(visibility, org_id)` 分组的落后检测批量查询（含组织名批量查询）；`_gene_to_dict` / `_list_genes_local` 接入 `newer_sibling_versions` |
 | Test | `nodeskclaw-backend/tests/test_gene_lineage_version_awareness.py`（新建） | 传播规则 + 落后检测测试（含多组织场景） |
 | Test | 迁移脚本对应测试 | 并查集回填正确性 |
 | 前端 | `nodeskclaw-portal/src/views/GeneMarket.vue` 等技能列表卡片 | 读取 `newer_sibling_versions`，按组织名/scope 展示角标（具体 UI 落地时再定） |
