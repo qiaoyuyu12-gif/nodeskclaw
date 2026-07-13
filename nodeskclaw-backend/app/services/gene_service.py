@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Coroutine
 from urllib.parse import urlencode
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +34,7 @@ from app.models.gene import (
     InstanceGeneStatus,
 )
 from app.models.instance import Instance, InstanceStatus
+from app.models.org_required_gene import OrgRequiredGene
 from app.models.workspace_agent import WorkspaceAgent
 from app.schemas.gene import (
     CoInstallPair,
@@ -726,6 +727,30 @@ async def get_gene_by_name_in_scope(
     return result.scalars().first()
 
 
+async def _rewire_gene_references(db: AsyncSession, old_gene_id: str, new_gene_id: str) -> None:
+    """覆盖上传软删旧 Gene、插入新 id 新行后，把指向旧行的"当前生效状态"引用
+
+    批量改指向新行，避免旧行被软删之后，已安装该技能的实例、已强制要求该
+    技能的组织，因为 join 时过滤 `Gene.deleted_at IS NULL` 而把这些记录
+    "丢"掉（`get_instance_genes()` / 组织强制技能列表等场景）。
+
+    只重接 InstanceGene（已装技能）、OrgRequiredGene（组织强制要求技能）
+    这两类"当前生效状态"引用，不改 GeneRating / GeneEffectLog 等历史记录——
+    那些是针对当时具体内容给出的评分/效果数据，不该被静默转嫁到新内容上。
+    """
+    await db.execute(
+        update(InstanceGene)
+        .where(InstanceGene.gene_id == old_gene_id, not_deleted(InstanceGene))
+        .values(gene_id=new_gene_id)
+    )
+    await db.execute(
+        update(OrgRequiredGene)
+        .where(OrgRequiredGene.gene_id == old_gene_id, not_deleted(OrgRequiredGene))
+        .values(gene_id=new_gene_id)
+    )
+    await db.commit()
+
+
 async def create_gene(
     db: AsyncSession, req: GeneCreateRequest, user_id: str | None = None, org_id: str | None = None,
     visibility: str | None = None,
@@ -755,6 +780,7 @@ async def create_gene(
         # 出现"slug 查不到、但 name 精确命中旧记录"的情况——这里 existing_name
         # 就是唯一需要覆盖的目标，不是无关行，必须走下面的覆盖逻辑。
         raise ConflictError(f"技能名称 '{req.name}' 已存在")
+    old_gene_id: str | None = None
     if existing or existing_name:
         if req.overwrite:
             # 覆盖模式：existing 和 existing_name 此时要么是同一行，要么只有
@@ -762,6 +788,9 @@ async def create_gene(
             # 软删这一行即可，不会误删无关记录。
             target = existing or existing_name
             if target:
+                # 覆盖会软删旧行、插入一条全新 id 的新行，已安装/已被组织
+                # 强制要求的记录引用的是旧 id，先记下来，插入新行后重接。
+                old_gene_id = target.id
                 target.soft_delete()
             await db.commit()
         elif existing:
@@ -804,6 +833,10 @@ async def create_gene(
         await db.rollback()
         raise ConflictError(f"基因 slug '{req.slug}' 或名称 '{req.name}' 已存在") from e
     await db.refresh(gene)
+
+    if old_gene_id is not None:
+        await _rewire_gene_references(db, old_gene_id, gene.id)
+
     return _gene_to_dict(gene)
 
 
