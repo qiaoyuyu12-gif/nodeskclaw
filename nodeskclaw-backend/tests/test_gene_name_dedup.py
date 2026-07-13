@@ -3,8 +3,9 @@
 背景：genes 表原本只有 (slug, org_id) 唯一约束，name 完全没有唯一性校验，
 导致同一 scope 下可以出现多个同名但 slug 不同的技能。本文件覆盖：
   - get_gene_by_name_in_scope 按 scope 精确查重
-  - create_gene 接入 name 查重（含 overwrite 场景）
+  - create_gene 接入 name 查重（含 overwrite 场景、overwrite 误删无关行的修复）
   - fork_gene_to_library 接入 name 查重
+  - publish_variant / handle_creation_callback 接入 name 查重（均默认落 public scope）
   - 并发竞态下 IntegrityError 被正确转换成 ConflictError
 
 用真实 PostgreSQL 测试库（与 test_org_member_soft_delete.py 一致的模式），
@@ -20,10 +21,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.exceptions import ConflictError
+from app.models.cluster import Cluster
+from app.models.gene import Gene, InstanceGene
+from app.models.instance import Instance
 from app.models.organization import Organization
 from app.models.user import User
-from app.schemas.gene import GeneCreateRequest
-from app.services.gene_service import create_gene, get_gene_by_name_in_scope
+from app.schemas.gene import GeneCreateRequest, LearningCallbackPayload
+from app.services.gene_service import (
+    create_gene,
+    get_gene_by_name_in_scope,
+    handle_creation_callback,
+    publish_variant,
+)
 
 TEST_DATABASE_URL = "postgresql+asyncpg://nodeskclaw:nodeskclaw123@localhost:5432/nodeskclaw_rbac_test"
 engine = create_async_engine(TEST_DATABASE_URL, echo=False)
@@ -191,3 +200,168 @@ async def test_create_gene_integrity_error_on_commit_becomes_conflict_error(requ
                 db, _minimal_req("竞态助手", "race-bot", visibility="personal"),
                 user_id=user.id, org_id=None, visibility="personal",
             )
+
+
+@pytest.mark.asyncio
+async def test_create_gene_overwrite_rejects_when_name_hits_unrelated_row(require_test_db):
+    """overwrite 分支修复验证：slug 命中行 A、name 命中另一条完全无关的行 B 时，
+
+    即使 overwrite=True 也应该直接 ConflictError，而不能把 B 也顺带软删——
+    覆盖的语义只是"允许覆盖 slug 命中的那一条"，不是"允许清空所有名字冲突"。
+    """
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+
+        # 行 A：本次覆盖请求的 slug 命中目标
+        await create_gene(
+            db, _minimal_req("原名助手", "row-a", visibility="personal"),
+            user_id=user.id, org_id=None, visibility="personal",
+        )
+        # 行 B：与本次请求的 name 撞车，但 slug 完全不同，与覆盖目标无关
+        await create_gene(
+            db, _minimal_req("撞车助手", "row-b", visibility="personal"),
+            user_id=user.id, org_id=None, visibility="personal",
+        )
+
+        with pytest.raises(ConflictError):
+            await create_gene(
+                db, _minimal_req("撞车助手", "row-a", visibility="personal", overwrite=True),
+                user_id=user.id, org_id=None, visibility="personal",
+            )
+
+        # 行 B 没有被误删：按 name 查重仍能命中该行（未软删）
+        still_there = await get_gene_by_name_in_scope(
+            db, "撞车助手", visibility="personal", created_by=user.id,
+        )
+        assert still_there is not None
+
+
+async def _create_instance(db: AsyncSession, user: User) -> Instance:
+    """构造 publish_variant / handle_creation_callback 测试所需的最小可用 Instance。
+
+    两个函数都只依赖 instance_id 做外键校验和日志记录，不依赖 Instance 的业务
+    字段，因此这里只填满 DB 层非空约束要求的最小字段集。
+    """
+    cluster = Cluster(id=_uid("cluster"), name="Cluster", created_by=user.id)
+    instance = Instance(
+        id=_uid("inst"),
+        name="Agent",
+        slug=_uid("agent"),
+        cluster_id=cluster.id,
+        namespace="default",
+        image_version="latest",
+        created_by=user.id,
+    )
+    db.add_all([cluster, instance])
+    await db.commit()
+    return instance
+
+
+@pytest.mark.asyncio
+async def test_publish_variant_rejects_duplicate_name_in_public_scope(require_test_db):
+    """publish_variant 插入的变体未显式传 visibility，落在默认 public scope，
+
+    若目标名称与 public scope 内已有的技能重名，应直接 ConflictError，
+    而不是静默创建出一条重名记录（Task 6 Step 1 补齐的遗漏入口）。
+    """
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+        instance = await _create_instance(db, user)
+
+        # 已存在的公共基因，占用了即将发布的变体名称
+        occupied_name = f"进化助手-{_uid('n')}"
+        existing_public = Gene(name=occupied_name, slug=_uid("existing-public"))
+        db.add(existing_public)
+        await db.commit()
+
+        # 待发布变体所属的父基因
+        parent = Gene(name=f"原始助手-{_uid('n')}", slug=_uid("parent-skill"))
+        db.add(parent)
+        await db.commit()
+
+        ig = InstanceGene(
+            instance_id=instance.id,
+            gene_id=parent.id,
+            learning_output="一些深度学习产出的经验内容",
+        )
+        db.add(ig)
+        await db.commit()
+
+        with pytest.raises(ConflictError):
+            await publish_variant(
+                db, instance.id, parent.id, variant_name=occupied_name,
+            )
+
+
+@pytest.mark.asyncio
+async def test_creation_callback_rejects_duplicate_name_in_public_scope(require_test_db):
+    """handle_creation_callback 插入的 gene 同样未显式传 visibility，落在默认
+
+    public scope，命中已有同名技能时应直接 ConflictError（Task 6 Step 2
+    补齐的遗漏入口）。
+    """
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+        instance = await _create_instance(db, user)
+
+        occupied_name = f"智能助理-{_uid('n')}"
+        existing_public = Gene(name=occupied_name, slug=_uid("existing-public"))
+        db.add(existing_public)
+        await db.commit()
+
+        payload = LearningCallbackPayload(
+            task_id=_uid("task"),
+            instance_id=instance.id,
+            mode="create",
+            decision="created",
+            content="正文内容",
+            meta={
+                "gene_name": occupied_name,
+                "gene_slug": _uid("new-gene-slug"),
+                "gene_description": "一段用于满足元数据校验的描述",
+            },
+        )
+
+        with pytest.raises(ConflictError):
+            await handle_creation_callback(db, payload)
+
+
+@pytest.mark.asyncio
+async def test_publish_variant_integrity_error_on_commit_becomes_conflict_error(require_test_db, monkeypatch):
+    """模拟并发竞态：publish_variant 的名称预检查通过后，commit 阶段才因唯一
+
+    索引冲突而失败，验证 Task 6 Step 1 补齐的 IntegrityError 兜底生效
+    （对比 create_gene 已有的同类竞态测试）。
+    """
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+        instance = await _create_instance(db, user)
+
+        parent = Gene(name=f"原始助手-{_uid('n')}", slug=_uid("parent-skill"))
+        db.add(parent)
+        await db.commit()
+
+        ig = InstanceGene(
+            instance_id=instance.id,
+            gene_id=parent.id,
+            learning_output="一些深度学习产出的经验内容",
+        )
+        db.add(ig)
+        await db.commit()
+
+        async def _boom():
+            from sqlalchemy.exc import IntegrityError
+            raise IntegrityError("INSERT", {}, Exception("uq_genes_name_public_active"))
+
+        monkeypatch.setattr(db, "commit", _boom)
+
+        with pytest.raises(ConflictError):
+            await publish_variant(db, instance.id, parent.id)

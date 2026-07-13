@@ -1023,6 +1023,50 @@ Expected: 无报错
 
 ---
 
+### Task 6: 补齐遗漏入口 + 修复覆盖误删（Task 5 整体 review 发现）
+
+**Files:** `nodeskclaw-backend/app/services/gene_service.py`, `nodeskclaw-backend/tests/test_gene_name_dedup.py`
+
+背景：Task 5 后对整个分支做了一次跨任务整体 review，发现 3 处遗漏：
+
+- [x] **Step 1（Critical）：`publish_variant` 接入名称查重 + IntegrityError 兜底**
+
+`publish_variant`（`gene_service.py:2178`）里 `Gene(...)` 插入未显式传 `visibility`，落在默认的 `public` scope。在 `variant = Gene(...)` 之前，对 `name` 做 `get_gene_by_name_in_scope(db, name, visibility=ContentVisibility.public)` 查重，命中则 `raise ConflictError(f"技能名称 '{name}' 已存在")`；`await db.commit()`（约第 2250 行）包 `try/except IntegrityError`，转 `ConflictError`，模式与 `create_gene()` 第 788-794 行一致。
+
+- [x] **Step 2（Critical）：`handle_creation_callback` 接入名称查重 + IntegrityError 兜底**
+
+`handle_creation_callback`（`gene_service.py:2306`）同样默认落 `public` scope。在 `gene = Gene(...)` 之前对 `meta.get("gene_name", ...)` 算出的最终 name 做同样查重+拒绝；`await db.commit()`（约第 2350 行）同样包 `try/except IntegrityError`。
+
+- [x] **Step 3（Important）：修复 `create_gene` overwrite 分支误删无关行**
+
+`gene_service.py:747-755`：当前 `existing`（按 slug 命中）和 `existing_name`（按 name 命中）为两条不同行时，`overwrite=True` 会把两条都软删——设计文档原意只是"跳过检查、复用 slug 覆盖逻辑"，不是主动删除一条不相关的记录。改为：`overwrite=True` 且 `existing_name is not None and existing_name is not existing` 时，仍然 `raise ConflictError`（覆盖的是 slug 命中的那条，不能顺带覆盖掉一条名字撞车但完全无关的记录）。
+
+实现细节偏差（评审确认可接受）：这条检查落地时写成了对 `existing_name is not existing` 的无条件早退（不再嵌在 `if req.overwrite:` 分支内）。影响仅限一个未被计划文字覆盖、也未被测试覆盖的边界场景——`overwrite=False` 且 slug 命中行 A、name 命中另一条无关行 B 时，报错文案从"slug 已存在"变成"名称已存在"，两者都是 `ConflictError`，请求仍会被拒绝，无功能性影响。
+
+- [x] **Step 4（Important）：`fork_gene_to_library` 补 IntegrityError 兜底**
+
+`gene_service.py:3627` 附近的 `await db.commit()` 包 `try/except IntegrityError`，转 `ConflictError`，与 Task 2.5 的预检查搭配形成完整防护，模式对齐 `create_gene()`。
+
+- [x] **Step 5：补测试**
+
+`tests/test_gene_name_dedup.py` 新增：
+  - `test_publish_variant_rejects_duplicate_name_in_public_scope`
+  - `test_creation_callback_rejects_duplicate_name_in_public_scope`
+  - `test_create_gene_overwrite_rejects_when_name_hits_unrelated_row`（slug 命中行 A，name 命中另一行 B，overwrite=True 时应 ConflictError 且 B 不被软删）
+  - `test_publish_variant_integrity_error_on_commit_becomes_conflict_error`（补充：code-quality review 发现 Step 1/2/4 新增的 IntegrityError 兜底分支本身完全没有测试覆盖，补一个 monkeypatch db.commit 的竞态测试，模式对齐 `create_gene` 已有的同类测试）
+
+验证过程中发现并修复一处测试自身的 bug：`test_publish_variant_rejects_duplicate_name_in_public_scope` 里构造的 `parent` Gene 用了硬编码的 `name="原始助手"`（public scope 全局唯一），在被中断的历史测试进程留下脏数据、或与本次新增的竞态测试并行跑时会撞车报错。已改为 `f"原始助手-{_uid('n')}"` 随机化，两处硬编码同步修复。
+
+- [x] **Step 6：跑测试 + `ruff check`，确认无回归**
+
+`ruff check` 两个改动文件全部通过；4 个新增/修改测试逐一单独运行全部 PASSED；`test_gene_target_fork_review.py` 32/32 通过。批量跑 `test_gene_name_dedup.py` 全部用例时仍会触发 Task 5 已记录的、与本分支无关的 pytest-asyncio 双引擎事件循环 flaky（`attached to a different loop`），已在 Task 5 验证过在无关的既存文件上同样复现，不属于本次改动引入的问题。
+
+- [x] **Step 7：commit**
+
+`fix(backend): 补齐 Gene 名称查重遗漏入口，修复 overwrite 误删无关行`
+
+---
+
 ## 涉及文件总览
 
 | 文件 | 改动类型 |

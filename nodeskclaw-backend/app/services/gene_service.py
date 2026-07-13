@@ -744,14 +744,17 @@ async def create_gene(
     existing_name = await get_gene_by_name_in_scope(
         db, req.name, visibility=resolved_visibility, org_id=org_id, created_by=user_id,
     )
+    if existing_name is not None and existing_name is not existing:
+        # name 命中的是另一条与本次覆盖目标无关的行：overwrite 的语义只是
+        # "允许覆盖 slug 命中的那一条"，不能顺带删掉一条名字撞车但完全无关
+        # 的记录，因此这里即使 overwrite=True 也直接拒绝。
+        raise ConflictError(f"技能名称 '{req.name}' 已存在")
     if existing or existing_name:
         if req.overwrite:
-            # 覆盖模式：软删除该 scope 内命中的旧基因（slug 和 name 命中的可能是
-            # 同一行，也可能是两行，两个都要软删，避免插入新行时任一唯一索引冲突）
+            # 覆盖模式：existing 与 existing_name 此时必为同一行（或
+            # existing_name 为 None），软删该行即可，不会误删无关记录。
             if existing:
                 existing.soft_delete()
-            if existing_name and existing_name is not existing:
-                existing_name.soft_delete()
             await db.commit()
         elif existing:
             raise ConflictError(f"基因 slug '{req.slug}' 已存在")
@@ -2221,6 +2224,15 @@ async def publish_variant(
     variant_desc = f"AI 员工 {agent_display} 基于 {parent.name} 的进化版本"
     _validate_skill_metadata(manifest, parent.short_description, variant_desc)
 
+    # 名称查重：下面插入的 variant 未显式传 visibility，落在模型默认的 public
+    # scope，因此按 public scope 校验 name 是否已存在，与 create_gene() 的
+    # 查重语义保持一致，命中直接拒绝，不静默改名。
+    existing_name = await get_gene_by_name_in_scope(
+        db, name, visibility=ContentVisibility.public,
+    )
+    if existing_name is not None:
+        raise ConflictError(f"技能名称 '{name}' 已存在")
+
     variant = Gene(
         name=name,
         slug=slug,
@@ -2247,7 +2259,13 @@ async def publish_variant(
         gene_slug=parent.slug, gene_id=gene_id,
         details={"variant_gene_id": variant.id, "variant_slug": slug},
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        # 极小概率竞态：预检查通过后，另一请求在 commit 之前抢先插入了同名
+        # 变体。DB 唯一索引在此兜底，统一转换成 ConflictError。
+        await db.rollback()
+        raise ConflictError(f"技能名称 '{name}' 已存在") from e
     await db.refresh(variant)
 
     ws_ids = await _get_instance_workspace_ids(db, instance_id) if instance else []
@@ -2331,8 +2349,18 @@ async def handle_creation_callback(
 
     _validate_skill_metadata(gene_manifest, gene_short_desc, gene_desc or None)
 
+    gene_name = meta.get("gene_name", f"agent-gene-{payload.task_id[:8]}")
+
+    # 名称查重：下面插入的 gene 未显式传 visibility，落在模型默认的 public
+    # scope，因此按 public scope 校验 name 是否已存在，命中直接拒绝。
+    existing_name = await get_gene_by_name_in_scope(
+        db, gene_name, visibility=ContentVisibility.public,
+    )
+    if existing_name is not None:
+        raise ConflictError(f"技能名称 '{gene_name}' 已存在")
+
     gene = Gene(
-        name=meta.get("gene_name", f"agent-gene-{payload.task_id[:8]}"),
+        name=gene_name,
         slug=meta.get("gene_slug", f"agent-gene-{payload.task_id[:8]}"),
         description=gene_desc,
         short_description=gene_short_desc,
@@ -2347,7 +2375,13 @@ async def handle_creation_callback(
         review_status=GeneReviewStatus.pending_owner,
     )
     db.add(gene)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        # 极小概率竞态：预检查通过后，另一请求在 commit 之前抢先插入了同名
+        # 基因。DB 唯一索引在此兜底，统一转换成 ConflictError。
+        await db.rollback()
+        raise ConflictError(f"技能名称 '{gene_name}' 已存在") from e
     await db.refresh(gene)
 
     ws_ids = await _get_instance_workspace_ids(db, payload.instance_id) if instance else []
@@ -3624,7 +3658,14 @@ async def fork_gene_to_library(
         source_registry="local",
     )
     db.add(fork)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        # 极小概率竞态：上面的 name/slug 预检查通过后，另一请求在 commit 之前
+        # 抢先插入了同名/同 slug 的记录。DB 唯一索引在此兜底，统一转换成
+        # ConflictError，模式与 create_gene() 保持一致。
+        await db.rollback()
+        raise ConflictError(f"基因 slug '{new_slug}' 或名称 '{source_name}' 已存在") from e
     await db.refresh(fork)
     return _gene_to_dict(fork)
 
