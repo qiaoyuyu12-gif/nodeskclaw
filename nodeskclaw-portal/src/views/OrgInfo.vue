@@ -6,7 +6,7 @@ import { useClusterStore } from '@/stores/cluster'
 import { useToast } from '@/composables/useToast'
 import { useEdition, useFeature } from '@/composables/useFeature'
 import { resolveApiErrorMessage } from '@/i18n/error'
-import { Pencil, Check, X, Loader2, Box, Cpu, HardDrive, Database, Server, GitBranch } from 'lucide-vue-next'
+import { Pencil, Check, X, Loader2, Box, Cpu, HardDrive, Database, Server, GitBranch, ArrowRightLeft } from 'lucide-vue-next'
 
 const { t } = useI18n()
 const orgStore = useOrgStore()
@@ -14,6 +14,7 @@ const clusterStore = useClusterStore()
 const toast = useToast()
 const { isEE } = useEdition()
 const { isEnabled: hasBilling } = useFeature('billing')
+const { isEnabled: hasMultiOrg } = useFeature('multi_org')
 
 const hasCluster = computed(() => clusterStore.clusters.length > 0)
 const loading = ref(true)
@@ -23,6 +24,25 @@ const editName = ref('')
 
 const editDepth = ref(3)
 const savingDepth = ref(false)
+
+const selectedOrgId = ref('')
+const switchingOrg = ref(false)
+const canSwitchOrg = computed(() =>
+  !!selectedOrgId.value && selectedOrgId.value !== orgStore.currentOrg?.id,
+)
+
+async function switchOrg() {
+  if (!canSwitchOrg.value) return
+  switchingOrg.value = true
+  try {
+    await orgStore.switchOrg(selectedOrgId.value)
+    toast.success(t('orgSettings.switchOrgSuccess'))
+    window.location.reload()
+  } catch (e: unknown) {
+    toast.error(resolveApiErrorMessage(e, t('orgSettings.switchOrgFailed')))
+    switchingOrg.value = false
+  }
+}
 
 function startEdit() {
   editName.value = orgStore.currentOrg?.name ?? ''
@@ -156,14 +176,19 @@ const storagePercent = computed(() => {
 })
 
 onMounted(async () => {
-  await Promise.all([
+  const tasks = [
     orgStore.fetchCurrentOrg(),
     clusterStore.fetchClusters(),
-  ])
+  ]
+  if (hasMultiOrg.value) {
+    tasks.push(orgStore.fetchMyOrg())
+  }
+  await Promise.all(tasks)
   if (hasBilling.value && hasCluster.value) {
     await orgStore.fetchUsage()
   }
   editDepth.value = orgStore.currentOrg?.max_collaboration_depth ?? 3
+  selectedOrgId.value = orgStore.currentOrg?.id ?? ''
   loading.value = false
 })
 </script>
@@ -218,6 +243,30 @@ onMounted(async () => {
             </button>
           </template>
         </div>
+
+        <template v-if="hasMultiOrg">
+          <span class="text-muted-foreground">{{ t('orgSettings.switchOrgLabel') }}</span>
+          <div class="flex items-center gap-2">
+            <select
+              v-model="selectedOrgId"
+              class="h-8 px-2 rounded-md border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              :disabled="switchingOrg"
+            >
+              <option v-for="org in orgStore.myOrgs" :key="org.id" :value="org.id">
+                {{ org.name || t('orgSettings.noOrgFallback') }}
+              </option>
+            </select>
+            <button
+              class="h-8 px-3 inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+              :disabled="!canSwitchOrg || switchingOrg"
+              @click="switchOrg"
+            >
+              <Loader2 v-if="switchingOrg" class="w-3.5 h-3.5 animate-spin" />
+              <ArrowRightLeft v-else class="w-3.5 h-3.5" />
+              {{ t('orgSettings.switchOrgButton') }}
+            </button>
+          </div>
+        </template>
 
         <span class="text-muted-foreground">{{ t('orgSettings.orgSlug') }}</span>
         <span

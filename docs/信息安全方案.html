@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>DeskClaw 信息安全方案</title>
+<style>
+  /* 全局重置与基础排版 */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: #f5f6f8;
+    padding: 40px 48px;
+    color: #1f2430;
+  }
+  h1 { font-size: 24px; font-weight: 700; margin-bottom: 20px; }
+
+  /* 表格样式：左侧窄标签列 + 右侧编号说明列，还原参考图的单行表格风格 */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    font-size: 13.5px;
+  }
+  td, th {
+    border: 1px solid #333;
+    padding: 14px 16px;
+    vertical-align: middle;
+    line-height: 1.9;
+  }
+  .label-cell {
+    width: 120px;
+    font-weight: 700;
+    text-align: center;
+    background: #fafafa;
+  }
+  .content-cell p { margin-bottom: 10px; }
+  .content-cell p:last-child { margin-bottom: 0; }
+  .content-cell b { font-weight: 700; }
+
+  /* 底部补充说明：如实标注尚未落地/待补齐的项，不夸大现状 */
+  .gap-note {
+    margin-top: 18px;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 6px;
+    padding: 14px 18px;
+    font-size: 12.5px;
+    line-height: 1.8;
+    color: #7c2d12;
+  }
+  .gap-note b { display: block; margin-bottom: 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>DeskClaw 信息安全方案</h1>
+
+<table>
+  <tr>
+    <td class="label-cell">信息安全方案</td>
+    <td class="content-cell">
+      <p><b>1. 代码规范：</b>静态检查通过 ruff 强制执行（<code>pyproject.toml</code> 配置 E/F/I/N/W/UP 规则集），CI 流水线（<code>.github/workflows/quality-gate.yml</code>）在合并前自动执行 <code>ruff check</code> 与 <code>pytest</code>，未通过则阻断合并；涉及权限/审计等安全相关变更需先产出 RFC 设计文档评审（如 <code>docs/rfcs/0001-rbac-phase1.md</code>）再实施。</p>
+      <p><b>2. 权限安全：</b>严格遵循"最小权限原则"，基于 RBAC 模型实现细粒度访问控制——内置 9 种角色，划分 platform / org / workspace / instance 四级 scope（<code>app/models/rbac/role.py</code>），通过 <code>require_perms</code> 装饰器在 API 层强制校验（<code>app/core/rbac/decorators.py</code>）；人类用户走 JWT 鉴权（<code>get_current_user</code>），AI 员工走 <code>proxy_token</code>（<code>get_current_user_or_agent</code>），两类身份权限边界隔离。所有权限决策与操作行为分别记录于 <code>permission_audit_log</code> 与 <code>operation_audit_log</code>（均为 append-only 不可篡改），完善审计能力。</p>
+      <p><b>3. 安全漏洞检查：</b>登录接口内置基于滑动窗口的速率限制（<code>app/core/auth_rate_limit.py</code>，按 IP + 账号双维度、5 次/60 秒），防止暴力破解；服务启动时强制校验 <code>JWT_SECRET</code> / <code>ENCRYPTION_KEY</code> 等关键密钥不得为默认值，生产环境检测到默认值将拒绝启动。当前限流为进程内内存实现，多副本部署下为近似限流，尚未引入 Redis 做跨实例共享；常态化自动化漏洞扫描（SAST/DAST）与专业渗透测试机制尚未建立，需纳入后续规划补齐。</p>
+      <p><b>4. 数据安全：</b>敏感数据（如 K8s KubeConfig）采用 AES-256-GCM 算法加密存储（<code>encrypt_kubeconfig</code> / <code>decrypt_kubeconfig</code>，<code>app/core/security.py</code>），密钥经 <code>ENCRYPTION_KEY</code> 环境变量管理，与代码库和数据库分离；接口层通过 <code>CORSMiddleware</code> 严格限制跨域来源白名单（默认仅本地开发域名，生产环境需显式配置）。当前仓库内 K8s Ingress 未配置 TLS（<code>deploy/k8s/ingress.yaml</code> 无 <code>tls</code> 字段），传输层加密依赖外部网关/证书管理落地，建议在部署文档中明确要求生产环境必须启用 HTTPS。</p>
+      <p><b>5. 数据合规：</b>全局遵循软删除规范，<code>BaseModel</code> 统一提供 <code>deleted_at</code> 字段与 <code>soft_delete()</code> 方法，唯一约束使用 Partial Unique Index，避免物理删除导致数据不可追溯；代码与测试数据中的个人信息（如邮箱）统一使用 <code>@example.com</code> 占位，禁止出现真实用户信息（项目 CLAUDE.md 明确约定）。数据分级分类制度与定期合规自查机制目前尚未形成文档化流程，建议后续补充。</p>
+    </td>
+  </tr>
+</table>
+
+<div class="gap-note">
+  <b>如实说明：以下为当前尚未落地、建议后续规划补齐的项</b>
+  自动化 SAST/DAST 代码扫描与专业渗透测试机制未建立；速率限制为单进程内存实现，未做跨副本共享；仓库内未见 Ingress TLS 配置，生产环境 HTTPS 依赖外部证书管理；数据分级分类与定期合规自查暂无文档化流程。以上均基于对当前代码库的实际调研得出，未做推测性美化。
+</div>
+
+</body>
+</html>

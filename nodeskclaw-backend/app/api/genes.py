@@ -1,5 +1,6 @@
 """Gene Evolution Ecosystem API routes."""
 
+import hashlib
 import io
 import json
 import logging
@@ -48,7 +49,26 @@ router = APIRouter()
 # （genes.manifest 是 Text 列，上传内容最终会整包塞进去）
 _MAX_UPLOAD_FILE_SIZE = 10 * 1024 * 1024   # 单文件 10MB
 _MAX_UPLOAD_TOTAL_SIZE = 50 * 1024 * 1024  # 总大小 50MB
+_UPLOAD_READ_CHUNK_SIZE = 1024 * 1024      # 分块读取粒度：边读边判断大小上限，避免超大文件被整体读入内存后才拒绝
 _MAX_UPLOAD_FILE_COUNT = 500                # 单次最多 500 个文件
+
+# 与 schemas/gene.py 里 GeneCreateRequest.slug 的正则保持一致
+_SLUG_DISALLOWED_CHARS_RE = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def _slugify_gene_name(name: str) -> str:
+    """把技能名转成合法 slug（只允许 [a-zA-Z0-9_-]，见 schemas/gene.py 的校验正则）。
+
+    技能名很多是中文（如"业务操作指引编写"），过滤非法字符后可能整段被删空，
+    这种情况下用名称的确定性哈希摘要兜底——同一个名字每次都生成同一个 slug，
+    保证重复上传同名技能时 create_gene 的 (slug, org_id) 冲突/覆盖判定仍然生效。
+    """
+    lowered = name.strip().lower().replace(" ", "-")
+    safe = _SLUG_DISALLOWED_CHARS_RE.sub("", lowered).strip("-_")
+    if safe:
+        return safe[:64]
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:12]
+    return f"gene-{digest}"
 
 
 def _validate_gene_callback_auth(
@@ -175,17 +195,26 @@ async def upload_gene_folder(
     total_size = 0
     for raw, upload_file in raw_entries:
         rel_path = raw[len(strip_prefix):] if strip_prefix and raw.startswith(strip_prefix) else raw
-        data = await upload_file.read()
-        if len(data) > _MAX_UPLOAD_FILE_SIZE:
-            raise BadRequestError(
-                f"文件 {raw} 超过单文件大小限制（{_MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB）"
-            )
-        total_size += len(data)
-        if total_size > _MAX_UPLOAD_TOTAL_SIZE:
-            raise BadRequestError(
-                f"上传内容总大小超过限制（{_MAX_UPLOAD_TOTAL_SIZE // (1024 * 1024)}MB）"
-            )
-        files_dict[rel_path] = data
+        # 分块读取：每读一块就立即检查单文件/总大小上限，一旦超限马上中止读取，
+        # 避免恶意超大文件在被拒绝前就已整体读入内存（此前是 read() 全量读完才检查，防护形同虚设）
+        chunks: list[bytes] = []
+        file_size = 0
+        while True:
+            chunk = await upload_file.read(_UPLOAD_READ_CHUNK_SIZE)
+            if not chunk:
+                break
+            file_size += len(chunk)
+            if file_size > _MAX_UPLOAD_FILE_SIZE:
+                raise BadRequestError(
+                    f"文件 {raw} 超过单文件大小限制（{_MAX_UPLOAD_FILE_SIZE // (1024 * 1024)}MB）"
+                )
+            if total_size + file_size > _MAX_UPLOAD_TOTAL_SIZE:
+                raise BadRequestError(
+                    f"上传内容总大小超过限制（{_MAX_UPLOAD_TOTAL_SIZE // (1024 * 1024)}MB）"
+                )
+            chunks.append(chunk)
+        total_size += file_size
+        files_dict[rel_path] = b"".join(chunks)
 
     meta = skill_package_service.parse_skill_folder(files_dict)
     manifest = meta.get("manifest", {})
@@ -211,7 +240,7 @@ async def upload_gene_folder(
 
     gene_req = GeneCreateRequest(
         name=meta["name"],
-        slug=meta["name"].lower().replace(" ", "-")[:64],
+        slug=_slugify_gene_name(meta["name"]),
         description=meta.get("description", ""),
         short_description=meta.get("description", "")[:256] if meta.get("description") else None,
         source="manual",

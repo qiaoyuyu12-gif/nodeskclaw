@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from typing import Coroutine
 from urllib.parse import urlencode
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_nodeskclaw_webhook_base_url, settings
@@ -18,6 +19,7 @@ from app.core.exceptions import AppException, BadRequestError, ConflictError, Fo
 from app.models.base import not_deleted
 from app.models.corridor import HumanHex
 from app.models.gene import (
+    ContentVisibility,
     EffectMetricType,
     EvolutionEvent,
     EvolutionEventType,
@@ -32,6 +34,7 @@ from app.models.gene import (
     InstanceGeneStatus,
 )
 from app.models.instance import Instance, InstanceStatus
+from app.models.org_required_gene import OrgRequiredGene
 from app.models.workspace_agent import WorkspaceAgent
 from app.schemas.gene import (
     CoInstallPair,
@@ -691,24 +694,109 @@ async def get_gene_by_slug_in_scope(
     return result.scalars().first()
 
 
+async def get_gene_by_name_in_scope(
+    db: AsyncSession,
+    name: str,
+    *,
+    visibility: str,
+    org_id: str | None = None,
+    created_by: str | None = None,
+) -> Gene | None:
+    """按 (trim+忽略大小写的 name, scope) 精确定位一条未删除 gene。
+
+    与 3 条 uq_genes_name_* partial unique index 语义一一对应：
+      - personal：按 (小写trim后的 name, created_by) 判重
+      - org_private：按 (小写trim后的 name, org_id) 判重
+      - public：全局按小写trim后的 name 判重，不再附加 org_id/created_by 条件
+
+    用 first() 而非 scalar_one_or_none()——理论上 scope 内不会有多条，但按
+    项目既有踩坑经验（同 slug 跨 scope 并存过 MultipleResultsFound），一律
+    用 first() 更保守。
+    """
+    normalized = name.strip().lower()
+    stmt = select(Gene).where(
+        func.lower(func.trim(Gene.name)) == normalized,
+        Gene.visibility == visibility,
+        not_deleted(Gene),
+    )
+    if visibility == ContentVisibility.personal:
+        stmt = stmt.where(Gene.created_by == created_by)
+    elif visibility == ContentVisibility.org_private:
+        stmt = stmt.where(Gene.org_id == org_id)
+    result = await db.execute(stmt)
+    return result.scalars().first()
+
+
+async def _rewire_gene_references(db: AsyncSession, old_gene_id: str, new_gene_id: str) -> None:
+    """覆盖上传软删旧 Gene、插入新 id 新行后，把指向旧行的"当前生效状态"引用
+
+    批量改指向新行，避免旧行被软删之后，已安装该技能的实例、已强制要求该
+    技能的组织，因为 join 时过滤 `Gene.deleted_at IS NULL` 而把这些记录
+    "丢"掉（`get_instance_genes()` / 组织强制技能列表等场景）。
+
+    只重接 InstanceGene（已装技能）、OrgRequiredGene（组织强制要求技能）
+    这两类"当前生效状态"引用，不改 GeneRating / GeneEffectLog 等历史记录——
+    那些是针对当时具体内容给出的评分/效果数据，不该被静默转嫁到新内容上。
+    """
+    await db.execute(
+        update(InstanceGene)
+        .where(InstanceGene.gene_id == old_gene_id, not_deleted(InstanceGene))
+        .values(gene_id=new_gene_id)
+    )
+    await db.execute(
+        update(OrgRequiredGene)
+        .where(OrgRequiredGene.gene_id == old_gene_id, not_deleted(OrgRequiredGene))
+        .values(gene_id=new_gene_id)
+    )
+    await db.commit()
+
+
 async def create_gene(
     db: AsyncSession, req: GeneCreateRequest, user_id: str | None = None, org_id: str | None = None,
     visibility: str | None = None,
     review_status: str | None = None,
 ) -> dict:
+    resolved_visibility = visibility or req.visibility
+
     # 冲突判定按 (slug, org_id) 进行，对齐 partial unique index `uq_genes_slug_org_active`。
     # personal scope（org_id IS NULL）下，索引允许多个用户共用同 slug，因此用 created_by
     # 进一步限定到"当前用户的 personal 同 slug"，避免误报。
     existing = await get_gene_by_slug_in_scope(
         db, req.slug, org_id=org_id, created_by=user_id,
     )
-    if existing:
+    # 名称查重按 scope 分别进行（personal 按用户、org 按组织、public 全局），
+    # 对齐新增的 3 条 uq_genes_name_* partial unique index。
+    existing_name = await get_gene_by_name_in_scope(
+        db, req.name, visibility=resolved_visibility, org_id=org_id, created_by=user_id,
+    )
+    if existing is not None and existing_name is not None and existing_name is not existing:
+        # slug 和 name 分别命中了两条不同的行：这才是真正的"无关行"冲突，
+        # overwrite 的语义只是"允许覆盖 slug 命中的那一条"，不能顺带删掉
+        # 一条名字撞车但完全无关的记录，因此即使 overwrite=True 也直接拒绝。
+        #
+        # 注意 existing 为 None（slug 没命中任何行）时不能进这个分支：
+        # 技能名称转 slug 是确定性生成的（见 _slugify_gene_name），若旧记录
+        # 是通过其他入口（如手动创建）用不同规则生成的 slug，重新上传时会
+        # 出现"slug 查不到、但 name 精确命中旧记录"的情况——这里 existing_name
+        # 就是唯一需要覆盖的目标，不是无关行，必须走下面的覆盖逻辑。
+        raise ConflictError(f"技能名称 '{req.name}' 已存在")
+    old_gene_id: str | None = None
+    if existing or existing_name:
         if req.overwrite:
-            # 覆盖模式：软删除该 scope 内的旧基因，再创建新基因
-            existing.soft_delete()
+            # 覆盖模式：existing 和 existing_name 此时要么是同一行，要么只有
+            # 一个非 None（slug 对不上但 name 精确命中了同一技能的旧记录），
+            # 软删这一行即可，不会误删无关记录。
+            target = existing or existing_name
+            if target:
+                # 覆盖会软删旧行、插入一条全新 id 的新行，已安装/已被组织
+                # 强制要求的记录引用的是旧 id，先记下来，插入新行后重接。
+                old_gene_id = target.id
+                target.soft_delete()
             await db.commit()
-        else:
+        elif existing:
             raise ConflictError(f"基因 slug '{req.slug}' 已存在")
+        else:
+            raise ConflictError(f"技能名称 '{req.name}' 已存在")
 
     _validate_skill_metadata(req.manifest, req.short_description, req.description)
 
@@ -728,7 +816,7 @@ async def create_gene(
         synergies=_json_dumps(req.synergies),
         is_featured=req.is_featured,
         is_published=req.is_published,
-        visibility=visibility or req.visibility,
+        visibility=resolved_visibility,
         review_status=review_status,
         created_by=user_id,
         org_id=org_id,
@@ -737,8 +825,18 @@ async def create_gene(
         source_registry="local",
     )
     db.add(gene)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        # 极小概率竞态：两个请求同时通过了上面的预检查。DB 唯一索引在此兜底，
+        # 统一转换成 ConflictError，不暴露内部约束名等实现细节。
+        await db.rollback()
+        raise ConflictError(f"基因 slug '{req.slug}' 或名称 '{req.name}' 已存在") from e
     await db.refresh(gene)
+
+    if old_gene_id is not None:
+        await _rewire_gene_references(db, old_gene_id, gene.id)
+
     return _gene_to_dict(gene)
 
 
@@ -2167,6 +2265,15 @@ async def publish_variant(
     variant_desc = f"AI 员工 {agent_display} 基于 {parent.name} 的进化版本"
     _validate_skill_metadata(manifest, parent.short_description, variant_desc)
 
+    # 名称查重：下面插入的 variant 未显式传 visibility，落在模型默认的 public
+    # scope，因此按 public scope 校验 name 是否已存在，与 create_gene() 的
+    # 查重语义保持一致，命中直接拒绝，不静默改名。
+    existing_name = await get_gene_by_name_in_scope(
+        db, name, visibility=ContentVisibility.public,
+    )
+    if existing_name is not None:
+        raise ConflictError(f"技能名称 '{name}' 已存在")
+
     variant = Gene(
         name=name,
         slug=slug,
@@ -2193,7 +2300,13 @@ async def publish_variant(
         gene_slug=parent.slug, gene_id=gene_id,
         details={"variant_gene_id": variant.id, "variant_slug": slug},
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        # 极小概率竞态：预检查通过后，另一请求在 commit 之前抢先插入了同名
+        # 变体。DB 唯一索引在此兜底，统一转换成 ConflictError。
+        await db.rollback()
+        raise ConflictError(f"技能名称 '{name}' 已存在") from e
     await db.refresh(variant)
 
     ws_ids = await _get_instance_workspace_ids(db, instance_id) if instance else []
@@ -2277,8 +2390,18 @@ async def handle_creation_callback(
 
     _validate_skill_metadata(gene_manifest, gene_short_desc, gene_desc or None)
 
+    gene_name = meta.get("gene_name", f"agent-gene-{payload.task_id[:8]}")
+
+    # 名称查重：下面插入的 gene 未显式传 visibility，落在模型默认的 public
+    # scope，因此按 public scope 校验 name 是否已存在，命中直接拒绝。
+    existing_name = await get_gene_by_name_in_scope(
+        db, gene_name, visibility=ContentVisibility.public,
+    )
+    if existing_name is not None:
+        raise ConflictError(f"技能名称 '{gene_name}' 已存在")
+
     gene = Gene(
-        name=meta.get("gene_name", f"agent-gene-{payload.task_id[:8]}"),
+        name=gene_name,
         slug=meta.get("gene_slug", f"agent-gene-{payload.task_id[:8]}"),
         description=gene_desc,
         short_description=gene_short_desc,
@@ -2293,7 +2416,13 @@ async def handle_creation_callback(
         review_status=GeneReviewStatus.pending_owner,
     )
     db.add(gene)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        # 极小概率竞态：预检查通过后，另一请求在 commit 之前抢先插入了同名
+        # 基因。DB 唯一索引在此兜底，统一转换成 ConflictError。
+        await db.rollback()
+        raise ConflictError(f"技能名称 '{gene_name}' 已存在") from e
     await db.refresh(gene)
 
     ws_ids = await _get_instance_workspace_ids(db, payload.instance_id) if instance else []
@@ -3519,6 +3648,18 @@ async def fork_gene_to_library(
         source_synergies = _json_dumps(detail.synergies or [])
         source_parent_id = None  # 外部源没有本地 id 可指
 
+    # ── 2.5. 名称查重：目标 scope 内已存在同名技能则直接拒绝 ──────────
+    # 与"防止重名出现"的需求本身矛盾，所以这里不像 slug 那样自动加后缀绕开，
+    # 而是直接报错让用户自己决定改名或删除旧的。
+    existing_name = await get_gene_by_name_in_scope(
+        db, source_name,
+        visibility=attrs["visibility"],
+        org_id=attrs["org_id"],
+        created_by=attrs["created_by"],
+    )
+    if existing_name is not None:
+        raise ConflictError(f"技能名称 '{source_name}' 已存在")
+
     # ── 3. 计算副本 slug：在目标 org_id 内重名时追加短后缀 ──────────
     import uuid
 
@@ -3558,7 +3699,14 @@ async def fork_gene_to_library(
         source_registry="local",
     )
     db.add(fork)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        # 极小概率竞态：上面的 name/slug 预检查通过后，另一请求在 commit 之前
+        # 抢先插入了同名/同 slug 的记录。DB 唯一索引在此兜底，统一转换成
+        # ConflictError，模式与 create_gene() 保持一致。
+        await db.rollback()
+        raise ConflictError(f"基因 slug '{new_slug}' 或名称 '{source_name}' 已存在") from e
     await db.refresh(fork)
     return _gene_to_dict(fork)
 

@@ -1568,6 +1568,10 @@ const zhCN = {
     collaborationDepthSave: "保存",
     collaborationDepthSaved: "协作深度已更新",
     collaborationDepthSaveFailed: "协作深度更新失败",
+    switchOrgLabel: "所属组织",
+    switchOrgButton: "切换",
+    switchOrgSuccess: "已切换组织，正在刷新页面",
+    switchOrgFailed: "切换组织失败",
   },
   clusters: {
     title: "集群管理",
