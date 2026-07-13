@@ -75,12 +75,21 @@ Gene（技能）采用 personal / org_private / public 三向 fork 架构：`for
 
 | 路径 | `lineage_group_id` 取值 | `content_updated_at` 取值 |
 |---|---|---|
-| `create_gene()` 全新创建（无冲突） | 自己的新 id（构造时 Python 端 `BaseModel.id` 已用 `default=lambda: str(uuid.uuid4())` 生成，构造对象时即可直接引用） | 插入时间（server_default） |
+| `create_gene()` 全新创建，且同 scope 内**没有**任何软删记录匹配 slug/name | 自己的新 id（构造时 Python 端 `BaseModel.id` 已用 `default=lambda: str(uuid.uuid4())` 生成，构造对象时即可直接引用） | 插入时间（server_default） |
+| `create_gene()` 全新创建，但同 scope 内**有**软删记录匹配 slug/name（先删除、再重新上传同名技能） | 回接：继承那条软删记录的 `lineage_group_id`（见下方"软删记录的血缘回接"） | 插入时间（server_default，视为一次新内容） |
 | `create_gene()` overwrite 分支 | 继承被软删那一行的 `lineage_group_id`（在调用 `target.soft_delete()` 之前先读出 `target.lineage_group_id`，因为 soft_delete 只置 `deleted_at`，其余字段仍可读，但避免依赖时序，提前读取更清晰） | 插入时间（server_default，新行=新内容） |
 | `fork_gene_to_library()` | 继承 `source.lineage_group_id` | 继承 `source.content_updated_at` |
 | `publish_variant()` / `handle_creation_callback()` | **不继承**，用自己的新 id 单独成组 | 插入时间（server_default） |
 
 `/admin/genes/{gene_id}` 就地编辑（`PUT`）不创建新行，`lineage_group_id` 不受影响；`content_updated_at` 按上一节的规则条件更新。
+
+### 软删记录的血缘回接
+
+背景：`create_gene()` 的判重查询（`get_gene_by_slug_in_scope` / `get_gene_by_name_in_scope`）只看未软删的行。用户如果先手动删除个人库里的技能、再重新上传同名技能（两个独立动作，不是走 `overwrite=True`），判重查询找不到任何活跃冲突，会落入"全新创建"分支——如果不做特殊处理，这次重传会生成一个全新的 `lineage_group_id`，跟原来组织库/公共市场那份的血缘彻底断开，即使内容完全一样也不会再被识别为"同一个技能"。
+
+修复：`create_gene()` 全新创建分支在生成新 `lineage_group_id` 之前，多一步检查——在同一 scope 内（`visibility` + `org_id`/`created_by` 一致）按 slug 查一条**软删**的记录（`deleted_at IS NOT NULL`），查不到再按 name 查；找到则继承它的 `lineage_group_id`；如果同时按 slug、按 name 各查到了不同的软删记录，取 `deleted_at` 更晚（最近一次删除）的那条；都查不到才生成全新的 `lineage_group_id`。
+
+已知局限：这是一个基于 slug/name 匹配的启发式，无法区分"删除后重传的是同一个技能"和"纯属巧合，删掉一个技能后又传了个碰巧同名的全新技能"——两种情况在数据层面无法可靠区分，本设计选择偏向"倾向于认为是同一个技能"（与用户的直觉更符合：大多数"先删再传"的场景确实是想替换/恢复同一个技能）。
 
 ### Alembic 迁移
 
@@ -148,7 +157,8 @@ Gene 序列化字段（`_gene_to_dict`）新增只读字段 `newer_sibling_versi
 
 ## 测试计划
 
-- **传播规则**：`create_gene` 全新创建独立成组、`content_updated_at` = 插入时间；`create_gene` overwrite 继承旧组、`content_updated_at` 刷新为插入时间（含"existing 为 None 只有 existing_name 命中"的分支，与近期修复的 overwrite bug 场景一致）；`fork_gene_to_library` 继承源组**且继承 `content_updated_at`（不重置）**；`publish_variant` / `handle_creation_callback` 不继承、独立成组
+- **传播规则**：`create_gene` 全新创建（同 scope 无任何软删匹配）独立成组、`content_updated_at` = 插入时间；`create_gene` overwrite 继承旧组、`content_updated_at` 刷新为插入时间（含"existing 为 None 只有 existing_name 命中"的分支，与近期修复的 overwrite bug 场景一致）；`fork_gene_to_library` 继承源组**且继承 `content_updated_at`（不重置）**；`publish_variant` / `handle_creation_callback` 不继承、独立成组
+- **软删记录血缘回接**：删除个人库技能后，重新上传同 slug/同 name 的技能，新行应继承旧（软删）行的 `lineage_group_id`，与组织库/公共市场的血缘关系保持不变；同时按 slug、name 分别匹配到不同软删行时，取 `deleted_at` 更晚的那条；同 scope 内确实没有任何软删匹配时才生成全新 `lineage_group_id`（验证不会误接一个毫不相关、只是巧合同名的历史技能之外的场景——本用例只覆盖"能找到匹配就接上"这一半，"巧合同名"的假阳性是已知局限，不强求测试覆盖）
 - **fork 不产生假阳性**：fork 完成的瞬间，新副本与源头的 `content_updated_at` 相同，`newer_sibling_versions` 应为空（覆盖用户描述的场景，验证"刚 fork 完不会误报"）
 - **`update_gene` 按字段选择性刷新**：只改 `is_featured`/`is_published` 不刷新 `content_updated_at`；改 `name`/`manifest` 等内容字段才刷新
 - **`content_updated_at` 不受无关字段污染**：`rate_gene`、`install_gene`（`install_count += 1`）、效果分重算等操作后，`content_updated_at` 保持不变
@@ -171,7 +181,7 @@ Gene 序列化字段（`_gene_to_dict`）新增只读字段 `newer_sibling_versi
 |---|---|---|
 | DB | `nodeskclaw-backend/app/models/gene.py` | 新增 `lineage_group_id`、`content_updated_at` 字段 + 索引 |
 | DB | `nodeskclaw-backend/alembic/versions/<new>.py` | 新增迁移（含并查集回填 `lineage_group_id` + `content_updated_at` 回填脚本） |
-| Service | `nodeskclaw-backend/app/services/gene_service.py` | `create_gene` / `fork_gene_to_library` / `publish_variant` / `handle_creation_callback` 传播 `lineage_group_id` + `content_updated_at`；`update_gene` 按字段选择性刷新 `content_updated_at`；新增按 `(visibility, org_id)` 分组的落后检测批量查询（含组织名批量查询）；`_gene_to_dict` / `_list_genes_local` 接入 `newer_sibling_versions` |
-| Test | `nodeskclaw-backend/tests/test_gene_lineage_version_awareness.py`（新建） | 传播规则 + 落后检测测试（含多组织场景） |
+| Service | `nodeskclaw-backend/app/services/gene_service.py` | `create_gene` 全新创建分支新增软删记录血缘回接查询；`create_gene` / `fork_gene_to_library` / `publish_variant` / `handle_creation_callback` 传播 `lineage_group_id` + `content_updated_at`；`update_gene` 按字段选择性刷新 `content_updated_at`；新增按 `(visibility, org_id)` 分组的落后检测批量查询（含组织名批量查询）；`_gene_to_dict` / `_list_genes_local` 接入 `newer_sibling_versions` |
+| Test | `nodeskclaw-backend/tests/test_gene_lineage_version_awareness.py`（新建） | 传播规则（含软删回接）+ 落后检测测试（含多组织场景） |
 | Test | 迁移脚本对应测试 | 并查集回填正确性 |
 | 前端 | `nodeskclaw-portal/src/views/GeneMarket.vue` 等技能列表卡片 | 读取 `newer_sibling_versions`，按组织名/scope 展示角标（具体 UI 落地时再定） |
