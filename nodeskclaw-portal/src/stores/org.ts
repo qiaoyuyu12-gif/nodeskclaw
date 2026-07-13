@@ -46,6 +46,7 @@ export interface OrgUsage {
 
 export const useOrgStore = defineStore('org', () => {
   const currentOrg = ref<OrgInfo | null>(null)
+  const myOrgs = ref<OrgInfo[]>([])
   const members = ref<MemberInfo[]>([])
   const usage = ref<OrgUsage | null>(null)
   const loading = ref(false)
@@ -56,6 +57,7 @@ export const useOrgStore = defineStore('org', () => {
     try {
       const res = await api.get('/orgs/my')
       const orgs: OrgInfo[] = res.data.data ?? []
+      myOrgs.value = orgs
 
       const authStore = useAuthStore()
       if (authStore.user?.current_org_id) {
@@ -76,6 +78,14 @@ export const useOrgStore = defineStore('org', () => {
     } catch (e) {
       console.warn('[orgStore] fetchCurrentOrg 失败:', e)
     }
+  }
+
+  // 切换当前组织：成功后整页 reload，让所有依赖 current_org_id 的 store
+  // （实例列表、技能市场等）都用干净状态重新拉取，避免遗漏某个 store 没刷新
+  // 导致旧组织数据残留
+  async function switchOrg(orgId: string) {
+    const res = await api.post(`/orgs/switch/${orgId}`)
+    return res.data.data
   }
 
   async function updateOrgName(name: string) {
@@ -147,11 +157,13 @@ export const useOrgStore = defineStore('org', () => {
   return {
     currentOrg,
     currentOrgId,
+    myOrgs,
     members,
     usage,
     loading,
     fetchMyOrg,
     fetchCurrentOrg,
+    switchOrg,
     updateOrgName,
     updateCollaborationDepth,
     fetchMembers,

@@ -1564,6 +1564,10 @@ const enUS = {
     collaborationDepthSave: "Save",
     collaborationDepthSaved: "Collaboration depth updated",
     collaborationDepthSaveFailed: "Failed to update collaboration depth",
+    switchOrgLabel: "Organization",
+    switchOrgButton: "Switch",
+    switchOrgSuccess: "Organization switched, refreshing page",
+    switchOrgFailed: "Failed to switch organization",
   },
   clusters: {
     title: "Cluster Management",
