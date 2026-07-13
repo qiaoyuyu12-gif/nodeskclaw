@@ -50,6 +50,8 @@ Gene（技能）采用 personal / org_private / public 三向 fork 架构：`for
 
 因此新增专门字段 `Gene.content_updated_at`，只在内容真正变化时才更新，不设 `onupdate`（避免被无关字段变更自动带动）：
 
+**注意"更新"判断的粒度**：`content_updated_at` 只区分"是否发生过一次 `create_gene()` 插入新行的动作"（overwrite、或下方"软删记录血缘回接"命中），不做内容级别的字节对比。也就是说，哪怕重新上传的内容跟删除前一模一样，也会被当成一次新版本、刷新 `content_updated_at`，从而让其余 scope 显示"有更新"。这是有意的简化，不引入 manifest/description 的内容 hash 比对，与"不做内容 diff"的既定范围保持一致。
+
 | 路径 | `content_updated_at` 取值 |
 |---|---|
 | `create_gene()` 全新创建 / overwrite 插入新行 | 插入时间（`server_default=func.now()`，与 `created_at` 语义一致） |
