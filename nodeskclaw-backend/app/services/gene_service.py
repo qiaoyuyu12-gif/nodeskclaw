@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Coroutine
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_nodeskclaw_webhook_base_url, settings
 from app.core.exceptions import AppException, BadRequestError, ConflictError, ForbiddenError, NotFoundError
+from app.core.version_compare import compare_versions
 from app.models.base import not_deleted
 from app.models.corridor import HumanHex
 from app.models.gene import (
@@ -781,6 +783,10 @@ async def create_gene(
         # 就是唯一需要覆盖的目标，不是无关行，必须走下面的覆盖逻辑。
         raise ConflictError(f"技能名称 '{req.name}' 已存在")
     old_gene_id: str | None = None
+    # 覆盖时继承旧行的血缘分组 id，让 personal/org/public 三向副本、以及
+    # 同一血缘下的历次覆盖版本能够被关联到一起；全新创建则在下面用新行
+    # 自己的 id 作为血缘起点。
+    old_lineage_group_id: str | None = None
     if existing or existing_name:
         if req.overwrite:
             # 覆盖模式：existing 和 existing_name 此时要么是同一行，要么只有
@@ -788,9 +794,23 @@ async def create_gene(
             # 软删这一行即可，不会误删无关记录。
             target = existing or existing_name
             if target:
+                # 版本号校验：覆盖只允许 >= 当前版本号（同版本号覆盖也放行，
+                # 属于产品侧明确决策"1.A"），禁止版本倒退；任一侧格式不合法
+                # 也直接拒绝，不能装作知道谁新谁旧。必须在软删旧行之前校验，
+                # 校验失败时不能产生任何副作用。
+                cmp_result = compare_versions(req.version, target.version)
+                if cmp_result is None:
+                    raise ConflictError(f"版本号格式不合法：'{req.version}'")
+                if cmp_result < 0:
+                    raise ConflictError(
+                        f"新版本号 '{req.version}' 低于当前版本 '{target.version}'，不允许版本倒退"
+                    )
                 # 覆盖会软删旧行、插入一条全新 id 的新行，已安装/已被组织
                 # 强制要求的记录引用的是旧 id，先记下来，插入新行后重接。
+                # lineage_group_id 也必须在 soft_delete 之前读取——软删本身
+                # 不会清空该字段，但这里保持"先读后删"的顺序更保险。
                 old_gene_id = target.id
+                old_lineage_group_id = target.lineage_group_id
                 target.soft_delete()
             await db.commit()
         elif existing:
@@ -800,7 +820,12 @@ async def create_gene(
 
     _validate_skill_metadata(req.manifest, req.short_description, req.description)
 
+    # lineage_group_id 是 NOT NULL 列，必须和新行同时写入，因此这里显式生成
+    # 新行的 id（而不是依赖 Column default 在 flush 时才生成），确保全新
+    # 创建场景下 lineage_group_id 能取到"自己的 id"。
+    new_gene_id = str(uuid.uuid4())
     gene = Gene(
+        id=new_gene_id,
         name=req.name,
         slug=req.slug,
         description=req.description,
@@ -823,6 +848,7 @@ async def create_gene(
         # 标记为本地创建，确保前端"删除/编辑"等仅对本地 gene 显示的入口可见
         # （外部 registry 同步走 genehub_client，自带 registry_id；不进此路径）
         source_registry="local",
+        lineage_group_id=old_lineage_group_id or new_gene_id,
     )
     db.add(gene)
     try:
