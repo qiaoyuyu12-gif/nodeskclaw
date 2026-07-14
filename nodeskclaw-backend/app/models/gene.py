@@ -126,6 +126,13 @@ class Gene(BaseModel):
     parent_gene_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("genes.id"), nullable=True
     )
+    # 血缘分组 key：同一血缘下的 personal/org/public 三向副本共享同一个值，
+    # 不是外键、不要求指向一条现存活的行，只是一个不透明的分组标识。
+    # 由 create_gene()/fork_gene_to_library() 在创建时传播（见 gene_service.py），
+    # 历史数据由迁移脚本按 parent_gene_id 连通分量回填。
+    lineage_group_id: Mapped[str] = mapped_column(
+        String(36), nullable=False, index=True,
+    )
     created_by_instance_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("instances.id"), nullable=True
     )
