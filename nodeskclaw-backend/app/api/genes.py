@@ -986,6 +986,7 @@ async def fork_gene(
     gene_data = await gene_service.fork_gene_to_library(
         db, gene_identifier, req.target,
         current_user=current_user,
+        overwrite=req.overwrite,
     )
     return ApiResponse(data=gene_data)
 

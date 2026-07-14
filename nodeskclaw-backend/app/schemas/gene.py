@@ -278,6 +278,8 @@ class ForkGeneRequest(BaseModel):
 
     # 仅允许 fork 到 personal / org，公共市场副本不能直接 fork（要走 publish_to_market）
     target: ForkTarget
+    # 目标 scope 已有同名且同血缘的技能时，是否覆盖（默认 False，与 service 层默认一致）
+    overwrite: bool = False
 
 
 # ── Learning Callback ────────────────────────────
