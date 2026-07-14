@@ -512,3 +512,134 @@ async def test_fork_overwrite_rejects_malformed_version_with_generic_message(req
             "errors.gene.fork_already_up_to_date",
             "errors.gene.fork_version_regression",
         )
+
+
+@pytest.mark.asyncio
+async def test_fork_overwrite_org_target_creates_submission_not_gene(require_test_db):
+    """org/public 目标：版本校验通过后只创建 GeneOverwriteSubmission，
+    existing_name 那一行完全不受影响。"""
+    from app.models.gene import Gene
+    from app.models.gene_overwrite_submission import GeneOverwriteSubmission
+    from app.models.organization import Organization
+    from app.services.gene_service import fork_gene_to_library
+    from sqlalchemy import select
+
+    async with TestSessionLocal() as db:
+        org = Organization(id=_uid("org"), name="Org X", slug=_uid("org-x"))
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add_all([org, user])
+        await db.commit()
+
+        source = Gene(
+            id=_uid("gene"), name="团队助手", slug=_uid("team-bot"),
+            visibility="public", version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(source)
+        await db.commit()
+
+        forked = await fork_gene_to_library(
+            db, source.id, "org", current_user=_FakeUser(user.id, org.id), org_id=org.id,
+        )
+        target_id = forked["id"]
+
+        source_row = (await db.execute(select(Gene).where(Gene.id == source.id))).scalar_one()
+        source_row.version = "1.1.0"
+        await db.commit()
+
+        result = await fork_gene_to_library(
+            db, source.id, "org", current_user=_FakeUser(user.id, org.id),
+            org_id=org.id, overwrite=True,
+        )
+        assert result.get("kind") == "overwrite_submission"
+
+        # existing_name（原本 org 那条 v1.0.0）完全不受影响
+        target_row = (await db.execute(
+            select(Gene).where(Gene.id == target_id, Gene.deleted_at.is_(None))
+        )).scalar_one_or_none()
+        assert target_row is not None
+        assert target_row.version == "1.0.0"
+
+        submission = (await db.execute(
+            select(GeneOverwriteSubmission).where(GeneOverwriteSubmission.target_gene_id == target_id)
+        )).scalar_one()
+        assert submission.version == "1.1.0"
+        assert submission.review_status == "pending_owner"
+        assert submission.lineage_group_id == source_row.lineage_group_id
+
+        # 关键防回归点：不能有任何"泄漏"的 Gene 行——如果未来有 bad refactor
+        # 让 fork 覆盖分支既建了 submission 又不小心 db.add(fork) 落库，上面
+        # 对 target_row 的断言不会发现（target_row 本来就没变），必须单独确认
+        # genes 表里没有多出一条版本号 = 提案版本号的活跃行。
+        # 注意：source_row 自身这时版本号也是 "1.1.0"，所以必须加 org_id 过滤
+        # （source 是 public 的，org_id 为 None）并排除 source.id，只查目标
+        # org scope 里是否多出了本不该落库的新行。
+        leaked = (await db.execute(
+            select(Gene).where(
+                Gene.version == "1.1.0",
+                Gene.org_id == org.id,
+                Gene.id != source.id,
+                Gene.deleted_at.is_(None),
+            )
+        )).scalars().all()
+        assert leaked == []
+
+
+@pytest.mark.asyncio
+async def test_fork_overwrite_public_target_creates_submission_not_gene(require_test_db):
+    """同上，但确认 public 目标也走暂存分支（不只是 org）。"""
+    from app.models.gene import Gene
+    from app.models.gene_overwrite_submission import GeneOverwriteSubmission
+    from app.models.organization import Organization
+    from app.services.gene_service import fork_gene_to_library
+    from sqlalchemy import select
+
+    async with TestSessionLocal() as db:
+        org = Organization(id=_uid("org"), name="Org Y", slug=_uid("org-y"))
+        user = User(id=_uid("user"), name="Bob", username=_uid("bob"))
+        db.add_all([org, user])
+        await db.commit()
+
+        # 注意：source 必须是 personal scope（而非 public），否则 fork 目标本身
+        # 就是 public，get_gene_by_name_in_scope 对 public 不额外按 org_id/
+        # created_by 过滤，会立刻把 source 自己当成"已存在的同名技能"撞车，
+        # 第一次（非 overwrite）fork 调用就会直接 ConflictError。
+        source = Gene(
+            id=_uid("gene"), name="公共助手", slug=_uid("public-bot"),
+            visibility="personal", created_by=user.id,
+            version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(source)
+        await db.commit()
+
+        await fork_gene_to_library(
+            db, source.id, "public", current_user=_FakeUser(user.id, org.id), org_id=org.id,
+        )
+
+        source_row = (await db.execute(select(Gene).where(Gene.id == source.id))).scalar_one()
+        source_row.version = "2.0.0"
+        await db.commit()
+
+        result = await fork_gene_to_library(
+            db, source.id, "public", current_user=_FakeUser(user.id, org.id),
+            org_id=org.id, overwrite=True,
+        )
+        assert result.get("kind") == "overwrite_submission"
+
+        submissions = (await db.execute(
+            select(GeneOverwriteSubmission).where(GeneOverwriteSubmission.version == "2.0.0")
+        )).scalars().all()
+        assert len(submissions) == 1
+
+        # 关键防回归点：确认没有任何"泄漏"的 Gene 行落库——source_row 自身此
+        # 时版本号也是 "2.0.0"，所以额外按 visibility == "public" 过滤并排除
+        # source.id（source 本身是 personal），只查公共 scope 是否多出了本
+        # 不该落库的新行。
+        leaked = (await db.execute(
+            select(Gene).where(
+                Gene.version == "2.0.0",
+                Gene.visibility == "public",
+                Gene.id != source.id,
+                Gene.deleted_at.is_(None),
+            )
+        )).scalars().all()
+        assert leaked == []

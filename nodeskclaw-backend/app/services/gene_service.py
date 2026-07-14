@@ -3577,6 +3577,56 @@ async def is_user_admin_of_org(
     return membership is not None
 
 
+async def _create_gene_overwrite_submission(
+    db: AsyncSession,
+    *,
+    target_gene: Gene,
+    fork_gene: Gene,
+    attrs: dict,
+) -> dict:
+    """org/public 目标的 fork 覆盖：不落 genes 表，写入待审核的 GeneOverwriteSubmission。
+
+    真正的软删旧行 + 插入新行，等 review_gene_overwrite_submission()（下一个
+    任务）批准那一刻才执行——这样审核拒绝时 target_gene 完全不受影响。
+    注意：fork_gene 此时只是内存中的临时 Gene(...) 对象，从未 db.add() /
+    commit 过，这里只读取它身上的字段快照，绝不能把它自己落库。
+    """
+    from app.models.gene_overwrite_submission import GeneOverwriteSubmission
+
+    # 把 fork_gene 上算好的完整内容字段原样搬进待审核暂存表
+    submission = GeneOverwriteSubmission(
+        target_gene_id=target_gene.id,
+        source_gene_id=fork_gene.parent_gene_id,
+        lineage_group_id=fork_gene.lineage_group_id,
+        name=fork_gene.name,
+        slug=fork_gene.slug,
+        description=fork_gene.description,
+        short_description=fork_gene.short_description,
+        category=fork_gene.category,
+        tags=fork_gene.tags,
+        source=fork_gene.source,
+        source_ref=fork_gene.source_ref,
+        icon=fork_gene.icon,
+        version=fork_gene.version,
+        manifest=fork_gene.manifest,
+        dependencies=fork_gene.dependencies,
+        synergies=fork_gene.synergies,
+        visibility=attrs["visibility"],
+        org_id=attrs["org_id"],
+        created_by=attrs["created_by"],
+        review_status=GeneReviewStatus.pending_owner,
+    )
+    db.add(submission)
+    await db.commit()
+    await db.refresh(submission)
+    return {
+        "kind": "overwrite_submission",
+        "submission_id": submission.id,
+        "target_gene_id": target_gene.id,
+        "proposed_version": submission.version,
+    }
+
+
 async def fork_gene_to_library(
     db: AsyncSession,
     source_identifier: str,
@@ -3777,8 +3827,17 @@ async def fork_gene_to_library(
         lineage_group_id=source.lineage_group_id if source is not None else new_fork_id,
     )
 
+    # org/public 目标的覆盖：不允许立即改 genes 表，改成写入待审核暂存
+    # （见 _create_gene_overwrite_submission）。等审核通过才真正软删旧行 +
+    # 插入新行；本函数到此为止，fork 这个内存对象永远不会被 db.add()。
+    if pending_overwrite_target is not None and target != "personal":
+        return await _create_gene_overwrite_submission(
+            db, target_gene=pending_overwrite_target, fork_gene=fork, attrs=attrs,
+        )
+
     # 覆盖模式：先记下旧行 id，再软删；插入新行成功后把 InstanceGene/OrgRequiredGene
     # 等"当前生效状态"引用重接到新行，避免旧行软删后这些记录被过滤丢失。
+    # （personal 目标沿用 Task 9 的立即执行行为，未受本次改动影响。）
     old_gene_id: str | None = None
     if pending_overwrite_target is not None:
         old_gene_id = pending_overwrite_target.id
