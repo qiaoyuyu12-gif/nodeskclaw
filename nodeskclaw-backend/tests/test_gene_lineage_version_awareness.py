@@ -643,3 +643,192 @@ async def test_fork_overwrite_public_target_creates_submission_not_gene(require_
             )
         )).scalars().all()
         assert leaked == []
+
+
+# ═══════════════════════════════════════════════════
+#  Task 13：newer_sibling_versions 单向落后检测
+# ═══════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_list_genes_marks_newer_sibling_version_for_personal_gene(require_test_db):
+    """场景：管理员更新了组织版本，A 的个人库应该看到落后提示。"""
+    from app.models.gene import Gene
+    from app.models.organization import Organization
+    from app.models.org_membership import OrgMembership, OrgRole
+    from app.services.gene_service import fork_gene_to_library, list_genes
+    from sqlalchemy import select
+
+    async with TestSessionLocal() as db:
+        org = Organization(id=_uid("org"), name="Org X", slug=_uid("org-x"))
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add_all([org, user])
+        await db.commit()
+        membership = OrgMembership(org_id=org.id, user_id=user.id, role=OrgRole.member)
+        db.add(membership)
+        await db.commit()
+
+        personal = Gene(
+            id=_uid("gene"), name="团队助手", slug=_uid("team-bot"), visibility="personal",
+            created_by=user.id, version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(personal)
+        await db.commit()
+
+        # 用 is_super_admin=True 触发 bypass_review，让 org 副本直接落
+        # approved + is_published=True——与场景描述"管理员更新了组织版本"一致，
+        # 也符合落后检测只应该提示已发布/已通过审核内容的规则（回归测试见
+        # test_list_genes_excludes_unpublished_pending_sibling_from_badge）
+        await fork_gene_to_library(
+            db, personal.id, "org",
+            current_user=_FakeUser(user.id, org.id, is_super_admin=True), org_id=org.id,
+        )
+        org_gene = (await db.execute(
+            select(Gene).where(Gene.lineage_group_id == personal.lineage_group_id, Gene.visibility == "org_private")
+        )).scalar_one()
+        assert org_gene.is_published is True
+        org_gene.version = "1.1.0"
+        await db.commit()
+
+        genes, _total = await list_genes(
+            db, visibility="personal", org_id=None, user_id=user.id, page=1, page_size=20,
+        )
+        personal_item = next(g for g in genes if g["id"] == personal.id)
+        assert personal_item["newer_sibling_versions"] == [
+            {"visibility": "org_private", "org_id": org.id, "org_name": "Org X", "version": "1.1.0"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_list_genes_no_badge_on_org_scope_even_if_personal_is_newer(require_test_db):
+    """单向检测：即使个人库版本更新，组织库自己的卡片也不应该有任何提示。
+
+    注意：visibility="org_private" 的 list_genes() 不走 _list_genes_local，
+    而是经 get_aggregator().search() -> LocalAdapter.search_skills()。这里
+    必须现场初始化聚合器（绑定 TestSessionLocal 的 LocalAdapter），并在用例
+    结束后 close()，避免污染同进程内其它测试模块的全局单例。
+    另外 LocalAdapter.search_skills 会过滤 is_published=True，所以 fork 时
+    用 is_super_admin=True 的 current_user 触发 bypass_review，让 org 副本
+    直接落 approved + is_published=True，而不是停在 pending_owner。
+    """
+    from app.models.gene import Gene
+    from app.models.organization import Organization
+    from app.services import registry_aggregator
+    from app.services.gene_service import fork_gene_to_library, list_genes
+    from app.services.local_adapter import LocalAdapter
+    from sqlalchemy import select
+
+    async with TestSessionLocal() as db:
+        org = Organization(id=_uid("org"), name="Org Z", slug=_uid("org-z"))
+        user = User(id=_uid("user"), name="Carol", username=_uid("carol"))
+        db.add_all([org, user])
+        await db.commit()
+
+        personal = Gene(
+            id=_uid("gene"), name="客服助手", slug=_uid("customer-bot"), visibility="personal",
+            created_by=user.id, version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(personal)
+        await db.commit()
+
+        await fork_gene_to_library(
+            db, personal.id, "org",
+            current_user=_FakeUser(user.id, org.id, is_super_admin=True), org_id=org.id,
+        )
+
+        personal_row = (await db.execute(select(Gene).where(Gene.id == personal.id))).scalar_one()
+        personal_row.version = "1.2.0"
+        await db.commit()
+
+        registry_aggregator.init([LocalAdapter(session_factory=TestSessionLocal)])
+        try:
+            genes, _total = await list_genes(
+                db, visibility="org_private", org_id=org.id, user_id=user.id, page=1, page_size=20,
+            )
+        finally:
+            await registry_aggregator.close()
+        org_item = next(g for g in genes if g["visibility"] == "org_private")
+        assert org_item["newer_sibling_versions"] == []
+
+
+@pytest.mark.asyncio
+async def test_list_genes_no_false_positive_right_after_fork(require_test_db):
+    from app.models.gene import Gene
+    from app.models.organization import Organization
+    from app.services.gene_service import fork_gene_to_library, list_genes
+
+    async with TestSessionLocal() as db:
+        org = Organization(id=_uid("org"), name="Org Y", slug=_uid("org-y"))
+        user = User(id=_uid("user"), name="Bob", username=_uid("bob"))
+        db.add_all([org, user])
+        await db.commit()
+
+        personal = Gene(
+            id=_uid("gene"), name="客服助手", slug=_uid("customer-bot"), visibility="personal",
+            created_by=user.id, version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(personal)
+        await db.commit()
+
+        await fork_gene_to_library(
+            db, personal.id, "org", current_user=_FakeUser(user.id, org.id), org_id=org.id,
+        )
+
+        genes, _total = await list_genes(
+            db, visibility="personal", org_id=None, user_id=user.id, page=1, page_size=20,
+        )
+        personal_item = next(g for g in genes if g["id"] == personal.id)
+        assert personal_item["newer_sibling_versions"] == []
+
+
+@pytest.mark.asyncio
+async def test_list_genes_excludes_unpublished_pending_sibling_from_badge(require_test_db):
+    """回归测试：待审核（pending_owner，is_published=False）的 org 副本不应该
+    被当作"落后提示"的来源——这类内容在产品其它任何地方都不可见/不可 fork，
+    如果被计入落后检测，用户会看到"组织库有更新版本"却点不到、找不到，造成困惑。
+
+    场景：普通成员（非 org admin，非平台超管）fork 个人技能到 org，不走
+    bypass_review，落库为 pending_owner + is_published=False；随后把这个待审
+    核的 org 副本版本号调高。此时查个人库列表，newer_sibling_versions 必须
+    仍是空数组——待审核的 sibling 不能"泄漏"进落后提示。
+    """
+    from app.models.gene import Gene
+    from app.models.organization import Organization
+    from app.models.org_membership import OrgMembership, OrgRole
+    from app.services.gene_service import fork_gene_to_library, list_genes
+    from sqlalchemy import select
+
+    async with TestSessionLocal() as db:
+        org = Organization(id=_uid("org"), name="Org P", slug=_uid("org-p"))
+        user = User(id=_uid("user"), name="Dave", username=_uid("dave"))
+        db.add_all([org, user])
+        await db.commit()
+        # 普通成员，非 admin —— fork 时不会 bypass_review
+        membership = OrgMembership(org_id=org.id, user_id=user.id, role=OrgRole.member)
+        db.add(membership)
+        await db.commit()
+
+        personal = Gene(
+            id=_uid("gene"), name="待审核助手", slug=_uid("pending-bot"), visibility="personal",
+            created_by=user.id, version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(personal)
+        await db.commit()
+
+        # 普通成员 fork，不传 is_super_admin，默认走 pending_owner 审核流程
+        await fork_gene_to_library(
+            db, personal.id, "org", current_user=_FakeUser(user.id, org.id), org_id=org.id,
+        )
+        org_gene = (await db.execute(
+            select(Gene).where(Gene.lineage_group_id == personal.lineage_group_id, Gene.visibility == "org_private")
+        )).scalar_one()
+        assert org_gene.review_status == "pending_owner"
+        assert org_gene.is_published is False
+        org_gene.version = "9.9.9"
+        await db.commit()
+
+        genes, _total = await list_genes(
+            db, visibility="personal", org_id=None, user_id=user.id, page=1, page_size=20,
+        )
+        personal_item = next(g for g in genes if g["id"] == personal.id)
+        assert personal_item["newer_sibling_versions"] == []

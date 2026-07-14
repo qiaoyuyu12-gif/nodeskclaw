@@ -392,6 +392,101 @@ def _gene_to_dict(gene: Gene) -> dict:
     }
 
 
+async def _compute_newer_sibling_versions(
+    db: AsyncSession,
+    genes: list[Gene],
+    *,
+    user_id: str | None,
+) -> dict[str, list[dict]]:
+    """单向检测：只为 visibility=personal 的 Gene 计算"组织库/公共市场是否
+    比它新"，org_private/public 的 Gene 恒为空数组，不查询、不计算。
+
+    注意：假定 `genes` 列表中的 personal gene 全部属于同一个 `user_id`
+    （当前唯一调用方 `_list_genes_local` 按 created_by==user_id 过滤后才会
+    传进来，天然满足）；如果未来有新调用方传入混合多用户的 gene 列表，这里的
+    `member_org_ids` 圈定逻辑就不再准确，需要按 gene 逐个求其所有者的
+    member_org_ids，而不是复用同一份。
+    """
+    # 只挑出个人库的 gene，org_private/public 直接跳过（单向检测，设计明确要求）
+    personal_genes = [g for g in genes if g.visibility == ContentVisibility.personal]
+    if not personal_genes:
+        return {}
+
+    lineage_group_ids = {g.lineage_group_id for g in personal_genes}
+
+    # 查出当前用户所属的所有组织，用于圈定"哪些 org_private 副本对该用户可见"
+    # ——同血缘技能可能被多个 org fork 过，但只有用户实际所在的 org 才算"可见的落后提示来源"
+    member_org_ids: set[str] = set()
+    if user_id:
+        from app.models.org_membership import OrgMembership
+        rows = await db.execute(
+            select(OrgMembership.org_id).where(
+                OrgMembership.user_id == user_id, not_deleted(OrgMembership),
+            )
+        )
+        member_org_ids = {r[0] for r in rows.all()}
+
+    # public：审核通过 OR 历史无审核态（review_status IS NULL，向后兼容老数据），
+    # 与 _list_genes_local / LocalAdapter.search_skills 的 public 分支保持一致；
+    # org_private：不需要 review_status 检查（org 内部可见性本身就是审核对象），
+    # 只需 is_published 兜底——与 _list_genes_local 对 org_private 的处理一致
+    public_filter = and_(
+        Gene.visibility == ContentVisibility.public,
+        or_(
+            Gene.review_status == GeneReviewStatus.approved,
+            Gene.review_status.is_(None),
+        ),
+    )
+    org_private_filter = (
+        and_(Gene.visibility == ContentVisibility.org_private, Gene.org_id.in_(member_org_ids))
+        if member_org_ids else False
+    )
+    visibility_filter = or_(public_filter, org_private_filter)
+    result = await db.execute(
+        select(Gene.id, Gene.lineage_group_id, Gene.visibility, Gene.org_id, Gene.version)
+        .where(
+            Gene.lineage_group_id.in_(lineage_group_ids),
+            not_deleted(Gene),
+            # 关键：待审核（pending_owner/pending_admin）或被拒绝的 sibling 一律
+            # 不应该出现在"落后提示"里——这些内容在产品其它任何地方都不可见/不可
+            # fork，提示用户"有更新版本"但点不到会造成困惑（复现场景：fork 到
+            # org 但不 bypass_review，走默认 pending_owner + is_published=False）
+            Gene.is_published.is_(True),
+            Gene.visibility.in_([ContentVisibility.org_private, ContentVisibility.public]),
+            visibility_filter,
+        )
+    )
+    candidates = result.all()
+
+    # 批量查组织名，避免 N+1
+    org_ids_needing_name = {row.org_id for row in candidates if row.visibility == ContentVisibility.org_private and row.org_id}
+    org_names: dict[str, str] = {}
+    if org_ids_needing_name:
+        from app.models.organization import Organization
+        org_rows = await db.execute(select(Organization.id, Organization.name).where(Organization.id.in_(org_ids_needing_name)))
+        org_names = {r.id: r.name for r in org_rows.all()}
+
+    by_group: dict[str, list] = {}
+    for row in candidates:
+        by_group.setdefault(row.lineage_group_id, []).append(row)
+
+    output: dict[str, list[dict]] = {}
+    for gene in personal_genes:
+        siblings = by_group.get(gene.lineage_group_id, [])
+        newer = []
+        for row in siblings:
+            cmp_result = compare_versions(row.version, gene.version)
+            if cmp_result is not None and cmp_result > 0:
+                newer.append({
+                    "visibility": row.visibility,
+                    "org_id": row.org_id,
+                    "org_name": org_names.get(row.org_id) if row.org_id else None,
+                    "version": row.version,
+                })
+        output[gene.id] = newer
+    return output
+
+
 def _registry_item_to_dict(item) -> dict:
     """Convert a RegistrySkillItem to the dict format expected by frontends."""
     return {
@@ -424,6 +519,10 @@ def _registry_item_to_dict(item) -> dict:
         "updated_at": item.updated_at,
         "source_registry": item.source_registry,
         "source_registry_name": item.source_registry_name,
+        # org_private/public 结果恒为空数组：单向落后检测只对 personal 计算，
+        # 这条聚合器路径（list_genes 除 personal 外全部走这里）需要同步给出
+        # 静态默认值，否则前端拿不到这个 key（详见 _compute_newer_sibling_versions）
+        "newer_sibling_versions": [],
     }
 
 
@@ -557,7 +656,15 @@ async def _list_genes_local(
 
     result = await db.execute(base)
     genes = result.scalars().all()
-    return [_gene_to_dict(g) for g in genes], total
+    # 单向落后检测：只对 personal 可见性计算（_compute_newer_sibling_versions
+    # 内部会自行跳过非 personal 的 gene，这里统一调用简化调用方逻辑）
+    newer_versions_by_id = await _compute_newer_sibling_versions(db, genes, user_id=user_id)
+    items = []
+    for g in genes:
+        item = _gene_to_dict(g)
+        item["newer_sibling_versions"] = newer_versions_by_id.get(g.id, [])
+        items.append(item)
+    return items, total
 
 
 async def list_genes(
