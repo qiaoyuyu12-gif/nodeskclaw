@@ -43,6 +43,7 @@ import { useAuthStore } from '@/stores/auth'
 import { resolveApiErrorMessage } from '@/i18n/error'
 import CustomSelect from '@/components/shared/CustomSelect.vue'
 import { skillApi } from '@/services/skills'
+import { suggestNextPatch } from '@/utils/semver'
 
 const router = useRouter()
 const store = useGeneStore()
@@ -68,8 +69,6 @@ const localDragOver = ref(false)
 const localFileInputRef = ref<HTMLInputElement>()
 const selectedLocalFiles = ref<string[]>([])
 const localFolderInputRef = ref<HTMLInputElement>()
-// 上传目标库：默认 personal（个人 library，无需审核），可选 org / public
-const uploadTarget = ref<'personal' | 'org' | 'public'>('personal')
 
 // 上传限制：需与后端 genes.py 的 _MAX_UPLOAD_* 常量保持一致，防内存/存储 DoS
 const MAX_UPLOAD_FILE_SIZE = 10 * 1024 * 1024 // 单文件 10MB
@@ -116,34 +115,35 @@ async function handleLocalFolder() {
   localError.value = null
   localSuccess.value = null
   try {
-    const uploaded = await skillApi.uploadFolder(input.files, false, uploadTarget.value)
-    // admin/超管自上传后端直接 approved；非 admin 仍 pending_owner，文案分流
-    const isApproved = uploaded?.review_status === 'approved' || uploadTarget.value === 'personal'
-    if (uploadTarget.value === 'personal') {
-      localSuccess.value = '已上传到个人技能 library'
-    } else if (uploadTarget.value === 'org') {
-      localSuccess.value = isApproved
-        ? '已上传到组织技能 library'
-        : '已提交到组织技能 library，等待组织管理员审核'
-    } else {
-      localSuccess.value = isApproved
-        ? '已发布到公共市场'
-        : '已提交到公共市场，等待组织管理员审核'
-    }
+    // 直接上传只能进入个人 library（后端已无条件拒绝 org/public target），无需再按目标分流文案
+    await skillApi.uploadFolder(input.files, false, 'personal')
+    localSuccess.value = '已上传到个人技能 library'
     showLocalUpload.value = false
     selectedLocalFiles.value = []
     await loadData()
   } catch (e: any) {
-    // 409 冲突：同名基因已存在，提示用户确认覆盖
+    // 409 冲突：同名基因已存在，提示用户确认覆盖并输入本次覆盖的版本号
     if (e?.response?.status === 409) {
       const msg = e?.response?.data?.message || ''
       if (msg.includes('已存在') || msg.includes('already exists')) {
         const folderName = input.files[0]?.webkitRelativePath?.split('/')[0] || '该文件夹'
-        const ok = confirm(`${folderName} 基因已存在，是否覆盖原基因？`)
+        // 已知局限：后端 409 响应暂未携带冲突基因的当前版本号，此处 fallback 到 1.0.0（详见任务计划文档）
+        const existingVersion: string = e?.response?.data?.data?.version || '1.0.0'
+        const suggested = suggestNextPatch(existingVersion)
+        const ok = confirm(`${folderName} 基因已存在（当前版本 ${existingVersion}），是否覆盖原基因？`)
         if (ok) {
-          // 重新上传，携带覆盖参数
+          const inputVersion = prompt('请输入本次覆盖的版本号（不改内容可保持原版本号不变）', suggested)
+          if (inputVersion === null) {
+            localError.value = '已取消上传'
+            return
+          }
+          // 用户清空输入框后直接点确定时 inputVersion 是空字符串而非 null，
+          // 不能算取消上传；此时按建议版本号处理，避免空字符串被当作「不传版本」
+          // 悄悄回退到后端默认值 1.0.0，导致「版本倒退」报错
+          const finalVersion = inputVersion.trim() || suggested
+          // 重新上传，携带覆盖参数与版本号
           try {
-            await skillApi.uploadFolder(input.files, true, uploadTarget.value)
+            await skillApi.uploadFolder(input.files, true, 'personal', finalVersion)
             localSuccess.value = `基因已覆盖`
             showLocalUpload.value = false
             selectedLocalFiles.value = []
@@ -744,47 +744,12 @@ function hasNativeTools(gene: GeneItem): boolean {
                   </li>
                 </ul>
 
-                <!-- 上传目标库选择：personal 无需审核，org/public 需组织 admin 审核 -->
+                <!-- 直接上传只能进入个人库；组织库/公共市场内容需先落地个人库，再通过技能详情页的 Fork 功能同步过去 -->
                 <div class="mt-3 rounded-lg bg-white border border-gray-200 p-3">
-                  <p class="text-xs font-medium text-gray-600 mb-2">上传到：</p>
-                  <div class="flex flex-col gap-2">
-                    <label class="flex items-start gap-2 cursor-pointer text-xs">
-                      <input
-                        v-model="uploadTarget"
-                        type="radio"
-                        value="personal"
-                        class="mt-0.5"
-                      />
-                      <span class="text-gray-700">
-                        <span class="font-medium">个人技能 library</span>
-                        <span class="text-gray-500"> — 仅自己可见，立即可用</span>
-                      </span>
-                    </label>
-                    <label class="flex items-start gap-2 cursor-pointer text-xs">
-                      <input
-                        v-model="uploadTarget"
-                        type="radio"
-                        value="org"
-                        class="mt-0.5"
-                      />
-                      <span class="text-gray-700">
-                        <span class="font-medium">组织技能 library</span>
-                        <span class="text-gray-500"> — 组织内可见，需组织管理员审核</span>
-                      </span>
-                    </label>
-                    <label class="flex items-start gap-2 cursor-pointer text-xs">
-                      <input
-                        v-model="uploadTarget"
-                        type="radio"
-                        value="public"
-                        class="mt-0.5"
-                      />
-                      <span class="text-gray-700">
-                        <span class="font-medium">公共市场</span>
-                        <span class="text-gray-500"> — 所有用户可见，需组织管理员审核</span>
-                      </span>
-                    </label>
-                  </div>
+                  <p class="text-xs text-gray-600">
+                    <span class="font-medium text-gray-700">上传到个人技能 library</span>
+                    <span class="text-gray-500"> — 仅自己可见，立即可用。需要同步到组织库/公共市场，请上传后通过技能详情页的 Fork 功能操作。</span>
+                  </p>
                 </div>
 
                 <div class="mt-3 flex justify-end">
