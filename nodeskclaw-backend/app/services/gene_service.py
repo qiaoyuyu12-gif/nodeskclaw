@@ -2300,7 +2300,14 @@ async def publish_variant(
     if existing_name is not None:
         raise ConflictError(f"技能名称 '{name}' 已存在")
 
+    # variant 是 AI 进化出的新技能，不是父技能"换了个 scope"的副本，不应
+    # 继承父技能的 lineage_group_id。lineage_group_id 是 NOT NULL 列，必须
+    # 和新行同时写入，因此显式生成新行的 id（而不是依赖 Column default 在
+    # flush 时才生成），用自己的新 id 单独成组（与 create_gene() 全新创建
+    # 场景的处理方式保持一致）。
+    variant_id = str(uuid.uuid4())
     variant = Gene(
+        id=variant_id,
         name=name,
         slug=slug,
         description=variant_desc,
@@ -2317,6 +2324,7 @@ async def publish_variant(
         created_by_instance_id=instance_id,
         is_published=False,
         review_status=GeneReviewStatus.pending_admin,
+        lineage_group_id=variant_id,
     )
     db.add(variant)
 
@@ -2426,7 +2434,13 @@ async def handle_creation_callback(
     if existing_name is not None:
         raise ConflictError(f"技能名称 '{gene_name}' 已存在")
 
+    # Agent 自主创造的新技能，是一条全新的血缘起点，不存在"父技能"可继承。
+    # lineage_group_id 是 NOT NULL 列，必须和新行同时写入，因此显式生成新行
+    # 的 id（而不是依赖 Column default 在 flush 时才生成），用自己的新 id
+    # 单独成组（与 create_gene() 全新创建场景的处理方式保持一致）。
+    new_gene_id = str(uuid.uuid4())
     gene = Gene(
+        id=new_gene_id,
         name=gene_name,
         slug=meta.get("gene_slug", f"agent-gene-{payload.task_id[:8]}"),
         description=gene_desc,
@@ -2440,6 +2454,7 @@ async def handle_creation_callback(
         created_by_instance_id=payload.instance_id,
         is_published=False,
         review_status=GeneReviewStatus.pending_owner,
+        lineage_group_id=new_gene_id,
     )
     db.add(gene)
     try:

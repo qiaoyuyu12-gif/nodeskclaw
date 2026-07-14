@@ -132,3 +132,53 @@ async def test_overwrite_rejects_invalid_version_format(require_test_db):
                 db, _req("客服助手", "customer-bot", version="latest", overwrite=True),
                 user_id=user.id, org_id=None, visibility="personal",
             )
+
+
+@pytest.mark.asyncio
+async def test_publish_variant_gets_independent_lineage_group_id(require_test_db):
+    """variant 是进化出的新技能，不应该继承父技能的 lineage_group_id。"""
+    from app.models.cluster import Cluster
+    from app.models.gene import Gene, InstanceGene
+    from app.models.instance import Instance
+    from app.services.gene_service import publish_variant
+
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+
+        cluster = Cluster(id=_uid("cluster"), name="Cluster", created_by=user.id)
+        instance = Instance(
+            id=_uid("inst"), name="Agent", slug=_uid("agent"), cluster_id=cluster.id,
+            namespace="default", image_version="latest", created_by=user.id,
+        )
+        db.add_all([cluster, instance])
+        await db.commit()
+
+        # Gene.lineage_group_id 是 NOT NULL 列且没有 Column 级默认值，直接
+        # 构造 Gene(...)（绕过 create_gene()）时必须显式提供，这里用 parent
+        # 自己的 id 作为血缘起点，模拟"正常创建的父技能"。
+        parent_id = str(uuid.uuid4())
+        parent = Gene(
+            id=parent_id, name="原始助手", slug=_uid("parent-skill"),
+            lineage_group_id=parent_id,
+        )
+        db.add(parent)
+        await db.commit()
+        parent_lineage_group_id = parent.lineage_group_id
+
+        ig = InstanceGene(
+            instance_id=instance.id, gene_id=parent.id,
+            learning_output="一些深度学习产出的经验内容",
+        )
+        db.add(ig)
+        await db.commit()
+
+        await publish_variant(db, instance.id, parent.id)
+
+        from sqlalchemy import select
+        variant = (await db.execute(
+            select(Gene).where(Gene.parent_gene_id == parent.id)
+        )).scalar_one()
+        assert variant.lineage_group_id != parent_lineage_group_id
+        assert variant.lineage_group_id == variant.id

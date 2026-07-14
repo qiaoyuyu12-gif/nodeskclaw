@@ -52,6 +52,18 @@ def _uid(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
+def _bare_gene(name: str, slug: str) -> Gene:
+    """构造未经 create_gene() 的裸 Gene 行（测试夹具专用）。
+
+    Gene.lineage_group_id 是 NOT NULL 列且没有 Column 级默认值，正常创建
+    路径（create_gene()）会显式生成并写入；这里绕过该路径直接插入夹具数据，
+    所以要自己生成 id 并把它同时用作 lineage_group_id（对这些测试而言，
+    只是"占位的已存在技能"，具体取值无关紧要，只要满足 NOT NULL 即可）。
+    """
+    gene_id = str(uuid.uuid4())
+    return Gene(id=gene_id, name=name, slug=slug, lineage_group_id=gene_id)
+
+
 @pytest.mark.asyncio
 async def test_get_gene_by_name_in_scope_returns_none_when_absent(require_test_db):
     async with TestSessionLocal() as db:
@@ -311,12 +323,12 @@ async def test_publish_variant_rejects_duplicate_name_in_public_scope(require_te
 
         # 已存在的公共基因，占用了即将发布的变体名称
         occupied_name = f"进化助手-{_uid('n')}"
-        existing_public = Gene(name=occupied_name, slug=_uid("existing-public"))
+        existing_public = _bare_gene(occupied_name, _uid("existing-public"))
         db.add(existing_public)
         await db.commit()
 
         # 待发布变体所属的父基因
-        parent = Gene(name=f"原始助手-{_uid('n')}", slug=_uid("parent-skill"))
+        parent = _bare_gene(f"原始助手-{_uid('n')}", _uid("parent-skill"))
         db.add(parent)
         await db.commit()
 
@@ -348,7 +360,7 @@ async def test_creation_callback_rejects_duplicate_name_in_public_scope(require_
         instance = await _create_instance(db, user)
 
         occupied_name = f"智能助理-{_uid('n')}"
-        existing_public = Gene(name=occupied_name, slug=_uid("existing-public"))
+        existing_public = _bare_gene(occupied_name, _uid("existing-public"))
         db.add(existing_public)
         await db.commit()
 
@@ -382,7 +394,7 @@ async def test_publish_variant_integrity_error_on_commit_becomes_conflict_error(
         await db.commit()
         instance = await _create_instance(db, user)
 
-        parent = Gene(name=f"原始助手-{_uid('n')}", slug=_uid("parent-skill"))
+        parent = _bare_gene(f"原始助手-{_uid('n')}", _uid("parent-skill"))
         db.add(parent)
         await db.commit()
 
