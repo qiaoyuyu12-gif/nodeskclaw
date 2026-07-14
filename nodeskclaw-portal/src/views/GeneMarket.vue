@@ -299,15 +299,32 @@ async function onDeleteGene(gene: GeneItem) {
 const forkingSlug = ref<string | null>(null)
 // 记录正在下载中的技能 slug，用于按钮 loading 状态控制
 const downloadingSlug = ref<string | null>(null)
-async function onForkGene(gene: GeneItem, target: 'personal' | 'org' | 'public') {
+async function onForkGene(
+  gene: GeneItem,
+  target: 'personal' | 'org' | 'public',
+  overwrite = false,
+) {
   forkingSlug.value = gene.slug
   try {
     // 必须用 gene.id（UUID）传给后端：三向 fork 后同 slug 可在多 scope 并存，按 slug 查会冲突
-    const forked = await store.forkGene(gene.id, target)
+    const forked = await store.forkGene(gene.id, target, overwrite)
+
+    // org/public 目标命中覆盖时后端返回 { kind: 'overwrite_submission', ... } 而非 Gene，
+    // 说明请求已进入审核队列，不代表立即生效——必须在成功文案分支之前拦截判断
+    // any 转换是有意为之的最小类型逃逸：GeneItem 类型未建模 overwrite_submission 这一分支返回形状
+    if ((forked as any)?.kind === 'overwrite_submission') {
+      toast.success(t('geneMarket.forkOverwriteSubmitted'))
+      forkingSlug.value = null
+      return
+    }
+
     // 按 target + 是否免审切换文案：admin/超管自上传时后端直接 approved，不应再提示「等待审核」
     const isApproved = forked?.review_status === 'approved'
     let successKey: string
-    if (target === 'personal') {
+    if (overwrite) {
+      // 走到这里说明是 personal 目标的覆盖（org/public 覆盖已被上面的 kind 分支拦截并 return）
+      successKey = 'geneMarket.forkOverwriteSuccess'
+    } else if (target === 'personal') {
       successKey = 'geneMarket.forkToPersonalSuccess'
     } else if (target === 'org') {
       successKey = isApproved ? 'geneMarket.forkToOrgImmediate' : 'geneMarket.forkToOrgSuccess'
@@ -322,6 +339,25 @@ async function onForkGene(gene: GeneItem, target: 'personal' | 'org' | 'public')
       (target === 'public' && selectedVisibility.value === 'public')
     if (visMatches) await loadData()
   } catch (e: unknown) {
+    // 已是最新版本：不算真正的失败，提示成功语义的提示语并直接返回
+    const messageKey = (e as { response?: { data?: { message_key?: string } } })?.response?.data
+      ?.message_key
+    if (messageKey === 'errors.gene.fork_already_up_to_date') {
+      toast.success(t('geneMarket.forkAlreadyUpToDate'))
+      return
+    }
+    // 命中同名冲突且尚未处于覆盖重试中时，弹出确认框，用户确认后以 overwrite=true 重新发起请求
+    // if (!overwrite) 防止确认覆盖后仍报「已存在」时无限递归重试
+    if (!overwrite) {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message || ''
+      if (msg.includes('已存在')) {
+        const ok = confirm(t('geneMarket.forkConflictConfirm', { name: gene.name }))
+        if (ok) {
+          await onForkGene(gene, target, true)
+          return
+        }
+      }
+    }
     // 统一错误解析：优先 message_key 翻译（如 fork_personal_forbidden / fork_org_forbidden）
     toast.error(resolveApiErrorMessage(e, t('geneMarket.forkFailed')))
   } finally {
