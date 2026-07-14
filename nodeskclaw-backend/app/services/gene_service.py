@@ -35,6 +35,7 @@ from app.models.gene import (
     InstanceGene,
     InstanceGeneStatus,
 )
+from app.models.gene_overwrite_submission import GeneOverwriteSubmission
 from app.models.instance import Instance, InstanceStatus
 from app.models.org_required_gene import OrgRequiredGene
 from app.models.workspace_agent import WorkspaceAgent
@@ -2636,7 +2637,6 @@ async def review_gene_overwrite_submission(
     但不复用 bypass_review——提交者自己是 admin 也必须显式调用这个函数才
     会生效，不会因为身份而自动跳过。
     """
-    from app.models.gene_overwrite_submission import GeneOverwriteSubmission
     from app.models.org_membership import OrgMembership, OrgRole
 
     # ── 查提交记录 + 状态校验 ──────────────────────────────────────────
@@ -3404,52 +3404,49 @@ async def get_pending_review_genes(
     db: AsyncSession,
     current_user=None,
 ) -> list[dict]:
-    """获取当前用户可审核的待审 gene 列表。
+    """获取当前用户可审核的待审列表，合并展示新建 Gene（kind=new）与 fork
+    覆盖 org/public 目标产生的 GeneOverwriteSubmission（kind=overwrite）。
 
     权限范围：
       - 平台超管：返回所有 pending_owner / pending_admin
-      - 任意组织 admin：仅返回其作为 admin 的 org 下的待审 gene
+      - 任意组织 admin：仅返回其作为 admin 的 org 下的待审条目
       - 其他用户（包括未传 current_user）：返回空列表
 
-    与 review_gene 的权限模型一致，避免列表里出现用户实际无权审核的条目。
-
-    返回的每条 dict 在 _gene_to_dict 基础上额外注入 created_by_name /
-    created_by_email，前端审核中心展示用，避免 UI 直接显示 UUID。
+    与 review_gene / review_gene_overwrite_submission 的权限模型一致，
+    避免列表里出现用户实际无权审核的条目。
     """
     # 兼容旧调用：未传 current_user 时退回到"全部"以便测试场景灵活，但
     # 这条路径 API 层不会走到（API 必传 current_user）。
     if current_user is None:
-        result = await db.execute(
-            select(Gene)
-            .where(
-                Gene.review_status.in_([
-                    GeneReviewStatus.pending_owner,
-                    GeneReviewStatus.pending_admin,
-                ]),
+        gene_rows = (await db.execute(
+            select(Gene).where(
+                Gene.review_status.in_([GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin]),
                 not_deleted(Gene),
-            )
-            .order_by(Gene.created_at.desc())
-        )
-        return await _attach_uploader_identity(
-            db, [_gene_to_dict(g) for g in result.scalars().all()],
-        )
+            ).order_by(Gene.created_at.desc())
+        )).scalars().all()
+        submission_rows = (await db.execute(
+            select(GeneOverwriteSubmission).where(
+                GeneOverwriteSubmission.review_status.in_([GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin]),
+                not_deleted(GeneOverwriteSubmission),
+            ).order_by(GeneOverwriteSubmission.created_at.desc())
+        )).scalars().all()
+        return await _merge_pending_review_items(db, gene_rows, submission_rows)
 
     # 超管 → 全部
     if getattr(current_user, "is_super_admin", False):
-        result = await db.execute(
-            select(Gene)
-            .where(
-                Gene.review_status.in_([
-                    GeneReviewStatus.pending_owner,
-                    GeneReviewStatus.pending_admin,
-                ]),
+        gene_rows = (await db.execute(
+            select(Gene).where(
+                Gene.review_status.in_([GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin]),
                 not_deleted(Gene),
-            )
-            .order_by(Gene.created_at.desc())
-        )
-        return await _attach_uploader_identity(
-            db, [_gene_to_dict(g) for g in result.scalars().all()],
-        )
+            ).order_by(Gene.created_at.desc())
+        )).scalars().all()
+        submission_rows = (await db.execute(
+            select(GeneOverwriteSubmission).where(
+                GeneOverwriteSubmission.review_status.in_([GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin]),
+                not_deleted(GeneOverwriteSubmission),
+            ).order_by(GeneOverwriteSubmission.created_at.desc())
+        )).scalars().all()
+        return await _merge_pending_review_items(db, gene_rows, submission_rows)
 
     # 普通用户 → 查其作为 admin 的所有 org_id
     from app.models.org_membership import OrgMembership, OrgRole
@@ -3466,21 +3463,63 @@ async def get_pending_review_genes(
         # 既不是超管也不是任何 org admin → 无可见待审项
         return []
 
-    result = await db.execute(
-        select(Gene)
-        .where(
-            Gene.review_status.in_([
-                GeneReviewStatus.pending_owner,
-                GeneReviewStatus.pending_admin,
-            ]),
+    gene_rows = (await db.execute(
+        select(Gene).where(
+            Gene.review_status.in_([GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin]),
             Gene.org_id.in_(admin_org_ids),
             not_deleted(Gene),
-        )
-        .order_by(Gene.created_at.desc())
-    )
-    return await _attach_uploader_identity(
-        db, [_gene_to_dict(g) for g in result.scalars().all()],
-    )
+        ).order_by(Gene.created_at.desc())
+    )).scalars().all()
+    submission_rows = (await db.execute(
+        select(GeneOverwriteSubmission).where(
+            GeneOverwriteSubmission.review_status.in_([GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin]),
+            GeneOverwriteSubmission.org_id.in_(admin_org_ids),
+            not_deleted(GeneOverwriteSubmission),
+        ).order_by(GeneOverwriteSubmission.created_at.desc())
+    )).scalars().all()
+    return await _merge_pending_review_items(db, gene_rows, submission_rows)
+
+
+async def _merge_pending_review_items(
+    db: AsyncSession,
+    gene_rows: list[Gene],
+    submission_rows: list,
+) -> list[dict]:
+    """把新建 Gene（kind=new）和覆盖提交（kind=overwrite）合并成一份待审列表。
+
+    返回的每条 dict 都额外注入 created_by_name / created_by_email，前端
+    审核中心展示用，避免 UI 直接显示 UUID。
+    """
+    new_items = await _attach_uploader_identity(db, [_gene_to_dict(g) for g in gene_rows])
+    for item in new_items:
+        item["kind"] = "new"
+
+    # 覆盖提交需要额外带上目标 Gene 的当前名称/版本，供前端展示"旧版本 -> 新版本"。
+    target_ids = {s.target_gene_id for s in submission_rows}
+    target_genes: dict[str, Gene] = {}
+    if target_ids:
+        target_rows = (await db.execute(select(Gene).where(Gene.id.in_(target_ids)))).scalars().all()
+        target_genes = {g.id: g for g in target_rows}
+
+    overwrite_items = []
+    for s in submission_rows:
+        target = target_genes.get(s.target_gene_id)
+        overwrite_items.append({
+            "kind": "overwrite",
+            "submission_id": s.id,
+            "target_gene_id": s.target_gene_id,
+            # 目标行理论上不该被删（覆盖流程只软删并同事务插入新行），但为防御
+            # 极端时序问题（目标行在提交后、审核前被其他流程删除），回退到提交
+            # 记录自身保存的 name 快照，避免 None 导致前端渲染报错。
+            "target_gene_name": target.name if target else s.name,
+            "target_gene_version": target.version if target else None,
+            "proposed_version": s.version,
+            "created_by": s.created_by,
+            "created_at": s.created_at,
+        })
+    overwrite_items = await _attach_uploader_identity(db, overwrite_items)
+
+    return new_items + overwrite_items
 
 
 async def _attach_uploader_identity(
@@ -3743,8 +3782,6 @@ async def _create_gene_overwrite_submission(
     注意：fork_gene 此时只是内存中的临时 Gene(...) 对象，从未 db.add() /
     commit 过，这里只读取它身上的字段快照，绝不能把它自己落库。
     """
-    from app.models.gene_overwrite_submission import GeneOverwriteSubmission
-
     # 把 fork_gene 上算好的完整内容字段原样搬进待审核暂存表
     submission = GeneOverwriteSubmission(
         target_gene_id=target_gene.id,

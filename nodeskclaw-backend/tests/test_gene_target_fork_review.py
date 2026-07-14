@@ -538,11 +538,14 @@ def _stub_gene_to_dict(monkeypatch):
     )
 
 
-def _make_pending_db(genes_to_return, *, admin_org_ids=None):
+def _make_pending_db(genes_to_return, *, admin_org_ids=None, submissions_to_return=None):
     """构造 mock db：
-    - 超管路径：仅 1 次 execute（gene 列表）
-    - 普通用户路径：第 1 次 execute 返回 admin org_id 列表，第 2 次返回 gene 列表
+    - 超管路径：2 次 execute（gene 列表 + submission 列表）
+    - 普通用户路径：第 1 次 execute 返回 admin org_id 列表，第 2/3 次分别返回
+      gene 列表、submission 列表
     admin_org_ids 不为 None 时启用普通用户路径。
+    submissions_to_return 默认为空列表（本测试文件只关注 kind=new 的 gene 过滤逻辑，
+    覆盖提交合并逻辑由 test_gene_overwrite_submission_review.py 单独覆盖）。
     """
     db = AsyncMock()
     gene_result = MagicMock()
@@ -550,14 +553,19 @@ def _make_pending_db(genes_to_return, *, admin_org_ids=None):
     gene_scalars.all.return_value = genes_to_return
     gene_result.scalars.return_value = gene_scalars
 
+    submission_result = MagicMock()
+    submission_scalars = MagicMock()
+    submission_scalars.all.return_value = submissions_to_return or []
+    submission_result.scalars.return_value = submission_scalars
+
     if admin_org_ids is None:
-        # 超管路径
-        db.execute = AsyncMock(return_value=gene_result)
+        # 超管路径：gene 列表 + submission 列表
+        db.execute = AsyncMock(side_effect=[gene_result, submission_result])
     else:
-        # 普通用户路径：先查 org_id 列表
+        # 普通用户路径：先查 org_id 列表，再查 gene 列表，再查 submission 列表
         org_result = MagicMock()
         org_result.all.return_value = [(oid,) for oid in admin_org_ids]
-        db.execute = AsyncMock(side_effect=[org_result, gene_result])
+        db.execute = AsyncMock(side_effect=[org_result, gene_result, submission_result])
     return db
 
 
@@ -571,8 +579,9 @@ async def test_pending_review_super_admin_sees_all(_stub_gene_to_dict):
 
     result = await gene_service.get_pending_review_genes(db, current_user=user)
     assert len(result) == 2
-    # 超管只有 1 次 execute（无 OrgMembership 查询）
-    assert db.execute.await_count == 1
+    assert all(item["kind"] == "new" for item in result)
+    # 超管有 2 次 execute（gene 列表 + 覆盖提交列表，无 OrgMembership 查询）
+    assert db.execute.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -585,8 +594,9 @@ async def test_pending_review_org_admin_only_sees_own_org(_stub_gene_to_dict):
     result = await gene_service.get_pending_review_genes(db, current_user=user)
     assert len(result) == 1
     assert result[0]["id"] == "g-a"
-    # 应有 2 次 execute：先查 admin org_id，再查 gene
-    assert db.execute.await_count == 2
+    assert result[0]["kind"] == "new"
+    # 应有 3 次 execute：先查 admin org_id，再查 gene，再查覆盖提交
+    assert db.execute.await_count == 3
 
 
 @pytest.mark.asyncio

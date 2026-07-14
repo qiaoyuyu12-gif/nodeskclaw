@@ -840,6 +840,21 @@ async def admin_review_gene(
     return ApiResponse(data=result)
 
 
+@router.put("/admin/gene-overwrite-submissions/{submission_id}/review")
+async def admin_review_gene_overwrite_submission(
+    submission_id: str,
+    req: ReviewRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # 权限校验下沉到 service：与 admin_review_gene 一致（该提交所属 org 的
+    # OrgRole.admin 或平台超管），且不对提交者自身的 admin 身份做 bypass。
+    result = await gene_service.review_gene_overwrite_submission(
+        db, submission_id, req.action, req.reason, current_user=current_user,
+    )
+    return ApiResponse(data=result)
+
+
 @router.get("/admin/genomes")
 async def admin_list_genomes(
     keyword: str | None = None,

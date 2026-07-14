@@ -259,3 +259,94 @@ async def test_approve_does_not_bypass_for_admin_submitter(require_test_db):
             sa_select(GeneOverwriteSubmission).where(GeneOverwriteSubmission.id == submit_result["submission_id"])
         )).scalar_one()
         assert submission.review_status == "pending_owner"  # 没有因为提交者是 admin 而自动变成 approved
+
+
+@pytest.mark.asyncio
+async def test_pending_review_list_merges_new_and_overwrite_kinds(require_test_db):
+    from app.services.gene_service import create_gene, get_pending_review_genes
+    from app.schemas.gene import GeneCreateRequest
+
+    async with TestSessionLocal() as db:
+        org, submitter, admin = await _setup_org_with_admin(db)
+
+        # 一条普通待审核（走 org 审核的场景需要另建一套，这里偷懒复用
+        # create_gene 直接构造一条 pending_owner 的 Gene 模拟"普通待审核"）
+        pending_gene_req = GeneCreateRequest(
+            name="待审核技能", slug=_uid("pending-skill"), visibility="org_private",
+        )
+        await create_gene(
+            db, pending_gene_req, user_id=submitter.id, org_id=org.id,
+            visibility="org_private", review_status="pending_owner",
+        )
+
+        # Gene.lineage_group_id 是 NOT NULL 列，必须在构造函数里显式传入
+        # （不能构造后再赋值属性），与 Task 7/8/9/11 已验证的写法保持一致。
+        source = Gene(
+            id=_uid("gene"), name="团队助手", slug=_uid("team-bot"),
+            visibility="public", version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(source)
+        await db.commit()
+        await fork_gene_to_library(
+            db, source.id, "org", current_user=_FakeUser(submitter.id, org.id), org_id=org.id,
+        )
+        from sqlalchemy import select as sa_select
+        source_row = (await db.execute(sa_select(Gene).where(Gene.id == source.id))).scalar_one()
+        source_row.version = "1.1.0"
+        await db.commit()
+        await fork_gene_to_library(
+            db, source.id, "org", current_user=_FakeUser(submitter.id, org.id),
+            org_id=org.id, overwrite=True,
+        )
+
+        items = await get_pending_review_genes(db, current_user=_FakeUser(admin.id, org.id))
+        kinds = {item["kind"] for item in items}
+        assert kinds == {"new", "overwrite"}
+        overwrite_item = next(item for item in items if item["kind"] == "overwrite")
+        assert overwrite_item["target_gene_version"] == "1.0.0"
+        assert overwrite_item["proposed_version"] == "1.1.0"
+
+
+@pytest.mark.asyncio
+async def test_pending_review_list_excludes_other_org_overwrite_submissions(require_test_db):
+    """跨组织隔离：org B 的 admin 不应该在待审列表里看到 org A 的覆盖提交。
+
+    这是 get_pending_review_genes() 里 GeneOverwriteSubmission.org_id.in_(admin_org_ids)
+    过滤条件要保证的安全属性——之前只有"同 org admin 能看到"的正向用例，
+    没有"跨 org admin 看不到"的负向用例覆盖这条过滤逻辑。
+    """
+    from app.services.gene_service import get_pending_review_genes
+
+    async with TestSessionLocal() as db:
+        org_a, submitter_a, admin_a = await _setup_org_with_admin(db)
+        # 第二个组织：与 org_a 完全独立，admin_b 不是 org_a 的成员
+        org_b, _submitter_b, admin_b = await _setup_org_with_admin(db)
+
+        source = Gene(
+            id=_uid("gene"), name="团队助手", slug=_uid("team-bot"),
+            visibility="public", version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(source)
+        await db.commit()
+        await fork_gene_to_library(
+            db, source.id, "org", current_user=_FakeUser(submitter_a.id, org_a.id), org_id=org_a.id,
+        )
+        from sqlalchemy import select as sa_select
+        source_row = (await db.execute(sa_select(Gene).where(Gene.id == source.id))).scalar_one()
+        source_row.version = "1.1.0"
+        await db.commit()
+        # org_a 的覆盖提交
+        await fork_gene_to_library(
+            db, source.id, "org", current_user=_FakeUser(submitter_a.id, org_a.id),
+            org_id=org_a.id, overwrite=True,
+        )
+
+        # org_b 的 admin 查看待审列表：不应该看到 org_a 的覆盖提交
+        items = await get_pending_review_genes(db, current_user=_FakeUser(admin_b.id, org_b.id))
+        submission_kinds = {item["kind"] for item in items if item["kind"] == "overwrite"}
+        assert "overwrite" not in submission_kinds
+        assert items == []  # org_b 既没有新建待审也没有覆盖待审
+
+        # 对照：org_a 自己的 admin 依然能看到
+        items_a = await get_pending_review_genes(db, current_user=_FakeUser(admin_a.id, org_a.id))
+        assert "overwrite" in {item["kind"] for item in items_a}
