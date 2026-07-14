@@ -158,7 +158,12 @@ export const skillApi = {
    *
    * @param target 上传目标库（默认 personal，进入用户个人 library 立即可用）
    */
-  uploadFolder: (files: FileList, overwrite = false, target: UploadTarget = 'personal') => {
+  uploadFolder: (
+    files: FileList,
+    overwrite = false,
+    target: UploadTarget = 'personal',
+    version?: string,
+  ) => {
     const form = new FormData()
     for (const file of Array.from(files)) {
       const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
@@ -166,6 +171,8 @@ export const skillApi = {
     }
     const params = new URLSearchParams({ target })
     if (overwrite) params.set('overwrite', 'true')
+    // 版本号可选：仅当调用方显式传入非空版本号时才附加到查询参数，避免空字符串产生 version= 空值
+    if (version) params.set('version', version)
     const url = `/genes/upload-folder?${params.toString()}`
     return api.post<{ data: Skill }>(url, form).then((r) => r.data.data)
   },

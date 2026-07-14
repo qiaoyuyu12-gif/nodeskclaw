@@ -44,6 +44,14 @@ export interface GeneItem {
   created_by_email?: string | null  // 审核中心列表用：上传者邮箱
   org_id?: string | null  // 归属组织 ID；null = 个人 scope；public scope 也会挂在背书 org 下
   created_at?: string
+  // 跨 scope 版本感知：当前 gene（仅个人 scope 条目会有值）在 org_private/public scope 下
+  // 存在的"更新版本"兄弟记录列表，用于前端提示"发现更新版本"。非个人 scope 条目恒为 []
+  newer_sibling_versions?: Array<{
+    visibility: 'org_private' | 'public'
+    org_id: string | null
+    org_name: string | null
+    version: string
+  }>
 }
 
 export interface GenomeItem {
@@ -392,12 +400,18 @@ export const useGeneStore = defineStore('gene', () => {
    * - target='personal'：归属当前用户，立即可用
    * - target='org'：归属当前组织，pending_owner 等组织 admin 审核
    * - target='public'：归属当前组织，visibility=public 但 pending_owner 等审批
+   * - overwrite=true：目标 scope 已有同名同血缘技能时，按版本号覆盖（personal 立即生效，
+   *   org/public 需要管理员审核后才生效，返回值里 kind='overwrite_submission' 时代表后者）
    *
    * 参数说明：geneIdentifier 应为本地 gene 的 id（UUID），外部 aggregator 来源传其 slug。
    * 同一 slug 经三向 fork 后可能在本地多 scope 并存，按 slug 查会冲突，必须用 id 定位。
    */
-  async function forkGene(geneIdentifier: string, target: 'personal' | 'org' | 'public'): Promise<GeneItem> {
-    const res = await api.post(`/genes/${geneIdentifier}/fork`, { target })
+  async function forkGene(
+    geneIdentifier: string,
+    target: 'personal' | 'org' | 'public',
+    overwrite = false,
+  ): Promise<GeneItem> {
+    const res = await api.post(`/genes/${geneIdentifier}/fork`, { target, overwrite })
     return res.data.data
   }
 
