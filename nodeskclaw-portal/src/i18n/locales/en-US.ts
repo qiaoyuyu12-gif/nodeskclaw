@@ -1152,6 +1152,7 @@ const enUS = {
     forkAlreadyUpToDate: "Already up to date, no sync needed",
     forkConflictConfirm: "A skill named \"{name}\" already exists. Overwrite it with the latest version?",
     forkFailed: "Fork failed",
+    newerVersionBadge: "{name} has v{version}",
     visAll: "All",
     visPublic: "Public Market",
     visOrg: "My Organization",

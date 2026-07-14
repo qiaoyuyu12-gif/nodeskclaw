@@ -1153,6 +1153,7 @@ const zhCN = {
     forkAlreadyUpToDate: "已是最新版本，无需同步",
     forkConflictConfirm: "「{name}」已存在同名技能，是否覆盖为最新版本？",
     forkFailed: "加载失败",
+    newerVersionBadge: "{name} 有 v{version}",
     visAll: "全部",
     visPublic: "公共市场",
     visOrg: "我的组织",

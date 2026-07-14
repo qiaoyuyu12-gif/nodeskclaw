@@ -633,6 +633,16 @@ function hasNativeTools(gene: GeneItem): boolean {
                     <p class="text-xs text-muted-foreground line-clamp-2 mt-1">
                       {{ gene.short_description ?? gene.description ?? '' }}
                     </p>
+                    <!-- 跨 scope 版本感知角标：仅个人库条目在 org_private/public 存在更新版本时展示 -->
+                    <div v-if="gene.newer_sibling_versions?.length" class="flex flex-wrap gap-1 mt-1">
+                      <span
+                        v-for="(sibling, idx) in gene.newer_sibling_versions"
+                        :key="idx"
+                        class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-500"
+                      >
+                        {{ t('geneMarket.newerVersionBadge', { name: sibling.org_name || t('geneMarket.visPublic'), version: sibling.version }) }}
+                      </span>
+                    </div>
                   </div>
                 </div>
                 <div class="flex flex-wrap gap-1 mt-2">
