@@ -35,6 +35,15 @@ def _uid(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
+class _FakeUser:
+    """轻量伪造 current_user，只暴露 fork_gene_to_library 实际读取的三个属性。"""
+
+    def __init__(self, id_: str, org_id: str | None, is_super_admin: bool = False):
+        self.id = id_
+        self.is_super_admin = is_super_admin
+        self.current_org_id = org_id
+
+
 def _req(name: str, slug: str, *, version: str = "1.0.0", overwrite: bool = False) -> GeneCreateRequest:
     return GeneCreateRequest(name=name, slug=slug, visibility="personal", version=version, overwrite=overwrite)
 
@@ -182,3 +191,324 @@ async def test_publish_variant_gets_independent_lineage_group_id(require_test_db
         )).scalar_one()
         assert variant.lineage_group_id != parent_lineage_group_id
         assert variant.lineage_group_id == variant.id
+
+
+# ── fork_gene_to_library() 血缘传播 + 版本三态覆盖 ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fork_inherits_source_lineage_group_id_and_version(require_test_db):
+    """fork 出的副本应继承源头的 lineage_group_id 和 version，而不是各自独立生成。"""
+    from app.models.gene import Gene
+    from app.models.organization import Organization
+    from app.services.gene_service import fork_gene_to_library
+    from sqlalchemy import select
+
+    async with TestSessionLocal() as db:
+        org = Organization(id=_uid("org"), name="Org A", slug=_uid("org-a"))
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add_all([org, user])
+        await db.commit()
+
+        source = Gene(
+            id=_uid("gene"), name="客服助手", slug=_uid("customer-bot"),
+            visibility="public", version="1.2.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(source)
+        await db.commit()
+        source_lineage_group_id = source.lineage_group_id
+
+        result = await fork_gene_to_library(
+            db, source.id, "org", current_user=_FakeUser(user.id, org.id), org_id=org.id,
+        )
+        forked = (await db.execute(select(Gene).where(Gene.id == result["id"]))).scalar_one()
+        assert forked.lineage_group_id == source_lineage_group_id
+        assert forked.version == "1.2.0"
+
+
+@pytest.mark.asyncio
+async def test_fork_overwrite_rejects_unrelated_lineage_regardless_of_flag(require_test_db):
+    """安全性关键用例：即使 overwrite=True，血缘不相关的同名行也必须拒绝，
+    不能被误覆盖。"""
+    from app.models.gene import Gene
+    from app.models.organization import Organization
+    from app.services.gene_service import fork_gene_to_library
+
+    async with TestSessionLocal() as db:
+        org = Organization(id=_uid("org"), name="Org A", slug=_uid("org-a"))
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add_all([org, user])
+        await db.commit()
+
+        source = Gene(
+            id=_uid("gene"), name="撞名助手", slug=_uid("source-skill"),
+            visibility="public", version="2.0.0", lineage_group_id=_uid("lineage-a"),
+        )
+        unrelated_in_org = Gene(
+            id=_uid("gene"), name="撞名助手", slug=_uid("unrelated-skill"), visibility="org_private",
+            org_id=org.id, created_by=user.id, version="1.0.0", lineage_group_id=_uid("lineage-b"),
+        )
+        db.add_all([source, unrelated_in_org])
+        await db.commit()
+
+        with pytest.raises(ConflictError):
+            await fork_gene_to_library(
+                db, source.id, "org", current_user=_FakeUser(user.id, org.id),
+                org_id=org.id, overwrite=True,
+            )
+
+        from sqlalchemy import select
+        still_there = (await db.execute(
+            select(Gene).where(Gene.id == unrelated_in_org.id, Gene.deleted_at.is_(None))
+        )).scalar_one_or_none()
+        assert still_there is not None
+
+
+@pytest.mark.asyncio
+async def test_fork_overwrite_executes_immediately_when_version_is_newer(require_test_db):
+    """本任务范围内：所有 target（含 org/public）在满足覆盖条件时都立即执行——
+    区分"org/public 走审核暂存"是下一个任务(Task 10)的范围，这里先不做区分。"""
+    from app.models.gene import Gene
+    from app.services.gene_service import fork_gene_to_library
+    from sqlalchemy import select
+
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+
+        source = Gene(
+            id=_uid("gene"), name="团队助手", slug=_uid("team-bot"),
+            visibility="public", version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(source)
+        await db.commit()
+
+        forked = await fork_gene_to_library(
+            db, source.id, "personal", current_user=_FakeUser(user.id, None), org_id=None,
+        )
+        old_id = forked["id"]
+
+        source_row = (await db.execute(select(Gene).where(Gene.id == source.id))).scalar_one()
+        source_row.version = "1.1.0"
+        await db.commit()
+
+        result = await fork_gene_to_library(
+            db, source.id, "personal", current_user=_FakeUser(user.id, None),
+            org_id=None, overwrite=True,
+        )
+        assert result["version"] == "1.1.0"
+        assert result["id"] != old_id
+
+        old_row = (await db.execute(
+            select(Gene).where(Gene.id == old_id, Gene.deleted_at.is_(None))
+        )).scalar_one_or_none()
+        assert old_row is None
+
+
+@pytest.mark.asyncio
+async def test_fork_overwrite_rejects_equal_version_with_specific_message_key(require_test_db):
+    from app.models.gene import Gene
+    from app.services.gene_service import fork_gene_to_library
+
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+
+        source = Gene(
+            id=_uid("gene"), name="团队助手", slug=_uid("team-bot"),
+            visibility="public", version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(source)
+        await db.commit()
+
+        await fork_gene_to_library(
+            db, source.id, "personal", current_user=_FakeUser(user.id, None), org_id=None,
+        )
+
+        with pytest.raises(ConflictError) as exc_info:
+            await fork_gene_to_library(
+                db, source.id, "personal", current_user=_FakeUser(user.id, None),
+                org_id=None, overwrite=True,
+            )
+        assert getattr(exc_info.value, "message_key", None) == "errors.gene.fork_already_up_to_date"
+
+
+@pytest.mark.asyncio
+async def test_fork_overwrite_rejects_version_regression_with_specific_message_key(require_test_db):
+    from app.models.gene import Gene
+    from app.services.gene_service import fork_gene_to_library
+    from sqlalchemy import select
+
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+
+        source = Gene(
+            id=_uid("gene"), name="团队助手", slug=_uid("team-bot"),
+            visibility="public", version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(source)
+        await db.commit()
+
+        await fork_gene_to_library(
+            db, source.id, "personal", current_user=_FakeUser(user.id, None), org_id=None,
+        )
+
+        source_row = (await db.execute(select(Gene).where(Gene.id == source.id))).scalar_one()
+        source_row.version = "0.5.0"
+        await db.commit()
+
+        with pytest.raises(ConflictError) as exc_info:
+            await fork_gene_to_library(
+                db, source.id, "personal", current_user=_FakeUser(user.id, None),
+                org_id=None, overwrite=True,
+            )
+        assert getattr(exc_info.value, "message_key", None) == "errors.gene.fork_version_regression"
+
+
+@pytest.mark.asyncio
+async def test_fork_overwrite_rewires_installed_instance_gene_reference(require_test_db):
+    """覆盖 fork 后，已安装该技能的实例引用应指向新 fork 的 id，而不是被软删的旧行——
+    这正是 _rewire_gene_references() 存在的意义：防止覆盖静默弄丢已装技能
+    （同 test_gene_overwrite_reference_rewire.py 对 create_gene() 的验证方式）。"""
+    from app.models.cluster import Cluster
+    from app.models.gene import Gene, InstanceGene, InstanceGeneStatus
+    from app.models.instance import Instance
+    from app.services.gene_service import fork_gene_to_library
+    from sqlalchemy import select
+
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+
+        cluster = Cluster(id=_uid("cluster"), name="Cluster", created_by=user.id)
+        instance = Instance(
+            id=_uid("inst"), name="Agent", slug=_uid("agent"), cluster_id=cluster.id,
+            namespace="default", image_version="latest", created_by=user.id,
+        )
+        db.add_all([cluster, instance])
+        await db.commit()
+
+        source = Gene(
+            id=_uid("gene"), name="装好的助手", slug=_uid("installed-bot"),
+            visibility="public", version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(source)
+        await db.commit()
+
+        first_fork = await fork_gene_to_library(
+            db, source.id, "personal", current_user=_FakeUser(user.id, None), org_id=None,
+        )
+        old_fork_id = first_fork["id"]
+
+        # 模拟这份 fork 出来的个人技能已经装到某个实例上
+        ig = InstanceGene(
+            instance_id=instance.id, gene_id=old_fork_id,
+            status=InstanceGeneStatus.installed, installed_version="1.0.0",
+        )
+        db.add(ig)
+        await db.commit()
+
+        # 源头升级版本号，触发一次合法的覆盖 fork
+        source_row = (await db.execute(select(Gene).where(Gene.id == source.id))).scalar_one()
+        source_row.version = "1.1.0"
+        await db.commit()
+
+        second_fork = await fork_gene_to_library(
+            db, source.id, "personal", current_user=_FakeUser(user.id, None),
+            org_id=None, overwrite=True,
+        )
+        new_fork_id = second_fork["id"]
+        assert new_fork_id != old_fork_id
+
+        # InstanceGene 应该被重接到新 fork 的 id，而不是继续指着已软删的旧行
+        await db.refresh(ig)
+        assert ig.gene_id == new_fork_id
+
+
+@pytest.mark.asyncio
+async def test_fork_overwrite_rejects_when_source_is_none_external_aggregator(require_test_db, monkeypatch):
+    """source 为 None（本地找不到、回退到外部聚合器）时无法判断血缘是否相关，
+    即使 overwrite=True，代码注释里"一律拒绝"的承诺也必须真的兑现。"""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.models.gene import Gene
+    from app.models.organization import Organization
+    from app.services import gene_service
+    from app.services.gene_service import fork_gene_to_library
+
+    async with TestSessionLocal() as db:
+        org = Organization(id=_uid("org"), name="Org A", slug=_uid("org-a"))
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add_all([org, user])
+        await db.commit()
+
+        # 目标 scope 内已存在一条同名技能（模拟"名字撞车"）
+        existing = Gene(
+            id=_uid("gene"), name="外部技能", slug=_uid("existing-skill"),
+            visibility="org_private", org_id=org.id, created_by=user.id,
+            version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(existing)
+        await db.commit()
+
+        # source_identifier 在本地 DB 查不到，fork_gene_to_library 会回退到聚合器；
+        # 伪造聚合器返回同名的外部技能详情，模拟"外部市场里恰好有条同名技能"。
+        fake_detail = SimpleNamespace(
+            name="外部技能", description=None, short_description=None, category=None,
+            tags=[], icon=None, version="9.9.9", manifest={}, dependencies=[], synergies=[],
+        )
+        fake_aggregator = SimpleNamespace(get_skill=AsyncMock(return_value=fake_detail))
+        monkeypatch.setattr(gene_service, "get_aggregator", lambda: fake_aggregator)
+
+        with pytest.raises(ConflictError):
+            await fork_gene_to_library(
+                db, "external-slug-not-in-local-db", "org",
+                current_user=_FakeUser(user.id, org.id), org_id=org.id, overwrite=True,
+            )
+
+
+@pytest.mark.asyncio
+async def test_fork_overwrite_rejects_malformed_version_with_generic_message(require_test_db):
+    """版本号格式不合法（compare_versions 返回 None）时应拒绝，且使用的 message_key
+    必须与"已是最新版本"/"版本回退"这两个专属场景区分开，不能被误判成其中之一。"""
+    from app.models.gene import Gene
+    from app.services.gene_service import fork_gene_to_library
+    from sqlalchemy import select
+
+    async with TestSessionLocal() as db:
+        user = User(id=_uid("user"), name="Alice", username=_uid("alice"))
+        db.add(user)
+        await db.commit()
+
+        source = Gene(
+            id=_uid("gene"), name="团队助手", slug=_uid("team-bot"),
+            visibility="public", version="1.0.0", lineage_group_id=_uid("lineage"),
+        )
+        db.add(source)
+        await db.commit()
+
+        await fork_gene_to_library(
+            db, source.id, "personal", current_user=_FakeUser(user.id, None), org_id=None,
+        )
+
+        # 把源版本号改成格式不合法的值，制造 compare_versions() 返回 None 的场景
+        source_row = (await db.execute(select(Gene).where(Gene.id == source.id))).scalar_one()
+        source_row.version = "not-a-version"
+        await db.commit()
+
+        with pytest.raises(ConflictError) as exc_info:
+            await fork_gene_to_library(
+                db, source.id, "personal", current_user=_FakeUser(user.id, None),
+                org_id=None, overwrite=True,
+            )
+        message_key = getattr(exc_info.value, "message_key", None)
+        assert message_key not in (
+            "errors.gene.fork_already_up_to_date",
+            "errors.gene.fork_version_regression",
+        )

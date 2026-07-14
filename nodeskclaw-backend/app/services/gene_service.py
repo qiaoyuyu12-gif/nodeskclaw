@@ -3584,6 +3584,7 @@ async def fork_gene_to_library(
     *,
     current_user,  # app.models.user.User —— 取 id / is_super_admin / current_org_id
     org_id: str | None = None,
+    overwrite: bool = False,
 ) -> dict:
     """从任意 scope（personal / org / public）fork 一份 gene 到 personal / org / public library。
 
@@ -3596,6 +3597,16 @@ async def fork_gene_to_library(
       - 源是 personal（org_id IS NULL）：仅 gene.created_by == current_user.id 可 fork
       - 源是 org（org_id 非空且 visibility != public）：current_user 必须是该 org 的有效成员
       - 源是 public（visibility == public）：任意登录用户可 fork
+
+    overwrite（目标 scope 内已存在同名技能时如何处理）：
+      - False（默认）：只要目标 scope 存在同名技能就直接 ConflictError，不做任何判断。
+      - True：仅当同名技能与源头同血缘（lineage_group_id 一致）才允许覆盖，
+        血缘不相关一律拒绝（不因 overwrite=True 而放行，防止误覆盖无关技能）；
+        source 为 None（外部聚合器来源，无法判断血缘）同样一律拒绝。
+        同血缘时按版本号三态处理：源版本更新 → 软删旧行、插入新行并立即执行；
+        版本相同 → ConflictError(message_key="errors.gene.fork_already_up_to_date")；
+        源版本更旧 → ConflictError(message_key="errors.gene.fork_version_regression")；
+        版本号格式不合法 → ConflictError（无专属 message_key，与上面两个区分）。
     """
     if target not in ("personal", "org", "public"):
         raise BadRequestError("fork 目标必须是 personal / org / public 之一")
@@ -3689,17 +3700,35 @@ async def fork_gene_to_library(
         source_synergies = _json_dumps(detail.synergies or [])
         source_parent_id = None  # 外部源没有本地 id 可指
 
-    # ── 2.5. 名称查重：目标 scope 内已存在同名技能则直接拒绝 ──────────
-    # 与"防止重名出现"的需求本身矛盾，所以这里不像 slug 那样自动加后缀绕开，
-    # 而是直接报错让用户自己决定改名或删除旧的。
+    # ── 2.5. 名称查重：目标 scope 内已存在同名技能 ──────────────────────
     existing_name = await get_gene_by_name_in_scope(
         db, source_name,
         visibility=attrs["visibility"],
         org_id=attrs["org_id"],
         created_by=attrs["created_by"],
     )
+    pending_overwrite_target: Gene | None = None
     if existing_name is not None:
-        raise ConflictError(f"技能名称 '{source_name}' 已存在")
+        # 名字撞车但血缘不相关：不管 overwrite 是否为 True，一律拒绝，
+        # 避免把一个毫不相关的技能误覆盖掉。source 为 None（外部聚合器来源）
+        # 时也无法判断血缘，同样一律拒绝，不允许覆盖。
+        if not overwrite or source is None or existing_name.lineage_group_id != source.lineage_group_id:
+            raise ConflictError(f"技能名称 '{source_name}' 已存在")
+        # 同血缘，且调用方确认要覆盖：按版本号三态处理
+        cmp_result = compare_versions(source.version, existing_name.version)
+        if cmp_result is None:
+            raise ConflictError(f"版本号格式不合法：源 '{source.version}' 或目标 '{existing_name.version}'")
+        if cmp_result == 0:
+            raise ConflictError(
+                "已是最新版本，无需同步",
+                message_key="errors.gene.fork_already_up_to_date",
+            )
+        if cmp_result < 0:
+            raise ConflictError(
+                f"目标版本 '{existing_name.version}' 比源头版本 '{source.version}' 更新，无法覆盖为旧版本",
+                message_key="errors.gene.fork_version_regression",
+            )
+        pending_overwrite_target = existing_name
 
     # ── 3. 计算副本 slug：在目标 org_id 内重名时追加短后缀 ──────────
     import uuid
@@ -3716,7 +3745,14 @@ async def fork_gene_to_library(
         suffix = uuid.uuid4().hex[:6]
         new_slug = f"{source_slug}-fork-{suffix}"
 
+    # lineage_group_id 是 NOT NULL 列，必须和新行同时写入，因此这里显式生成
+    # 新行的 id（而不是依赖 Column default 在 flush 时才生成），与 create_gene()/
+    # publish_variant() 保持一致的写法（Task 7/8 已验证：id/lineage_group_id 必须
+    # 传进 Gene(...) 构造函数，而不是构造完再赋值属性）。fork 出来的副本继承源头
+    # 的血缘分组，源头缺失（外部聚合器来源）时才退化为自己的新 id。
+    new_fork_id = str(uuid.uuid4())
     fork = Gene(
+        id=new_fork_id,
         name=source_name or source_slug,
         slug=new_slug,
         description=source_description,
@@ -3738,7 +3774,16 @@ async def fork_gene_to_library(
         review_status=attrs["review_status"],
         # fork 出来的副本是本地新行；source_registry 标 local 与 create_gene 保持一致
         source_registry="local",
+        lineage_group_id=source.lineage_group_id if source is not None else new_fork_id,
     )
+
+    # 覆盖模式：先记下旧行 id，再软删；插入新行成功后把 InstanceGene/OrgRequiredGene
+    # 等"当前生效状态"引用重接到新行，避免旧行软删后这些记录被过滤丢失。
+    old_gene_id: str | None = None
+    if pending_overwrite_target is not None:
+        old_gene_id = pending_overwrite_target.id
+        pending_overwrite_target.soft_delete()
+
     db.add(fork)
     try:
         await db.commit()
@@ -3749,6 +3794,16 @@ async def fork_gene_to_library(
         await db.rollback()
         raise ConflictError(f"基因 slug '{new_slug}' 或名称 '{source_name}' 已存在") from e
     await db.refresh(fork)
+
+    if old_gene_id is not None:
+        # 注意：上面软删旧行 + 插入新行的 commit，与这里 _rewire_gene_references()
+        # 内部自己的 commit 不是同一个事务——如果进程在两次 commit 之间崩溃，
+        # 旧行已软删但 InstanceGene/OrgRequiredGene 还指向旧 id，会造成短暂的
+        # 引用悬空。这与 create_gene() 的覆盖分支是完全相同的既有模式（同样两次
+        # 分开 commit），非本次改动引入的新问题，暂不在本任务范围内修复，
+        # 后续会作为独立 follow-up 让两处调用点一起做成原子操作。
+        await _rewire_gene_references(db, old_gene_id, fork.id)
+
     return _gene_to_dict(fork)
 
 

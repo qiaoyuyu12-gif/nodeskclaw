@@ -139,6 +139,7 @@ class _FakeGene:
         created_by: str | None = "uploader",
         slug: str = "skill-x",
         name: str | None = None,
+        lineage_group_id: str | None = None,
     ):
         self.id = gene_id
         self.org_id = org_id
@@ -159,6 +160,10 @@ class _FakeGene:
         self.manifest = None
         self.dependencies = None
         self.synergies = None
+        # Gene.lineage_group_id 是 NOT NULL 列（fork_gene_to_library 现在会读取
+        # source.lineage_group_id 来传播血缘分组），mock 也需要提供这个字段，
+        # 否则会触发 AttributeError，而不是真实场景下的 DB 约束报错。
+        self.lineage_group_id = lineage_group_id or f"lineage-{gene_id}"
 
 
 def _make_review_db(gene, membership=None) -> AsyncMock:
