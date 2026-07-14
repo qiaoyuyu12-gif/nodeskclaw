@@ -156,6 +156,7 @@ async def upload_gene_folder(
         "personal",
         description="上传目标：personal(个人 library) / org(组织 library, 需 admin 审核) / public(公共市场, 需 admin 审核)",
     ),
+    version: str = Query("1.0.0", max_length=16, description="技能版本号，默认 1.0.0"),
 ):
     """通过文件夹（多文件 multipart）上传本地 Gene。
 
@@ -248,6 +249,7 @@ async def upload_gene_folder(
         is_published=attrs["is_published"],
         visibility=attrs["visibility"],
         overwrite=overwrite,
+        version=version,
         manifest={
             "skill": {
                 "name": meta["name"],
