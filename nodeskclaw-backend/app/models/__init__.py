@@ -25,6 +25,7 @@ from app.models.gene import (  # noqa: F401
     GenomeRating,
     InstanceGene,
 )
+from app.models.gene_overwrite_submission import GeneOverwriteSubmission  # noqa: F401
 from app.models.idempotency_cache import IdempotencyCache  # noqa: F401
 from app.models.instance import Instance  # noqa: F401
 from app.models.invitation import Invitation  # noqa: F401
