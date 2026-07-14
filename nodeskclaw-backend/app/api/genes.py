@@ -168,9 +168,15 @@ async def upload_gene_folder(
     """
     from app.services import skill_package_service
 
-    # personal 目标不需要 org，其他目标需要组织上下文
-    if target != "personal" and not current_user.current_org_id:
-        raise BadRequestError("上传到组织或公共市场前需先加入组织")
+    # 直接上传入口只接受 target=personal：为保证组织内技能的血缘关系，
+    # 组织库/公共市场的内容必须先落地个人库，再通过 fork 覆盖同步过去，
+    # 管理员/超管也没有例外（产品决策，见 2026-07-13 计划）
+    if target != "personal":
+        raise BadRequestError(
+            "直接上传只能进入个人库，组织库/公共市场的内容请先上传到个人库、"
+            "再通过 fork 覆盖同步过去",
+            message_key="errors.gene.upload_target_must_be_personal",
+        )
 
     # 收集文件（与 skills.py upload-folder 相同的前缀剥离逻辑）
     raw_entries: list[tuple[str, UploadFile]] = []
@@ -223,19 +229,14 @@ async def upload_gene_folder(
     skill_content = skill_package_service._find_skill_md_in_files(files_dict)
     skill_raw = skill_content.decode("utf-8") if skill_content else ""
 
-    # 根据 target 派生 visibility / org_id / created_by / is_published / review_status
-    # 操作者若是目标 org 的 admin 或平台超管 → bypass 待审，直接 approved + published
-    bypass_review = await gene_service.is_user_admin_of_org(
-        db,
-        user_id=current_user.id,
-        org_id=current_user.current_org_id,
-        is_super_admin=getattr(current_user, "is_super_admin", False),
-    )
+    # target 在函数开头已被限定为 personal（其余值直接 400 拒绝），
+    # 归属直接落到当前用户即可：resolve_target_attrs 的 personal 分支
+    # 不读取 org_id/bypass_review，不必再查一次 is_user_admin_of_org
+    # （org/public 的审核 bypass 判断只在 fork_gene_to_library 里发生）
     attrs = gene_service.resolve_target_attrs(
         target,
         user_id=current_user.id,
-        org_id=current_user.current_org_id,
-        bypass_review=bypass_review,
+        org_id=None,
     )
 
     gene_req = GeneCreateRequest(
@@ -900,22 +901,24 @@ async def create_manual_gene(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # 按 target 派生归属字段（默认 personal）
-    if req.target != "personal" and not current_user.current_org_id:
-        raise BadRequestError("上传到组织或公共市场前需先加入组织")
+    # 直接上传入口只接受 target=personal：为保证组织内技能的血缘关系，
+    # 组织库/公共市场的内容必须先落地个人库，再通过 fork 覆盖同步过去，
+    # 管理员/超管也没有例外（产品决策，见 2026-07-13 计划）
+    if req.target != "personal":
+        raise BadRequestError(
+            "直接上传只能进入个人库，组织库/公共市场的内容请先上传到个人库、"
+            "再通过 fork 覆盖同步过去",
+            message_key="errors.gene.upload_target_must_be_personal",
+        )
 
-    # 操作者若是目标 org 的 admin 或平台超管 → bypass 待审，直接 approved + published
-    bypass_review = await gene_service.is_user_admin_of_org(
-        db,
-        user_id=current_user.id,
-        org_id=current_user.current_org_id,
-        is_super_admin=getattr(current_user, "is_super_admin", False),
-    )
+    # target 在函数开头已被限定为 personal（其余值直接 400 拒绝），
+    # 归属直接落到当前用户即可：resolve_target_attrs 的 personal 分支
+    # 不读取 org_id/bypass_review，不必再查一次 is_user_admin_of_org
+    # （org/public 的审核 bypass 判断只在 fork_gene_to_library 里发生）
     attrs = gene_service.resolve_target_attrs(
         req.target,
         user_id=current_user.id,
-        org_id=current_user.current_org_id,
-        bypass_review=bypass_review,
+        org_id=None,
     )
 
     gene_req = GeneCreateRequest(
