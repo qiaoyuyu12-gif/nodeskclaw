@@ -2622,6 +2622,158 @@ async def review_gene(
     return {"review_status": gene.review_status, "is_published": gene.is_published}
 
 
+async def review_gene_overwrite_submission(
+    db: AsyncSession,
+    submission_id: str,
+    action: str,
+    reason: str | None = None,
+    *,
+    current_user=None,
+) -> dict:
+    """审核 fork 覆盖 org/public 的暂存提交。
+
+    权限跟 review_gene() 完全一致（该 gene 所属 org 的 admin 或平台超管），
+    但不复用 bypass_review——提交者自己是 admin 也必须显式调用这个函数才
+    会生效，不会因为身份而自动跳过。
+    """
+    from app.models.gene_overwrite_submission import GeneOverwriteSubmission
+    from app.models.org_membership import OrgMembership, OrgRole
+
+    # ── 查提交记录 + 状态校验 ──────────────────────────────────────────
+    # with_for_update() 对这一行加悲观锁：这张暂存表会被多个组织 admin 并发
+    # 审核同一条提交（比单用户自己的 fork 覆盖并发概率高得多），如果没有行锁，
+    # 两个 approve/reject 请求可能都在对方 commit 之前读到同一个 pending 状态，
+    # 都通过下面的状态守卫，最终谁后 commit 谁的结果就"赢"——可能出现
+    # "已批准并发布到注册表的 Gene 行，其提交记录却被覆盖标成 rejected"这种
+    # 审计记录与实际数据库状态不一致的情况。加锁后，后到的请求会阻塞到前一个
+    # 事务提交为止，再重新读到的就是已经终态的 approved/rejected，会被下面的
+    # 状态守卫正确拦截。
+    result = await db.execute(
+        select(GeneOverwriteSubmission)
+        .where(GeneOverwriteSubmission.id == submission_id, not_deleted(GeneOverwriteSubmission))
+        .with_for_update()
+    )
+    submission = result.scalar_one_or_none()
+    if not submission:
+        raise NotFoundError("覆盖提交不存在")
+    if submission.review_status not in (GeneReviewStatus.pending_owner, GeneReviewStatus.pending_admin):
+        raise BadRequestError(f"当前状态 '{submission.review_status}' 不可审核")
+
+    # ── 权限校验：超管 / 该提交所属 org 的 admin，与 review_gene() 保持一致 ──
+    if current_user is not None and not getattr(current_user, "is_super_admin", False):
+        membership = (await db.execute(
+            select(OrgMembership).where(
+                OrgMembership.user_id == current_user.id,
+                OrgMembership.org_id == submission.org_id,
+                OrgMembership.role == OrgRole.admin,
+                OrgMembership.deleted_at.is_(None),
+            )
+        )).scalar_one_or_none()
+        if membership is None:
+            raise ForbiddenError(
+                message="您无权审核此提交（需该技能所属组织的管理员）",
+                message_key="errors.gene.review_forbidden",
+            )
+
+    if action == "reject":
+        # 拒绝：只翻转提交记录本身的状态，绝不触碰 genes 表。
+        # 注意：这里的状态守卫只放行 pending_owner/pending_admin（上面已校验），
+        # 比 review_gene() 的 reject 分支（允许任意状态转 rejected）更严格——
+        # 这是刻意的收紧，不是遗漏。review_gene() 面对的是单条 gene，谁改都是
+        # 同一行；这里面对的是可被多个组织 admin 并发处理的暂存提交队列，
+        # 一旦已经 approved/rejected 就是终态，不允许再被覆盖，否则会破坏
+        # 审计记录与实际 genes 表状态的一致性。未来如无必要不要为了"跟
+        # review_gene() 保持一致"而放宽这里。
+        submission.review_status = GeneReviewStatus.rejected
+        submission.reject_reason = reason
+        await db.commit()
+        return {"review_status": submission.review_status, "stale": False}
+
+    if action != "approve":
+        raise BadRequestError(f"未知审核动作: {action}")
+
+    # ── 过期重新校验：提交后、审核前，target 可能已被另一条已批准提交替换掉，
+    # 或者被别的流程软删。三种情况都视为"过期"，自动转 rejected 而不是报错，
+    # 避免出现两条并发提交都想替换同一行时其中一条 500。
+    target = (await db.execute(
+        select(Gene).where(Gene.id == submission.target_gene_id, not_deleted(Gene))
+    )).scalar_one_or_none()
+    stale = (
+        target is None
+        or target.lineage_group_id != submission.lineage_group_id
+        or compare_versions(submission.version, target.version) != 1
+    )
+    if stale:
+        submission.review_status = GeneReviewStatus.rejected
+        submission.reject_reason = "目标技能已发生变化，请重新提交"
+        await db.commit()
+        return {"review_status": submission.review_status, "stale": True}
+
+    # ── 批准：软删旧行 + 插入新行，内容取自提交暂存的快照 ────────────────
+    old_gene_id = target.id
+    target.soft_delete()
+
+    # lineage_group_id 是 NOT NULL 列，必须和新行同时写入，因此这里显式生成
+    # 新行的 id 并把 id / lineage_group_id 一并传进 Gene(...) 构造函数
+    # （Task 7/8/9 已验证：构造完再赋值属性不可靠，必须走构造函数参数）。
+    new_gene_id = str(uuid.uuid4())
+    new_gene = Gene(
+        id=new_gene_id,
+        name=submission.name,
+        slug=submission.slug,
+        description=submission.description,
+        short_description=submission.short_description,
+        category=submission.category,
+        tags=submission.tags,
+        source=submission.source,
+        source_ref=submission.source_ref,
+        icon=submission.icon,
+        version=submission.version,
+        manifest=submission.manifest,
+        dependencies=submission.dependencies,
+        synergies=submission.synergies,
+        parent_gene_id=submission.source_gene_id,
+        visibility=submission.visibility,
+        org_id=submission.org_id,
+        created_by=submission.created_by,
+        is_published=True,
+        review_status=GeneReviewStatus.approved,
+        source_registry="local",
+        lineage_group_id=submission.lineage_group_id,
+    )
+    db.add(new_gene)
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        await db.rollback()
+        raise ConflictError(f"技能名称 '{submission.name}' 或 slug '{submission.slug}' 已存在") from e
+    await db.refresh(new_gene)
+
+    # 把 InstanceGene / OrgRequiredGene 等"当前生效状态"引用从旧行重接到新行，
+    # 避免旧行软删后被 `Gene.deleted_at IS NULL` 过滤掉导致这些记录"查不到人"。
+    await _rewire_gene_references(db, old_gene_id, new_gene.id)
+
+    # 注意：上面软删旧行 + 插入新行 + _rewire_gene_references() 各自的 commit，
+    # 与下面 submission.review_status = approved 这次 commit 不是同一个事务——
+    # 如果进程在它们之间崩溃，new_gene 已经落库、is_published=True、且已重接
+    # 好所有引用（也就是说新内容已经实际生效），但 submission 还停在
+    # pending_owner/pending_admin。这比 fork_gene_to_library 里同类型的
+    # 两次分开 commit（搜 "极小概率竞态" 附近）后果更差：那边最坏是短暂的
+    # 引用悬空，这里则是 submission 的审核状态和 genes 表的真实状态永久不一致
+    # ——而且如果有人这时候重试 approve，过期重新校验会发现 target（按已经
+    # 被软删的旧 target_gene_id 查）已经不在了，误判成"目标技能已发生变化"
+    # 而自动转 rejected，这个提示语在这种场景下是错的（不是别人动了 target，
+    # 是这条提交自己上一次跑了一半）。目前不在本任务范围内做成原子操作或
+    # 幂等重试，先在这里留痕，后续作为独立 follow-up 处理。
+    submission.review_status = GeneReviewStatus.approved
+    await db.commit()
+
+    if new_gene.visibility == "public":
+        _fire_task(_push_approved_gene_to_registry(new_gene))
+
+    return {"review_status": submission.review_status, "stale": False, "gene_id": new_gene.id}
+
+
 async def refresh_gene_skills(db: AsyncSession, gene_slugs: list[str]) -> dict:
     """Refresh SKILL.md on all instances that have the specified genes installed.
 
