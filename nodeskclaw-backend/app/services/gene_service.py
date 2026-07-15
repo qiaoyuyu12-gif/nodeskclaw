@@ -3347,9 +3347,10 @@ async def delete_user_gene(
     """用户级删除已上传的 skill / gene。
 
     权限策略（任一满足即可）：
-      1. 上传者本人（gene.created_by == current_user.id）
-      2. 当前组织的 admin（OrgMembership.role == OrgRole.admin）
-      3. 超管（current_user.is_super_admin == True）
+      1. 超管（current_user.is_super_admin == True）
+      2. 上传者本人，但仅限个人 scope（gene.org_id IS NULL 且 gene.created_by == current_user.id）
+      3. 组织/公共 scope（gene.org_id 非空）：当前组织的 admin（OrgMembership.role == OrgRole.admin）——
+         即使当前用户是原上传者，一旦 gene 落到组织/公共 scope 也不再享有上传者豁免
 
     删除策略：直接软删 gene 本身，并级联软删所有 active 的 InstanceGene 引用，
     使依赖该 gene 的 agent 实例也立即看不到该 skill；前端无需先卸载。
@@ -3375,11 +3376,13 @@ async def delete_user_gene(
     if current_user.is_super_admin:
         # 超管直接放行
         allowed = True
-    elif gene.created_by and gene.created_by == current_user.id:
-        # 上传者本人
+    elif gene.org_id is None and gene.created_by and gene.created_by == current_user.id:
+        # 仅个人 scope：上传者本人可删除自己的技能。
+        # 组织/公共 scope（org_id 非空）一旦落地即为共享资源，即使是原上传者
+        # 也不能凭"曾经是上传者"绕过组织 admin 校验，必须落到下面的 membership 分支判断
         allowed = True
     elif gene.org_id:
-        # 检查当前用户是否为 gene 所属 org 的 admin
+        # 组织 / 公共 scope：无论是否为上传者，检查当前用户是否为 gene 所属 org 的 admin
         membership = (await db.execute(
             select(OrgMembership).where(
                 OrgMembership.user_id == current_user.id,
