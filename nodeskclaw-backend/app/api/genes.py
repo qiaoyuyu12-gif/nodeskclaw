@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.deps import get_current_org, get_db
+from app.core.deps import get_current_org, get_db, require_org_role
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.security import get_current_user
 from app.models.base import not_deleted
@@ -802,8 +802,14 @@ async def admin_create_gene(
     req: GeneCreateRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    # gene_router 同时挂载在无 admin 校验的 api_router 和有校验的 admin_router
+    # 下，且本文件路由用字面量 "/admin/genes" 前缀，导致这条路由实际由无校验
+    # 的挂载点提供服务。不能再依赖 router 挂载位置这个脆弱前提，必须在路由
+    # 本身显式声明 admin 权限要求。
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
-    gene = await gene_service.create_gene(db, req, user_id=current_user.id, org_id=current_user.org_id)
+    # User 模型上没有 org_id 字段，真正的当前组织 id 是 current_org_id
+    gene = await gene_service.create_gene(db, req, user_id=current_user.id, org_id=current_user.current_org_id)
     return ApiResponse(data=gene)
 
 
@@ -813,6 +819,7 @@ async def admin_update_gene(
     req: UpdateGeneRequest,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
     result = await gene_service.update_gene(db, gene_id, req)
     return ApiResponse(data=result)
@@ -823,6 +830,7 @@ async def admin_delete_gene(
     gene_id: str,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
     result = await gene_service.soft_delete_gene(db, gene_id)
     return ApiResponse(data=result)
@@ -881,8 +889,10 @@ async def admin_create_genome(
     req: GenomeCreateRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
-    genome = await gene_service.create_genome(db, req, user_id=current_user.id, org_id=current_user.org_id)
+    # 同上：User 模型上没有 org_id 字段，真正的当前组织 id 是 current_org_id
+    genome = await gene_service.create_genome(db, req, user_id=current_user.id, org_id=current_user.current_org_id)
     return ApiResponse(data=genome)
 
 
@@ -892,6 +902,7 @@ async def admin_update_genome(
     req: UpdateGenomeRequest,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
     result = await gene_service.update_genome(db, genome_id, req)
     return ApiResponse(data=result)
@@ -902,6 +913,7 @@ async def admin_delete_genome(
     genome_id: str,
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
     result = await gene_service.soft_delete_genome(db, genome_id)
     return ApiResponse(data=result)
