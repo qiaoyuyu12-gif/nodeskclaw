@@ -297,6 +297,11 @@ async function onDeleteGene(gene: GeneItem) {
  * - public：visibility=public 但 pending_owner，需组织 admin 审核
  */
 const forkingSlug = ref<string | null>(null)
+// 复合 key：同一 gene 的 personal/org/public 三个 fork 按钮各自独立请求，
+// 若只按 slug 记录会导致点击其中一个按钮时其余按钮也一起显示 loading
+function forkKey(slug: string, target: 'personal' | 'org' | 'public'): string {
+  return `${slug}:${target}`
+}
 // 记录正在下载中的技能 slug，用于按钮 loading 状态控制
 const downloadingSlug = ref<string | null>(null)
 async function onForkGene(
@@ -304,7 +309,7 @@ async function onForkGene(
   target: 'personal' | 'org' | 'public',
   overwrite = false,
 ) {
-  forkingSlug.value = gene.slug
+  forkingSlug.value = forkKey(gene.slug, target)
   try {
     // 必须用 gene.id（UUID）传给后端：三向 fork 后同 slug 可在多 scope 并存，按 slug 查会冲突
     const forked = await store.forkGene(gene.id, target, overwrite)
@@ -678,30 +683,30 @@ function hasNativeTools(gene: GeneItem): boolean {
                   <button
                     v-if="canForkFrom(gene).personal"
                     class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                    :disabled="forkingSlug === gene.slug"
+                    :disabled="forkingSlug === forkKey(gene.slug, 'personal')"
                     @click.stop="onForkGene(gene, 'personal')"
                   >
-                    <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
+                    <Loader2 v-if="forkingSlug === forkKey(gene.slug, 'personal')" class="w-3 h-3 animate-spin" />
                     <Download v-else class="w-3 h-3" />
                     {{ t('geneMarket.forkToPersonal') }}
                   </button>
                   <button
                     v-if="canForkFrom(gene).org"
                     class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                    :disabled="forkingSlug === gene.slug"
+                    :disabled="forkingSlug === forkKey(gene.slug, 'org')"
                     @click.stop="onForkGene(gene, 'org')"
                   >
-                    <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
+                    <Loader2 v-if="forkingSlug === forkKey(gene.slug, 'org')" class="w-3 h-3 animate-spin" />
                     <Download v-else class="w-3 h-3" />
                     {{ t('geneMarket.forkToOrg') }}
                   </button>
                   <button
                     v-if="canForkFrom(gene).public"
                     class="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-border text-xs hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-50"
-                    :disabled="forkingSlug === gene.slug"
+                    :disabled="forkingSlug === forkKey(gene.slug, 'public')"
                     @click.stop="onForkGene(gene, 'public')"
                   >
-                    <Loader2 v-if="forkingSlug === gene.slug" class="w-3 h-3 animate-spin" />
+                    <Loader2 v-if="forkingSlug === forkKey(gene.slug, 'public')" class="w-3 h-3 animate-spin" />
                     <Download v-else class="w-3 h-3" />
                     {{ t('geneMarket.forkToPublic') }}
                   </button>
