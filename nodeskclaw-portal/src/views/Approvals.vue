@@ -70,12 +70,20 @@
           <tbody>
             <tr
               v-for="gene in pending"
-              :key="gene.id"
+              :key="itemId(gene)"
               class="border-t hover:bg-muted/30"
             >
               <td class="px-4 py-3">
-                <div class="font-medium">{{ gene.name }}</div>
-                <div class="text-xs text-muted-foreground">{{ gene.slug }}</div>
+                <template v-if="gene.kind === 'overwrite'">
+                  <div class="font-medium">{{ gene.target_gene_name }}</div>
+                  <div class="text-xs text-muted-foreground">
+                    {{ t('approvals.overwriteVersionChange', { from: gene.target_gene_version ?? '-', to: gene.proposed_version ?? '-' }) }}
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="font-medium">{{ gene.name }}</div>
+                  <div class="text-xs text-muted-foreground">{{ gene.slug }}</div>
+                </template>
               </td>
               <td class="px-4 py-3">
                 <span :class="scopeBadgeClass(gene.visibility)">
@@ -91,16 +99,16 @@
               <td class="px-4 py-3 text-right space-x-2">
                 <button
                   class="inline-flex items-center gap-1 px-3 py-1 text-xs rounded border border-green-500 text-green-700 hover:bg-green-50 disabled:opacity-50"
-                  :disabled="reviewingId === gene.id"
-                  @click="onReview(gene.id, 'approve')"
+                  :disabled="reviewingId === itemId(gene)"
+                  @click="onReview(gene, 'approve')"
                 >
                   <Check class="w-3 h-3" />
                   {{ t('approvals.approve') }}
                 </button>
                 <button
                   class="inline-flex items-center gap-1 px-3 py-1 text-xs rounded border border-red-500 text-red-700 hover:bg-red-50 disabled:opacity-50"
-                  :disabled="reviewingId === gene.id"
-                  @click="onReview(gene.id, 'reject')"
+                  :disabled="reviewingId === itemId(gene)"
+                  @click="onReview(gene, 'reject')"
                 >
                   <X class="w-3 h-3" />
                   {{ t('approvals.reject') }}
@@ -333,11 +341,16 @@ async function loadPending() {
   }
 }
 
-async function onReview(geneId: string, action: 'approve' | 'reject') {
-  reviewingId.value = geneId
+async function onReview(gene: GeneItem, action: 'approve' | 'reject') {
+  const id = itemId(gene)
+  reviewingId.value = id
   try {
-    await store.reviewGene(geneId, action)
-    pending.value = pending.value.filter((g) => g.id !== geneId)
+    if (gene.kind === 'overwrite') {
+      await store.reviewGeneOverwriteSubmission(id, action)
+    } else {
+      await store.reviewGene(id, action)
+    }
+    pending.value = pending.value.filter((g) => itemId(g) !== id)
     toast.success(
       action === 'approve' ? t('approvals.approveSuccess') : t('approvals.rejectSuccess'),
     )
@@ -440,6 +453,11 @@ function leaveRequesterLabel(req: LeaveRequestInfo): string {
   if (req.requester_email) return req.requester_email
   if (req.user_id) return req.user_id.slice(0, 8) + '…'
   return '-'
+}
+
+// 审核中心待审条目的唯一标识：新建用 id，覆盖提交用 submission_id
+function itemId(gene: GeneItem): string {
+  return gene.kind === 'overwrite' ? (gene.submission_id ?? '') : gene.id
 }
 
 // 上传者展示：优先 name → email → UUID 截短
