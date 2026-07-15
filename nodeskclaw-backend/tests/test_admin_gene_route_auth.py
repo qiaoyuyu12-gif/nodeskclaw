@@ -329,3 +329,61 @@ async def test_create_gene_without_admin_membership_returns_403(client, non_admi
         _clear_override()
 
     assert response.status_code == 403
+
+
+# ─── 补充遗漏路由：GET /admin/genes、GET /admin/genomes 也受同样的双重 ──
+# 挂载绕过问题影响，且 admin_list_genes/admin_list_genomes 的查询本身没有
+# org_id 过滤，未受权限校验时会把全平台所有组织的未发布/未审核数据都
+# 暴露给任意登录用户。
+
+
+@pytest.mark.asyncio
+async def test_list_genes_without_admin_membership_returns_403(client, non_admin_user):
+    """没有 AdminMembership 的普通登录用户调用 GET /admin/genes 必须被拒绝。"""
+    _override_user(non_admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genes", params={"is_published": "false"})
+    finally:
+        _clear_override()
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_list_genes(client, admin_user, existing_gene):
+    """合法 admin 调用 GET /admin/genes 仍然正常放行（确认修复没有误伤合法请求）。"""
+    _override_user(admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genes")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["data"], list)
+
+
+@pytest.mark.asyncio
+async def test_list_genomes_without_admin_membership_returns_403(client, non_admin_user):
+    """没有 AdminMembership 的普通登录用户调用 GET /admin/genomes 必须被拒绝。"""
+    _override_user(non_admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genomes", params={"is_published": "false"})
+    finally:
+        _clear_override()
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_list_genomes(client, admin_user, existing_genome):
+    """合法 admin 调用 GET /admin/genomes 仍然正常放行（确认修复没有误伤合法请求）。"""
+    _override_user(admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genomes")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["data"], list)

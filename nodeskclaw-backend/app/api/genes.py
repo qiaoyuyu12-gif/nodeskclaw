@@ -786,6 +786,10 @@ async def admin_list_genes(
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
+    # 同上（见 admin_create_gene 注释）：这条路由实际由无 admin 校验的挂载点
+    # 提供服务，且 gene_service.admin_list_genes 查询本身也没有 org_id 过滤，
+    # 不加这行会导致任何登录用户看到全平台所有组织的未发布/未审核 gene。
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
     genes, total = await gene_service.admin_list_genes(
         db, keyword=keyword, category=category, is_published=is_published,
@@ -873,6 +877,8 @@ async def admin_list_genomes(
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
+    # 同上：与 admin_list_genes 同样的挂载点绕过问题。
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
     genomes, total = await gene_service.admin_list_genomes(
         db, keyword=keyword, is_published=is_published,
