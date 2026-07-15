@@ -387,3 +387,114 @@ async def test_admin_can_list_genomes(client, admin_user, existing_genome):
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body["data"], list)
+
+
+# ─── 第三轮补漏：stats/activity/matrix/co-install 同样受双重挂载影响，且  ──
+# 背后的 gene_service.get_gene_stats / get_gene_activity / get_gene_matrix /
+# get_co_install_analysis 本身都没有任何 org_id 过滤，是平台全量聚合查询。
+# 未加权限校验时，任意登录用户都能读到全平台跨组织的技能统计、效果日志
+# 活动（含组织私有/个人技能的名称）、实例安装矩阵、共装分析。
+
+
+@pytest.mark.asyncio
+async def test_gene_stats_without_admin_membership_returns_403(client, non_admin_user):
+    """没有 AdminMembership 的普通登录用户调用 GET /admin/genes/stats 必须被拒绝。"""
+    _override_user(non_admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genes/stats")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_get_gene_stats(client, admin_user):
+    """合法 admin 调用 GET /admin/genes/stats 仍然正常放行。"""
+    _override_user(admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genes/stats")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "total_genes" in body["data"]
+
+
+@pytest.mark.asyncio
+async def test_gene_activity_without_admin_membership_returns_403(client, non_admin_user):
+    """没有 AdminMembership 的普通登录用户调用 GET /admin/genes/activity 必须被拒绝。"""
+    _override_user(non_admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genes/activity")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_get_gene_activity(client, admin_user):
+    """合法 admin 调用 GET /admin/genes/activity 仍然正常放行。"""
+    _override_user(admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genes/activity")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["data"], list)
+
+
+@pytest.mark.asyncio
+async def test_gene_matrix_without_admin_membership_returns_403(client, non_admin_user):
+    """没有 AdminMembership 的普通登录用户调用 GET /admin/genes/matrix 必须被拒绝。"""
+    _override_user(non_admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genes/matrix")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_get_gene_matrix(client, admin_user):
+    """合法 admin 调用 GET /admin/genes/matrix 仍然正常放行。"""
+    _override_user(admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genes/matrix")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["data"], list)
+
+
+@pytest.mark.asyncio
+async def test_co_install_without_admin_membership_returns_403(client, non_admin_user):
+    """没有 AdminMembership 的普通登录用户调用 GET /admin/genes/co-install 必须被拒绝。"""
+    _override_user(non_admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genes/co-install")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_get_co_install(client, admin_user):
+    """合法 admin 调用 GET /admin/genes/co-install 仍然正常放行。"""
+    _override_user(admin_user)
+    try:
+        response = await client.get("/api/v1/admin/genes/co-install")
+    finally:
+        _clear_override()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body["data"], list)

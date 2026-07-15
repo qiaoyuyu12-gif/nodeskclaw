@@ -732,6 +732,10 @@ async def get_evolution_log(
 async def admin_gene_stats(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
+    # 同上（见 admin_create_gene 注释）：这条路由同样实际由无 admin 校验的
+    # 挂载点提供服务，且 gene_service.get_gene_stats 是全平台聚合统计查询，
+    # 不加这行会导致任何登录用户都能看到跨组织的技能统计数据。
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
     stats = await gene_service.get_gene_stats(db)
     return ApiResponse(data=stats.model_dump())
@@ -752,6 +756,10 @@ async def admin_gene_activity(
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
+    # 同上：gene_service.get_gene_activity 联表 GeneEffectLog + Gene 且无
+    # org 过滤，会把组织私有/个人技能的名称、slug 和效果日志活动暴露给
+    # 任意登录用户，必须显式加 admin 权限校验。
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
     activity = await gene_service.get_gene_activity(db, limit=limit)
     return ApiResponse(data=activity)
@@ -761,6 +769,10 @@ async def admin_gene_activity(
 async def admin_gene_matrix(
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
+    # 同上：gene_service.get_gene_matrix 联表 InstanceGene + Gene 且无 org
+    # 过滤，会把跨组织的实例安装矩阵（哪个 instance 装了哪个 gene slug）
+    # 暴露给任意登录用户，必须显式加 admin 权限校验。
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
     matrix = await gene_service.get_gene_matrix(db)
     return ApiResponse(data=matrix)
@@ -771,6 +783,9 @@ async def admin_co_install(
     min_count: int = Query(2, ge=1),
     db: AsyncSession = Depends(get_db),
     _current_user: User = Depends(get_current_user),
+    # 同上：gene_service.get_co_install_analysis 同样是跨组织的共装分析
+    # 聚合查询，无 org 过滤，必须显式加 admin 权限校验。
+    _admin: tuple = Depends(require_org_role("admin")),
 ):
     pairs = await gene_service.get_co_install_analysis(db, min_count=min_count)
     return ApiResponse(data=[p.model_dump() for p in pairs])
