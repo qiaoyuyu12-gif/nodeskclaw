@@ -21,6 +21,7 @@ export const NODESKCLAW_TOOL_NAMES = [
   "nodeskclaw_file_download",
   "nodeskclaw_chat_history",
   "nodeskclaw_shared_files",
+  "nodeskclaw_knowledge_search",
 ] as const;
 
 function resolveToolConfig(config: OpenClawConfig, sessionWorkspaceId?: string): ToolConfig {
@@ -904,6 +905,62 @@ function createSharedFilesTool(cfg: ToolConfig): AnyAgentTool {
   };
 }
 
+function createKnowledgeSearchTool(cfg: ToolConfig): AnyAgentTool {
+  return {
+    name: "nodeskclaw_knowledge_search",
+    description:
+      "Search the knowledge bases bound to this AI employee instance. " +
+      "Use list_knowledge_bases to check what's bound (an empty list is normal, not an error). " +
+      "Use search when the user's question might be answered by bound documents.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list_knowledge_bases", "search"],
+          description:
+            "list_knowledge_bases: list knowledge bases bound to this instance; " +
+            "search: query bound knowledge bases for relevant content (requires query).",
+        },
+        query: {
+          type: "string",
+          description: "search: the question or keywords to search for.",
+        },
+        top_k: {
+          type: "number",
+          description: "search: max number of results to return (default 5).",
+        },
+        kb_ids: {
+          type: "array",
+          items: { type: "string" },
+          description: "search: restrict the search to these knowledge base IDs (default: all bound).",
+        },
+      },
+      required: ["action"],
+    },
+    execute: async (_toolCallId, args) => {
+      const p = args as Record<string, unknown>;
+      switch (p.action) {
+        case "list_knowledge_bases":
+          return jsonResult(await apiFetch(cfg, "/agent/knowledge/bindings"));
+        case "search": {
+          const query = p.query as string;
+          if (!query) return jsonResult({ error: "query is required" });
+          return jsonResult(
+            await apiFetch(cfg, "/agent/knowledge/search", "POST", {
+              query,
+              top_k: p.top_k ?? 5,
+              kb_ids: p.kb_ids,
+            }),
+          );
+        }
+        default:
+          return jsonResult({ error: `Unknown action: ${p.action}` });
+      }
+    },
+  };
+}
+
 export function createNoDeskClawTools(config: OpenClawConfig, sessionWorkspaceId?: string): AnyAgentTool[] {
   const cfg = resolveToolConfig(config, sessionWorkspaceId);
   return [
@@ -915,5 +972,6 @@ export function createNoDeskClawTools(config: OpenClawConfig, sessionWorkspaceId
     createFileDownloadTool(cfg),
     createChatHistoryTool(cfg),
     createSharedFilesTool(cfg),
+    createKnowledgeSearchTool(cfg),
   ];
 }

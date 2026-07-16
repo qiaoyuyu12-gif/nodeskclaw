@@ -17,6 +17,7 @@ def test_nodeskclaw_tool_names_are_complete() -> None:
         "nodeskclaw_file_download",
         "nodeskclaw_chat_history",
         "nodeskclaw_shared_files",
+        "nodeskclaw_knowledge_search",
     )
 
 

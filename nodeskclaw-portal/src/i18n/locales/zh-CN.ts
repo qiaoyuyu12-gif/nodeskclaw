@@ -1210,6 +1210,7 @@ const zhCN = {
     columnName: "技能",
     columnScope: "目标范围",
     columnUploader: "上传者",
+    overwriteVersionChange: "版本 {from} → {to}",
     columnSubmittedAt: "提交时间",
     columnActions: "操作",
     approve: "通过",

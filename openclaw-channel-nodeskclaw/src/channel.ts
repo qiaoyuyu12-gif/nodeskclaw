@@ -188,6 +188,7 @@ export const nodeskclawPlugin: ChannelPlugin<ResolvedNoDeskClawAccount> = {
       `You can ONLY communicate with agents/humans reachable via corridor connections. Use the nodeskclaw_topology tool (get_my_neighbors) to check reachability before messaging.`,
       `Do NOT use the "send" command for workspace messaging — simply @mention in your natural reply.`,
       `If get_my_neighbors returns a blackboard (node_type=blackboard), interact with it via the nodeskclaw_blackboard tool, not by @mentioning it.`,
+      `When a user's question might be answered by your bound knowledge bases, call nodeskclaw_knowledge_search (action=search). An empty list_knowledge_bases result just means no knowledge base is bound — that's normal, answer from general knowledge instead of retrying.`,
     ],
   },
   status: {

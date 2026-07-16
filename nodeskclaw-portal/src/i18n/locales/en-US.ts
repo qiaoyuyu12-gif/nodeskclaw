@@ -1207,6 +1207,7 @@ const enUS = {
     columnName: "Skill",
     columnScope: "Scope",
     columnUploader: "Uploader",
+    overwriteVersionChange: "Version {from} → {to}",
     columnSubmittedAt: "Submitted",
     columnActions: "Actions",
     approve: "Approve",

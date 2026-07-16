@@ -52,6 +52,14 @@ export interface GeneItem {
     org_name: string | null
     version: string
   }>
+  // 审核中心用：GET /admin/genes/pending-review 把"新建 Gene"和"fork 覆盖提交"合并
+  // 返回，kind 区分两种形状。overwrite 条目没有 id，主键是 submission_id。
+  kind?: 'new' | 'overwrite'
+  submission_id?: string
+  target_gene_id?: string
+  target_gene_name?: string
+  target_gene_version?: string | null
+  proposed_version?: string
 }
 
 export interface GenomeItem {
@@ -555,6 +563,11 @@ export const useGeneStore = defineStore('gene', () => {
     return res.data.data
   }
 
+  async function reviewGeneOverwriteSubmission(submissionId: string, action: string, reason?: string) {
+    const res = await api.put(`/admin/gene-overwrite-submissions/${submissionId}/review`, { action, reason })
+    return res.data.data
+  }
+
   return {
     genes,
     genomes,
@@ -617,5 +630,6 @@ export const useGeneStore = defineStore('gene', () => {
     fetchGeneMatrix,
     fetchCoInstall,
     reviewGene,
+    reviewGeneOverwriteSubmission,
   }
 })

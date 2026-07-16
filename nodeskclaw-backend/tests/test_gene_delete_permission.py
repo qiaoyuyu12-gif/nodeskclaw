@@ -3,7 +3,8 @@
 测试矩阵：
   - 非上传者、非 org admin、非超管 → 403
   - 超管 → 允许（软删成功）
-  - 上传者本人 → 允许（软删成功）
+  - 上传者本人（个人 scope）→ 允许（软删成功）
+  - 上传者本人但 gene 已是组织 scope、且非该组织 admin → 403（禁止越权删除共享资源）
   - 个人 scope（org_id 为空）+ 仍被 Agent 加载 → 409 拒绝
   - 个人 scope + 无引用 → 允许
   - 组织 / 公共 scope + active 实例引用 → 级联软删（保持原行为）
@@ -166,6 +167,25 @@ async def test_delete_personal_gene_blocked_when_loaded_into_agent():
     # gene 与 InstanceGene 都不应被软删（应留给用户先在实例端卸载）
     assert gene._deleted is False
     assert all(ref._deleted is False for ref in refs)
+
+
+@pytest.mark.asyncio
+async def test_delete_org_gene_forbidden_for_uploader_non_admin():
+    """组织 scope gene 的原上传者，若不是该组织 admin 也非超管 → 403（禁止越权删除共享资源）。"""
+    from app.services.gene_service import delete_user_gene
+
+    # 组织 scope：org_id 非空，且 current_user 正是 created_by（曾经的上传者）
+    gene = _FakeGene("gene-org-uploader", created_by="uploader-id", org_id="org-1")
+    user = _FakeUser("uploader-id", is_super_admin=False)
+    # membership=None：不是该组织 admin
+    db = _make_db(gene, instance_refs=[], membership=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await delete_user_gene(db, "gene-org-uploader", current_user=user)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error_code"] == 40316
+    assert gene._deleted is False
 
 
 @pytest.mark.asyncio
