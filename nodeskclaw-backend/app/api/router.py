@@ -59,6 +59,7 @@ from app.api.portal.clusters import router as portal_cluster_router, write_route
 from app.api.portal.events import router as portal_events_router
 from app.api.portal.automation_tasks import router as automation_task_router
 from app.api.knowledge_bases import router as kb_router
+from app.api.agent_knowledge import router as agent_knowledge_router
 from app.api.external_agents import router as external_agent_router
 
 # ── Portal 公共 API（/api/v1）──────────────────────────────
@@ -162,6 +163,7 @@ api_router.include_router(org_leave_request_router, tags=["组织退出申请"])
 api_router.include_router(security_ws_router, tags=["安全评估"])
 api_router.include_router(tunnel_router, tags=["Agent Tunnel"])
 api_router.include_router(kb_router, prefix="/knowledge-bases", tags=["知识库管理"])
+api_router.include_router(agent_knowledge_router, prefix="/agent", tags=["Agent 知识库检索"])
 api_router.include_router(external_agent_router, prefix="/external-agents", tags=["外部专用 Agent"])
 api_router.include_router(automation_task_router, prefix="/automation-tasks", tags=["自动化任务"])
 
