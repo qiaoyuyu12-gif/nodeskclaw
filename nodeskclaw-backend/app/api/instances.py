@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import hooks
-from app.core.deps import get_current_org, get_db
+from app.core.deps import get_current_org, get_db, require_feature
 from app.core.exceptions import NotFoundError
 from app.core.security import get_current_user
 from app.models.cluster import Cluster
@@ -24,8 +24,8 @@ from app.services.runtime.registries.compute_registry import require_k8s_client
 
 logger = logging.getLogger(__name__)
 
-instance_read_router = APIRouter()
-instance_write_router = APIRouter()
+instance_read_router = APIRouter(dependencies=[Depends(require_feature("instance"))])
+instance_write_router = APIRouter(dependencies=[Depends(require_feature("instance"))])
 
 
 @instance_read_router.get("/check-slug", response_model=ApiResponse[dict])

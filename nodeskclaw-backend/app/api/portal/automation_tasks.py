@@ -9,7 +9,7 @@ from pydantic import BaseModel as PydanticBase
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_db
+from app.core.deps import get_db, require_feature
 from app.core.security import get_current_user
 from app.core import hooks
 from app.models.automation_task import AutomationTask
@@ -20,7 +20,7 @@ from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_feature("automation"))])
 
 
 # ── Schema ────────────────────────────────────────────────

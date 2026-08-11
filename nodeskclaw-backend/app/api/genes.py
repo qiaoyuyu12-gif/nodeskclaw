@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.deps import get_current_org, get_db, require_org_role
+from app.core.deps import get_current_org, get_db, require_feature, require_org_role
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.security import get_current_user
 from app.core import hooks
@@ -44,7 +44,7 @@ from app.schemas.gene import (
 from app.services import gene_service
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_feature("gene_market"))])
 
 # Gene 文件夹上传限制：防止无限制大文件/大量文件耗尽内存与存储
 # （genes.manifest 是 Text 列，上传内容最终会整包塞进去）

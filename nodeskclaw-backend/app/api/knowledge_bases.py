@@ -5,12 +5,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import hooks
-from app.core.deps import get_db, require_org_admin, require_org_member_role
+from app.core.deps import get_db, require_feature, require_org_admin, require_org_member_role
 from app.schemas.common import ApiResponse
 from app.schemas.skill import KnowledgeBaseCreate, KnowledgeBaseResponse, KnowledgeBaseUpdate
 from app.services import kb_service, ragflow_adapter
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_feature("knowledge_base"))])
 
 
 @router.post("", response_model=ApiResponse[KnowledgeBaseResponse])

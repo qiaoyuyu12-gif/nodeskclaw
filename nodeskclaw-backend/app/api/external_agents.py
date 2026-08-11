@@ -20,6 +20,7 @@ from app.core.deps import (
     async_session_factory,
     get_current_org,
     get_db,
+    require_feature,
     require_org_admin,
     require_org_member_role,
 )
@@ -40,7 +41,7 @@ from app.services import storage_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_feature("external_agent"))])
 
 
 async def _persist_messages(
