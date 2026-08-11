@@ -1,6 +1,7 @@
 """Central router that aggregates all API sub-routers."""
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import select as _sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.audit import router as audit_router
@@ -37,7 +38,7 @@ from app.api.workspace_deploys import router as workspace_deploys_router
 from app.api.instance_templates import router as instance_template_router
 from app.core.deps import get_db, require_org_admin, require_org_role
 from app.core.exceptions import ForbiddenError, NotFoundError
-from app.core.feature_gate import feature_gate, is_enabled_for_org
+from app.core.feature_gate import feature_gate
 from app.core.security import get_current_user_optional
 from app.core.config import settings
 from app.models.user import User
@@ -86,11 +87,33 @@ async def system_info(
 
     已登录且已选组织时，每个 feature 的 enabled 按组织级 override 合并；
     未登录或未选组织时保持 edition 默认值。
+
+    性能说明：此接口在每次已登录页面加载/刷新都会被调用，因此已登录+已选组织的分支
+    用一条批量查询取出该组织下所有 feature override，而不是对每个 feature（当前 19 个）
+    各发一条 is_enabled_for_org() 查询（N+1）。is_enabled_for_org() 本身不改动，
+    其单条查询语义仍供 require_feature() 等单 feature 场景使用。
     """
     features = feature_gate.all_features()
     if user is not None and user.current_org_id:
+        # 一条查询取出该组织所有未软删除的 feature override，
+        # 与 is_enabled_for_org() 相同的两级语义（override 优先，否则回落 edition 默认）
+        # 在内存里合并，避免每个 feature 单独查一次库
+        from app.models.organization_feature_override import OrganizationFeatureOverride
+        override_rows = await db.execute(
+            _sa_select(
+                OrganizationFeatureOverride.feature_id,
+                OrganizationFeatureOverride.enabled,
+            ).where(
+                OrganizationFeatureOverride.org_id == user.current_org_id,
+                OrganizationFeatureOverride.deleted_at.is_(None),
+            )
+        )
+        overrides: dict[str, bool] = {row[0]: row[1] for row in override_rows.all()}
         features = [
-            {**f, "enabled": await is_enabled_for_org(f["id"], user.current_org_id, db)}
+            {
+                **f,
+                "enabled": overrides[f["id"]] if f["id"] in overrides else feature_gate.is_enabled(f["id"]),
+            }
             for f in features
         ]
     return {

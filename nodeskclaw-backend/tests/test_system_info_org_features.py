@@ -91,3 +91,48 @@ async def test_authenticated_with_override_merges_org_value(client: AsyncClient)
         assert feat["enabled"] is False
     finally:
         _clear_override()
+
+
+@pytest.mark.asyncio
+async def test_authenticated_with_multiple_overrides_in_same_org(client: AsyncClient):
+    """finding 2 回归测试：system_info() 从逐 feature 单查询改成一条批量查询后，
+    同一个组织内存在多条 override 记录时必须仍然逐个正确合并（而不是被批量查询
+    的分组/去重逻辑漏掉或串味），其余没有 override 的 feature 保持 edition 默认值。"""
+    suffix = uuid.uuid4().hex[:8]
+    async with TestSessionLocal() as db:
+        org = Organization(name=f"org-si3-{suffix}", slug=f"org-si3-{suffix}")
+        db.add(org)
+        await db.flush()
+        user = User(
+            email=f"user-si3-{suffix}@example.com", name="user-si3",
+            password_hash="x", current_org_id=org.id,
+        )
+        db.add(user)
+        await db.flush()
+        db.add(OrgMembership(org_id=org.id, user_id=user.id, role=OrgRole.member))
+        # 同一组织内两条不同 feature 的 override，一个关一个开，
+        # 验证批量查询构建的 {feature_id: enabled} dict 不会互相覆盖或漏项
+        db.add(OrganizationFeatureOverride(
+            org_id=org.id, feature_id="multi_org", enabled=False,
+            set_by_user_id=user.id,
+        ))
+        db.add(OrganizationFeatureOverride(
+            org_id=org.id, feature_id="workspace", enabled=True,
+            set_by_user_id=user.id,
+        ))
+        await db.commit()
+        await db.refresh(user)
+
+    _override_user(user)
+    try:
+        resp = await client.get("/api/v1/system/info")
+        assert resp.status_code == 200, resp.text
+        features = resp.json()["features"]
+        assert _find_feature(features, "multi_org")["enabled"] is False
+        assert _find_feature(features, "workspace")["enabled"] is True
+        # 没有 override 的 feature（如 sso_ldap）应保持 edition 默认值，不受批量查询影响
+        default_feat = _find_feature(features, "sso_ldap")
+        from app.core.feature_gate import feature_gate
+        assert default_feat["enabled"] == feature_gate.is_enabled("sso_ldap")
+    finally:
+        _clear_override()

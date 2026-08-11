@@ -45,7 +45,7 @@ from app.services.workspace_actor_access import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(dependencies=[Depends(require_feature("workspace"))])
+router = APIRouter()
 
 _background_tasks: set[asyncio.Task] = set()
 
@@ -99,7 +99,7 @@ async def _require_collaboration_workspace_access(
 
 # ── Workspace CRUD ───────────────────────────────────
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_feature("workspace"))])
 async def create_workspace(
     data: WorkspaceCreate,
     # 创建工作区门槛提升到 operator 及以上（member 不再能建组）
@@ -115,7 +115,7 @@ async def create_workspace(
     return _ok(ws.model_dump(mode="json"))
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_feature("workspace"))])
 async def list_workspaces(
     org_ctx=Depends(get_current_org),
     db: AsyncSession = Depends(get_db),
@@ -125,7 +125,7 @@ async def list_workspaces(
     return _ok([i.model_dump(mode="json") for i in items])
 
 
-@router.get("/{workspace_id}")
+@router.get("/{workspace_id}", dependencies=[Depends(require_feature("workspace"))])
 async def get_workspace(
     workspace_id: str,
     db: AsyncSession = Depends(get_db),
@@ -138,7 +138,7 @@ async def get_workspace(
     return _ok(ws.model_dump(mode="json"))
 
 
-@router.put("/{workspace_id}")
+@router.put("/{workspace_id}", dependencies=[Depends(require_feature("workspace"))])
 async def update_workspace(
     workspace_id: str,
     data: WorkspaceUpdate,
@@ -153,7 +153,7 @@ async def update_workspace(
     return _ok(ws.model_dump(mode="json"))
 
 
-@router.delete("/{workspace_id}")
+@router.delete("/{workspace_id}", dependencies=[Depends(require_feature("workspace"))])
 async def delete_workspace(
     workspace_id: str,
     db: AsyncSession = Depends(get_db),
@@ -172,7 +172,7 @@ async def delete_workspace(
 
 # ── Agent Management ─────────────────────────────────
 
-@router.post("/{workspace_id}/agents")
+@router.post("/{workspace_id}/agents", dependencies=[Depends(require_feature("workspace"))])
 async def add_agent(
     workspace_id: str,
     data: AddAgentRequest,
@@ -198,7 +198,7 @@ async def add_agent(
     return _ok(agent.model_dump(mode="json"))
 
 
-@router.get("/{workspace_id}/check-agent-genes")
+@router.get("/{workspace_id}/check-agent-genes", dependencies=[Depends(require_feature("workspace"))])
 async def check_agent_genes(
     workspace_id: str,
     instance_id: str = Query(...),
@@ -261,7 +261,7 @@ async def check_agent_genes(
     })
 
 
-@router.put("/{workspace_id}/agents/{instance_id}")
+@router.put("/{workspace_id}/agents/{instance_id}", dependencies=[Depends(require_feature("workspace"))])
 async def update_agent(
     workspace_id: str,
     instance_id: str,
@@ -277,7 +277,7 @@ async def update_agent(
     return _ok(agent.model_dump(mode="json"))
 
 
-@router.delete("/{workspace_id}/agents/{instance_id}")
+@router.delete("/{workspace_id}/agents/{instance_id}", dependencies=[Depends(require_feature("workspace"))])
 async def remove_agent(
     workspace_id: str,
     instance_id: str,
@@ -915,7 +915,7 @@ async def get_agent_performance(
     return _ok(resp.model_dump())
 
 
-@router.post("/{workspace_id}/performance/attribute-tokens")
+@router.post("/{workspace_id}/performance/attribute-tokens", dependencies=[Depends(require_feature("workspace"))])
 async def attribute_tokens_to_tasks(
     workspace_id: str,
     db: AsyncSession = Depends(get_db),
@@ -961,7 +961,7 @@ async def attribute_tokens_to_tasks(
     return _ok({"updated_tasks": updated})
 
 
-@router.get("/{workspace_id}/token-usage")
+@router.get("/{workspace_id}/token-usage", dependencies=[Depends(require_feature("workspace"))])
 async def get_workspace_token_usage(
     workspace_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1025,7 +1025,7 @@ async def get_workspace_token_usage(
 
 # ── Workspace Schedules ──────────────────────────────
 
-@router.get("/{workspace_id}/schedules")
+@router.get("/{workspace_id}/schedules", dependencies=[Depends(require_feature("workspace"))])
 async def list_schedules(
     workspace_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1052,7 +1052,7 @@ async def list_schedules(
     return _ok({"schedules": items, "presets": PRESET_TEMPLATES})
 
 
-@router.post("/{workspace_id}/schedules")
+@router.post("/{workspace_id}/schedules", dependencies=[Depends(require_feature("workspace"))])
 async def create_schedule(
     workspace_id: str,
     data: dict,
@@ -1084,7 +1084,7 @@ async def create_schedule(
     })
 
 
-@router.put("/{workspace_id}/schedules/{schedule_id}")
+@router.put("/{workspace_id}/schedules/{schedule_id}", dependencies=[Depends(require_feature("workspace"))])
 async def update_schedule(
     workspace_id: str, schedule_id: str, data: dict,
     db: AsyncSession = Depends(get_db),
@@ -1122,7 +1122,7 @@ async def update_schedule(
     })
 
 
-@router.delete("/{workspace_id}/schedules/{schedule_id}")
+@router.delete("/{workspace_id}/schedules/{schedule_id}", dependencies=[Depends(require_feature("workspace"))])
 async def delete_schedule(
     workspace_id: str, schedule_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1158,7 +1158,7 @@ async def list_members(
     return _ok([m.model_dump(mode="json") for m in members])
 
 
-@router.post("/{workspace_id}/members")
+@router.post("/{workspace_id}/members", dependencies=[Depends(require_feature("workspace"))])
 async def add_member(
     workspace_id: str,
     data: WorkspaceMemberAdd,
@@ -1178,7 +1178,7 @@ async def add_member(
     return _ok(member.model_dump(mode="json"))
 
 
-@router.put("/{workspace_id}/members/{user_id}")
+@router.put("/{workspace_id}/members/{user_id}", dependencies=[Depends(require_feature("workspace"))])
 async def update_member(
     workspace_id: str,
     user_id: str,
@@ -1198,7 +1198,7 @@ async def update_member(
     return _ok(message="已更新")
 
 
-@router.delete("/{workspace_id}/members/{user_id}")
+@router.delete("/{workspace_id}/members/{user_id}", dependencies=[Depends(require_feature("workspace"))])
 async def remove_member(
     workspace_id: str,
     user_id: str,
@@ -1217,7 +1217,7 @@ async def remove_member(
 
 # ── Permissions ──────────────────────────────────────
 
-@router.get("/{workspace_id}/my-permissions")
+@router.get("/{workspace_id}/my-permissions", dependencies=[Depends(require_feature("workspace"))])
 async def get_my_permissions(
     workspace_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1227,7 +1227,7 @@ async def get_my_permissions(
     return _ok(perms)
 
 
-@router.get("/{workspace_id}/search-users")
+@router.get("/{workspace_id}/search-users", dependencies=[Depends(require_feature("workspace"))])
 async def search_users(
     workspace_id: str,
     q: str = Query(default=""),
@@ -1245,7 +1245,7 @@ async def search_users(
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024
 
 
-@router.post("/{workspace_id}/files/upload")
+@router.post("/{workspace_id}/files/upload", dependencies=[Depends(require_feature("workspace"))])
 async def upload_workspace_file(
     workspace_id: str,
     file: UploadFile,
@@ -1292,7 +1292,7 @@ async def upload_workspace_file(
     })
 
 
-@router.get("/{workspace_id}/files/{file_id}/url")
+@router.get("/{workspace_id}/files/{file_id}/url", dependencies=[Depends(require_feature("workspace"))])
 async def get_file_presigned_url(
     workspace_id: str,
     file_id: str,
@@ -1374,7 +1374,7 @@ async def download_workspace_file(
     )
 
 
-@router.post("/{workspace_id}/chat")
+@router.post("/{workspace_id}/chat", dependencies=[Depends(require_feature("workspace"))])
 async def workspace_chat(
     workspace_id: str,
     data: WorkspaceChatRequest,
@@ -1474,7 +1474,7 @@ class SystemMessageRequest(BaseModel):
     content: str
 
 
-@router.post("/{workspace_id}/messages/clear")
+@router.post("/{workspace_id}/messages/clear", dependencies=[Depends(require_feature("workspace"))])
 async def clear_workspace_messages(
     workspace_id: str,
     db: AsyncSession = Depends(get_db),
@@ -1540,7 +1540,7 @@ async def clear_workspace_messages(
     })
 
 
-@router.post("/{workspace_id}/system-message")
+@router.post("/{workspace_id}/system-message", dependencies=[Depends(require_feature("workspace"))])
 async def post_system_message(
     workspace_id: str,
     data: SystemMessageRequest,
@@ -1734,7 +1734,7 @@ async def list_agent_collaboration_messages(
 
 # ── Legacy Chat Proxy (deprecated) ──────────────────
 
-@router.post("/{workspace_id}/agents/{instance_id}/chat")
+@router.post("/{workspace_id}/agents/{instance_id}/chat", dependencies=[Depends(require_feature("workspace"))])
 async def agent_chat(
     workspace_id: str,
     instance_id: str,
@@ -1994,7 +1994,7 @@ async def _build_agent_status_snapshot(workspace_id: str, db: AsyncSession) -> d
 
 # ── SSE Token ────────────────────────────────────────
 
-@router.post("/sse-token")
+@router.post("/sse-token", dependencies=[Depends(require_feature("workspace"))])
 async def create_sse_token(
     user=Depends(_get_current_user_dep()),
 ):
@@ -2214,7 +2214,7 @@ async def _stream_agent_response(
 
 # ── Maintenance ──────────────────────────────────────
 
-@router.post("/maintenance/repair-channel-accounts")
+@router.post("/maintenance/repair-channel-accounts", dependencies=[Depends(require_feature("workspace"))])
 async def repair_channel_accounts(
     db: AsyncSession = Depends(get_db),
     user=Depends(_get_current_user_dep()),
@@ -2238,7 +2238,7 @@ class BatchUpgradeRequest(BaseModel):
     with_repair: bool | None = None
 
 
-@router.post("/maintenance/batch-upgrade-instances")
+@router.post("/maintenance/batch-upgrade-instances", dependencies=[Depends(require_feature("workspace"))])
 async def batch_upgrade_instances(
     body: BatchUpgradeRequest,
     db: AsyncSession = Depends(get_db),
@@ -2293,7 +2293,7 @@ async def batch_upgrade_instances(
     return _ok({"upgrade": upgrade_result, "repair": repair_result})
 
 
-@router.post("/{workspace_id}/restart-all-instances")
+@router.post("/{workspace_id}/restart-all-instances", dependencies=[Depends(require_feature("workspace"))])
 async def restart_all_instances(
     workspace_id: str,
     db: AsyncSession = Depends(get_db),
@@ -2306,7 +2306,7 @@ async def restart_all_instances(
     return _ok(result)
 
 
-@router.post("/maintenance/refresh-gene-skills")
+@router.post("/maintenance/refresh-gene-skills", dependencies=[Depends(require_feature("workspace"))])
 async def refresh_gene_skills(
     body: dict,
     db: AsyncSession = Depends(get_db),
