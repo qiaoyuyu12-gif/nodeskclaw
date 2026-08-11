@@ -24,6 +24,12 @@ const userMenuRef = ref<HTMLElement>()
 const locale = ref(getCurrentLocale())
 const appVersion = __APP_VERSION__
 const { isEnabled: isPlatformAdminEnabled } = useFeature('platform_admin')
+const { isEnabled: isWorkspaceEnabled } = useFeature('workspace')
+const { isEnabled: isInstanceEnabled } = useFeature('instance')
+const { isEnabled: isGeneMarketEnabled } = useFeature('gene_market')
+const { isEnabled: isAutomationEnabled } = useFeature('automation')
+const { isEnabled: isExternalAgentEnabled } = useFeature('external_agent')
+const { isEnabled: isKnowledgeBaseEnabled } = useFeature('knowledge_base')
 
 useDeployNotification()
 
@@ -83,6 +89,7 @@ function onLocaleChange(value: string) {
           </div>
           <nav v-if="!isSetupPage" class="flex items-center gap-1 overflow-x-auto min-w-0">
             <button
+              v-if="isWorkspaceEnabled"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
                 (route.path === '/' || route.path.startsWith('/workspace')) && !route.path.startsWith('/instances') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
@@ -94,6 +101,7 @@ function onLocaleChange(value: string) {
               <span class="lg:hidden">{{ t('nav.workspace') }}</span>
             </button>
             <button
+              v-if="isInstanceEnabled"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
                 route.path.startsWith('/instances') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
@@ -104,6 +112,7 @@ function onLocaleChange(value: string) {
               {{ t('common.instance') }}
             </button>
             <button
+              v-if="isGeneMarketEnabled"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
                 route.path.startsWith('/gene-market') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
@@ -116,6 +125,7 @@ function onLocaleChange(value: string) {
             </button>
             <!-- 自动化任务入口 -->
             <button
+              v-if="isAutomationEnabled"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
                 route.path.startsWith('/automation') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
@@ -129,6 +139,7 @@ function onLocaleChange(value: string) {
             <template v-if="authStore.isLoggedIn">
             <!-- 外部专用 Agent 入口（所有成员可见） -->
             <button
+              v-if="isExternalAgentEnabled"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
                 route.path.startsWith('/agents') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
@@ -139,6 +150,7 @@ function onLocaleChange(value: string) {
               Agent
             </button>
             <button
+              v-if="isKnowledgeBaseEnabled"
               :class="[
                 'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm transition-colors',
                 route.path.startsWith('/admin/knowledge-bases') ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:text-foreground',
