@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
-from app.core.feature_gate import feature_gate
+from app.core.feature_gate import feature_gate, is_enabled_for_org
 
 _connect_args: dict = {"ssl": False}
 if settings.DATABASE_NAME_SUFFIX:
@@ -430,19 +430,27 @@ def require_ce_edition():
 # ── Feature Gate Dependencies ─────────────────────────────
 
 def require_feature(feature_id: str):
-    """工厂函数：生成要求指定 EE feature 已启用的依赖。
+    """工厂函数：生成要求指定 feature（按组织 override 合并后）已启用的依赖。
 
     用法：router = APIRouter(dependencies=[Depends(require_feature("billing"))])
     或在单个端点上：@router.get("/...", dependencies=[Depends(require_feature("billing"))])
+
+    org_id 解析优先级：URL path 参数 org_id > 当前用户 current_org_id
+    （与 require_org_admin / require_org_member_role 的取值逻辑一致）。
     """
-    async def _check_feature():
-        if not feature_gate.is_enabled(feature_id):
+    async def _check_feature(
+        request: Request,
+        db: AsyncSession = Depends(get_db),
+        user=Depends(_get_current_user_dep()),
+    ):
+        org_id = request.path_params.get("org_id") or user.current_org_id
+        if not await is_enabled_for_org(feature_id, org_id, db):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
                     "error_code": 40320,
-                    "message_key": "errors.feature.ee_required",
-                    "message": f"Feature '{feature_id}' requires Enterprise Edition",
+                    "message_key": "errors.feature.disabled",
+                    "message": f"Feature '{feature_id}' is disabled",
                 },
             )
     return _check_feature
