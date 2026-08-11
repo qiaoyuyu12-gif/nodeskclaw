@@ -7,9 +7,10 @@ export function useFeature(featureId: string) {
   const isEnabled = computed(() => {
     const info = authStore.systemInfo
     if (!info) return false
-    if (info.edition === 'ee') return true
     const feature = info.features.find(f => f.id === featureId)
-    return feature?.enabled ?? false
+    // features 数组只登记了受控 feature；不在列表里的 id 视为不受控，默认放行
+    if (!feature) return true
+    return feature.enabled
   })
 
   return { isEnabled }
