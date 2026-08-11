@@ -1830,6 +1830,9 @@ const zhCN = {
       bad_request: "请求参数错误",
       conflict: "资源冲突",
     },
+    feature: {
+      disabled: "该功能未对当前组织开放，请联系管理员",
+    },
     system: {
       internal_error: "服务器内部错误",
       backend_starting: "后端服务正在启动中，请稍候重试",

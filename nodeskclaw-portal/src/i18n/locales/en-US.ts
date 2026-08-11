@@ -1826,6 +1826,9 @@ const enUS = {
       bad_request: "Invalid request parameters",
       conflict: "Resource conflict",
     },
+    feature: {
+      disabled: "This feature is not enabled for your organization. Please contact an administrator.",
+    },
     system: {
       internal_error: "Internal server error",
       backend_starting: "Backend service is starting, please retry shortly",
