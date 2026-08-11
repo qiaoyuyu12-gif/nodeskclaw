@@ -1,6 +1,7 @@
 """Central router that aggregates all API sub-routers."""
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
@@ -34,10 +35,12 @@ from app.api.workspaces import router as workspace_router
 from app.api.templates import router as template_router
 from app.api.workspace_deploys import router as workspace_deploys_router
 from app.api.instance_templates import router as instance_template_router
-from app.core.deps import require_org_admin, require_org_role
+from app.core.deps import get_db, require_org_admin, require_org_role
 from app.core.exceptions import ForbiddenError, NotFoundError
-from app.core.feature_gate import feature_gate
+from app.core.feature_gate import feature_gate, is_enabled_for_org
+from app.core.security import get_current_user_optional
 from app.core.config import settings
+from app.models.user import User
 
 from app.api.security_ws import router as security_ws_router
 from app.api.tunnel import router as tunnel_router
@@ -75,12 +78,25 @@ async def health_check():
 
 
 @api_router.get("/system/info", tags=["系统"])
-async def system_info():
-    """暴露 edition 和启用的 feature 列表，供前端初始化使用。"""
+async def system_info(
+    db: AsyncSession = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
+):
+    """暴露 edition 和启用的 feature 列表，供前端初始化使用。
+
+    已登录且已选组织时，每个 feature 的 enabled 按组织级 override 合并；
+    未登录或未选组织时保持 edition 默认值。
+    """
+    features = feature_gate.all_features()
+    if user is not None and user.current_org_id:
+        features = [
+            {**f, "enabled": await is_enabled_for_org(f["id"], user.current_org_id, db)}
+            for f in features
+        ]
     return {
         "edition": feature_gate.edition,
         "version": settings.APP_VERSION,
-        "features": feature_gate.all_features(),
+        "features": features,
     }
 
 

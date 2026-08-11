@@ -204,6 +204,23 @@ async def get_current_user_unchecked(
     return user
 
 
+async def get_current_user_optional(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    """可选认证：有合法 token 返回 User，没有 token 或 token 失效都返回 None（不抛异常）。
+
+    用于 /system/info 这类无需强制登录、但登录后要按用户上下文返回差异化结果的场景。
+    不设置 _auth_actor（这个场景不产生审计事件）。
+    """
+    if credentials is None:
+        return None
+    try:
+        return await _get_user_by_token(credentials.credentials, db)
+    except HTTPException:
+        return None
+
+
 async def get_current_user_from_query(
     token: str = Query(..., description="JWT access token (支持 SSE 短时效 token)"),
 ) -> User:
