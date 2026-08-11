@@ -25,6 +25,7 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/',
     name: 'WorkspaceList',
     component: () => import('@/views/WorkspaceList.vue'),
+    meta: { requireFeature: 'workspace' },
   },
   {
     path: '/workspace/create',
@@ -46,6 +47,7 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/instances',
     name: 'InstanceList',
     component: () => import('@/views/InstanceList.vue'),
+    meta: { requireFeature: 'instance' },
   },
   {
     path: '/instances/create',
@@ -118,12 +120,13 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/automation',
     name: 'Automation',
     component: () => import('@/views/AutomationView.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, requireFeature: 'automation' },
   },
   {
     path: '/gene-market',
     name: 'GeneMarket',
     component: () => import('@/views/GeneMarket.vue'),
+    meta: { requireFeature: 'gene_market' },
   },
   {
     path: '/gene-market/gene/:slug',
@@ -144,7 +147,7 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/admin/knowledge-bases',
     name: 'AdminKnowledgeBaseList',
     component: () => import('@/views/skills/admin/KnowledgeBaseListView.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, requireFeature: 'knowledge_base' },
   },
   {
     path: '/admin/knowledge-bases/new',
@@ -163,7 +166,7 @@ const ceRoutes: RouteRecordRaw[] = [
     path: '/agents',
     name: 'ExternalAgentList',
     component: () => import('@/views/external-agents/ExternalAgentList.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, requireFeature: 'external_agent' },
   },
   {
     path: '/agents/:id/chat',
