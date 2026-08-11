@@ -61,3 +61,28 @@ edition_features:
     - id: advanced_rbac
       name: 高级角色权限控制
       description: 细粒度角色权限控制
+
+    # ── 核心模块（组织级功能开关管控） ──
+    - id: workspace
+      name: 协作空间
+      description: 赛博办公室 / 协作空间，AI 员工与人类协作的核心工作区
+
+    - id: instance
+      name: AI 员工实例
+      description: AI 员工实例的创建、管理、部署
+
+    - id: gene_market
+      name: 技能市场
+      description: 基因（技能）浏览、发布、fork，以及给 AI 员工实例装卸基因
+
+    - id: automation
+      name: 自动化任务
+      description: AI 员工的定时/周期自动化任务
+
+    - id: external_agent
+      name: 外部专用 Agent
+      description: 外部专用 Agent 的接入与对话
+
+    - id: knowledge_base
+      name: 知识库
+      description: 组织级知识库的创建与管理
